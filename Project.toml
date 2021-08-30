@@ -1,0 +1,13 @@
+name = "NonEqSimGPU"
+uuid = "752a07c7-babd-4c58-b72d-5567b6fb393f"
+authors = ["abbaa90 <abbaa90@fu-berlin.de> and contributors"]
+version = "0.1.0"
+
+[compat]
+julia = "1"
+
+[extras]
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[targets]
+test = ["Test"]
