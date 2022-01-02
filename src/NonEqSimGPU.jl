@@ -30,7 +30,7 @@ include("write_out.jl")
 
 
 println("##########################################################")
-println("                  NonEqSim is Loaded!                     ")
+println("                  NonEqSimGPU is Loaded!                  ")
 println("                      Amir Abbasi                         ")
 println("##########################################################")
 
