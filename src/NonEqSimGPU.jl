@@ -23,7 +23,6 @@ using StaticArrays
 include("definitions.jl")
 include("simulation.jl")
 include("integrators.jl")
-include("cell_list.jl")
 include("boundary_conditions.jl")
 include("interactions.jl")
 include("write_out.jl")

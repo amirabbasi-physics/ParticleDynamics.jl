@@ -60,11 +60,6 @@ function run_simulation!(simulation::Simulation; message_interval::Float64 = 30.
 			write_xyz(simulation.output_file, size(simulation.particles,1), step, dim, simulation.particles)
 		end
 		kinetic_tol = 100.0*(kinetic_tot-kinetic_theo)/kinetic_theo
-		if mod(step, 50) == 0
-			for cell_list in simulation.cell_lists
-	            update_cell_list!(cell_list, dim)
-	        end
-		end
 
         interval_time = time() - interval_start
         if interval_time > message_interval || step == simulation.num_steps

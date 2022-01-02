@@ -195,72 +195,6 @@ function remove_overlaps!(; positions, fixed_positions, minimum_distance::Float6
 
 end
 
-export CellList
-
-################################################################################
-#                       Structure for creating cell list
-#
-################################################################################
-struct CellList
-    start_pid::Array
-    next_pid::Array{Int64, 1}
-
-    particles::Array{Particle, 1}
-
-    num_cells::SVector
-    cell_dr::SVector
-
-    function CellList(; particles::Array{Particle,1},dim::Int64,L::Float64, rc::Float64)
-		if dim == 2
-			num_cells_x = floor(Int64, L / rc)
-        	num_cells_y = floor(Int64, L / rc)
-        	cell_drx = L / num_cells_x
-        	cell_dry = L / num_cells_y
-
-        	start_pid = -ones(Int64, num_cells_x, num_cells_y)
-        	next_pid = -ones(Int64, length(particles))
-
-        	for (n, particle) in enumerate(particles)
-            	i = floor(Int64, particle.r[1] / cell_drx) + 1
-            	j = floor(Int64, particle.r[2] / cell_dry) + 1
-
-            	if start_pid[i, j] > 0
-                	next_pid[n] = start_pid[i, j]
-            	end
-            	start_pid[i, j] = n
-        	end
-			num_cells = SVector{2,Int64}([num_cells_x, num_cells_y])
-			cell_dr   = SVector{2,Float64}([cell_drx, cell_dry])
-		elseif dim == 3
-			num_cells_x = floor(Int64, L / rc)
-        	num_cells_y = floor(Int64, L / rc)
-			num_cells_z = floor(Int64, L / rc)
-
-        	cell_drx = L / num_cells_x
-        	cell_dry = L / num_cells_y
-			cell_drz = L / num_cells_z
-
-        	start_pid = -ones(Int64, num_cells_x, num_cells_y, num_cells_z)
-        	next_pid = -ones(Int64, length(particles))
-
-        	for (n, particle) in enumerate(particles)
-            	i = floor(Int64, particle.r[1] / cell_drx) + 1
-            	j = floor(Int64, particle.r[2] / cell_dry) + 1
-				k = floor(Int64, particle.r[3] / cell_drz) + 1
-
-            	if start_pid[i, j, k] > 0
-                	next_pid[n] = start_pid[i, j, k]
-            	end
-            	start_pid[i, j, k] = n
-        	end
-			num_cells = SVector{3,Int64}([num_cells_x, num_cells_y, num_cells_z])
-			cell_dr   = SVector{3,Float64}([cell_drx, cell_dry, cell_drz])
-		end
-
-        new(start_pid, next_pid, particles, num_cells, cell_dr)
-    end
-end
-
 
 export WCA
 export Harmonic_Repulsive
@@ -275,33 +209,28 @@ struct WCA <: AbstractInteraction
     rc::Float64
 
     particles::Array{Particle, 1}
-    cell_list::CellList
 
 	multithreaded::Bool
     use_newton_3rd::Bool
 
-    function WCA(; particles::Array{Particle, 1}, cell_list::CellList,
-                            ϵ::Float64, σ::Float64 = 1.0, rc::Float64,
+    function WCA(; particles::Array{Particle, 1}, ϵ::Float64, σ::Float64 = 1.0, rc::Float64,
             				multithreaded::Bool = true, use_newton_3rd::Bool = false)
-        new(ϵ, σ, rc, particles, cell_list,multithreaded, use_newton_3rd)
+        new(ϵ, σ, rc, particles, multithreaded, use_newton_3rd)
     end
 end
 
 struct Harmonic_Repulsive <: AbstractInteraction
 
     particles::Array{Particle, 1}
-    cell_list::CellList
-
 	k::Float64
 	rc::Float64
 
 	multithreaded::Bool
     use_newton_3rd::Bool
 
-    function Harmonic_Repulsive(; particles::Array{Particle, 1}, cell_list::CellList,
-                            k::Float64=1.0e8, rc::Float64,
+    function Harmonic_Repulsive(; particles::Array{Particle, 1}, k::Float64=1.0e8, rc::Float64,
             				multithreaded::Bool = true, use_newton_3rd::Bool = false)
-        new(particles, cell_list,k, rc, multithreaded, use_newton_3rd)
+        new(particles, k, rc, multithreaded, use_newton_3rd)
     end
 end
 
@@ -315,8 +244,6 @@ mutable struct Simulation
     periodicity::SVector
 
     particles::Array{Particle, 1}
-
-    cell_lists::Array{CellList, 1}
     interactions::Array{AbstractInteraction, 1}
 
     dt::Float64
@@ -330,7 +257,6 @@ mutable struct Simulation
                           L::Float64 = 0.0,
                           periodicity::SVector = SVector{3,Float64}([-1.0,-1.0,-1.0]),
                           particles::Array{Particle, 1} = Particle[],
-                          cell_lists::Array{CellList, 1} = CellList[],
                           interactions::Array{AbstractInteraction, 1} = AbstractInteraction[],
                           dt::Float64 = 0.0,
                           integrators::Array{AbstractIntegrator, 1} = AbstractIntegrator[],
@@ -338,7 +264,7 @@ mutable struct Simulation
                           save_interval::Int64 = 0,
                           particles_to_save::Array{Particle, 1}=  Particle[],
 						  output_file::String = "output")
-        new(descriptor, L, periodicity, particles, cell_lists, interactions, dt,integrators, num_steps, save_interval, particles_to_save,output_file)
+        new(descriptor, L, periodicity, particles, interactions, dt,integrators, num_steps, save_interval, particles_to_save,output_file)
     end
 end
 
