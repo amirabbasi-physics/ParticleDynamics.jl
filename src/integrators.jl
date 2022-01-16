@@ -1,6 +1,6 @@
 function Update_Particles!(brownian::Brownian, periodicity::SVector)
 	dim = size(periodicity,1)
-    @inbounds Threads.@threads for particle in brownian.particles
+    @inbounds @spawn for particle in brownian.particles
 		if !isnothing(particle.τΓ)
 			particle.v      = -(particle.τD/particle.τΓ) .*(particle.r - particle.r_pseu) .+ particle.f  .+ sqrt(2.0/brownian.dt) .* SRandns(dim)
 			particle.v 		=  particle.free .* particle.v
@@ -28,7 +28,7 @@ end
 
 function Update_Particles!(langevin::Langevin, periodicity::SVector)
 	dim = size(periodicity,1)
-    @inbounds Threads.@threads for particle in langevin.particles
+    @inbounds @spawn for particle in langevin.particles
 		if !isnothing(particle.τΓ)
 			coeff1 = (langevin.dt * particle.τD / particle.τm)
 			coeff2 = (particle.τD / particle.τΓ)

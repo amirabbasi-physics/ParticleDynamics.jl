@@ -12,10 +12,7 @@ function write_xyz(ofname, nPart,step , dim, particles)
 
     open(out_file,"a+") do file
         println(file,nPart)
-        if dim == 1
-            println(file,"ITEM: ATOMS radius x v_x")
-            writedlm(file,snapshot)
-        elseif dim == 2
+        if dim == 2
             println(file,"ITEM: ATOMS radius x y v_x v_y")
             writedlm(file,snapshot)
         elseif dim == 3
