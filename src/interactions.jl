@@ -2,7 +2,7 @@
 
 export compute_interactions!
 
-
+"""
 function compute_interactions!(harm_rep.particles, periodicity::SVector)
 	dim = size(periodicity,1)
 	if dim == 2
@@ -87,3 +87,4 @@ function compute_interactions!(harm_rep.particles, periodicity::SVector)
 	    end
 	end
 end
+"""
