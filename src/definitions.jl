@@ -32,7 +32,7 @@ mutable struct Particle{T<:AbstractFloat}
 	α::T
 	τm::T
 	τD::T
-
+	Q̇ ::T
 
     r::SVector
 	v::SVector
@@ -40,7 +40,7 @@ mutable struct Particle{T<:AbstractFloat}
 
 
     function Particle(; part_type::String = "PassiveBP",r::SVector, v::SVector, f::SVector,
-		density::T, η::T, Radii::T, α::T, β::T, free::Int64 = 1, τΓ::Union{T, Nothing} = nothing, r_pseu::Union{SVector, Nothing} = nothing, v_pseu::Union{SVector, Nothing} = nothing) where T<:AbstractFloat
+		density::T, η::T, Radii::T, α::T, β::T, Q̇::T=0.0, free::Int64 = 1, τΓ::Union{T, Nothing} = nothing, r_pseu::Union{SVector, Nothing} = nothing, v_pseu::Union{SVector, Nothing} = nothing) where T<:AbstractFloat
 		σ = 2.0*Radii/2.0e-6
 		m = density*volume(Radii)
 		γ = friction(η,Radii)
@@ -49,7 +49,7 @@ mutable struct Particle{T<:AbstractFloat}
 		if !isnothing(τΓ)
 			τΓ = τΓ
 		end
-        new{T}(part_type,σ,α,τm, τD,r,v,f, free,τΓ,r_pseu,v_pseu)
+        new{T}(part_type,σ,α,τm, τD,Q̇,r,v,f, free,τΓ,r_pseu,v_pseu)
     end
 end
 
