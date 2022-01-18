@@ -26,7 +26,7 @@ end
 ################################################################################
 export Particle
 
-mutable struct Particle{T<:AbstractFloat}
+struct Particle{T<:AbstractFloat}
 	part_type::String
 	σ::T
 	α::T
