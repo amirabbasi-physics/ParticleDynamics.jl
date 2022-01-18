@@ -6,19 +6,6 @@ shorten code.
 """
 
 
-export use_threads
-
-
-macro use_threads(multithreaded::Union{Expr, Symbol}, expr::Expr)
-    esc(quote
-        if $multithreaded
-            @spawn $expr
-        else
-            $expr
-        end
-    end)
-end
-
 ################################################################################
 #
 #           			Active Tandem/ Passive Brownian Particles
