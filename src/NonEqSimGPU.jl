@@ -10,15 +10,13 @@ Flush output so that jobs can be monitored on cluster.
 end
 
 
-using DataStructures
-using DelimitedFiles
-using Distributed
-using LinearAlgebra
-using Printf
-using Random
-using Serialization
-using SharedArrays
+using CUDA
 using StaticArrays
+using DelimitedFiles
+using BenchmarkTools
+using Test
+using LinearAlgebra
+import Random: randperm
 
 include("definitions.jl")
 include("simulation.jl")

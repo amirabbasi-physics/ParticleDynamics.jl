@@ -1,58 +1,55 @@
-function Update_Particles!(brownian::Brownian, periodicity::SVector)
-	dim = size(periodicity,1)
-    @inbounds @spawn for particle in brownian.particles
-		if !isnothing(particle.τΓ)
-			particle.v      = -(particle.τD/particle.τΓ) .*(particle.r - particle.r_pseu) .+ particle.f  .+ sqrt(2.0/brownian.dt) .* SRandns(dim)
-			particle.v 		=  particle.free .* particle.v
-			particle.v_pseu =  (particle.τD/particle.τΓ) .*(particle.r - particle.r_pseu)  .+ sqrt(2.0 * (particle.α+1)/brownian.dt) .* SRandns(dim)
+export update_parts
 
-			particle.r = particle.r .+ brownian.dt .* particle.v
-	        particle.r_pseu = particle.r_pseu .+ brownian.dt .* particle.v_pseu
+function update_parts(coords::CuVector{SVector{N,T}}, vels::CuVector{SVector{N,T}}, frcs::CuVector{SVector{N,T}},
+    noises::CuVector{SVector{N,T}},c1s::CuVector{T},c2s::CuVector{T},
+    c3s::CuVector{T},αs::CuVector{T},a::T; nthreads=128) where {N,T}
+    Npart = UInt32(length(coords))
 
-			PBC_ActiveTP!(particle, periodicity)
+    r_d = similar(coords)
+    v_d = similar(coords)
+    sdot_d = similar(αs)
 
-	        particle.f = SZeros(dim)
-
-		else
-			particle.v = particle.f .+ sqrt(2.0 * (particle.α + 1.0)/brownian.dt) .* SRandns(dim)
-			particle.v = particle.free .* particle.v
-			particle.r = particle.r .+ brownian.dt .* particle.v
-
-	        PBC_PassiveBP!(particle, periodicity)
-
-	        particle.f = SZeros(dim)
-		end
-    end
+    CUDA.@sync @cuda blocks=ceil(Int, Npart/nthreads) threads=nthreads calculate_state!(coords, vels, frcs, noises, c1s, c2s, c3s, αs, a, r_d, v_d, sdot_d)
+    return r_d, v_d, sdot_d
 end
 
 
-function Update_Particles!(langevin::Langevin, periodicity::SVector)
-	dim = size(periodicity,1)
-    @inbounds @spawn for particle in langevin.particles
-		if !isnothing(particle.τΓ)
-			coeff1 = (langevin.dt * particle.τD / particle.τm)
-			coeff2 = (particle.τD / particle.τΓ)
-			particle.v      =  (1.0-coeff1) .* particle.v + coeff1 .* (-coeff2 .*(particle.r - particle.r_pseu) .+ particle.f  .+ sqrt(2.0/langevin.dt) .* SRandns(dim))
-			particle.v 		=  particle.free .* particle.v
-			particle.v_pseu =  coeff2 .*(particle.r - particle.r_pseu)  .+ sqrt(2.0 * (particle.α+1)/langevin.dt) .* SRandns(dim)
-
-			particle.r = particle.r .+ langevin.dt .* particle.v
-	        particle.r_pseu = particle.r_pseu .+ langevin.dt .* particle.v_pseu
 
 
-			PBC_ActiveTP!(particle, periodicity)
 
-	        particle.f = SZeros(dim)
 
-		else
-			coeff = (langevin.dt*particle.τD/particle.τm)
-			particle.v = (1.0 - coeff) .* particle.v .+ coeff .* (particle.f .+ sqrt(2.0 * (particle.α + 1.0)/langevin.dt) .* SRandns(dim))
-			particle.v = particle.free .* particle.v
-			particle.r = particle.r .+ langevin.dt .* particle.v
+export calculate_state!
 
-	        PBC_PassiveBP!(particle, periodicity)
+function calculate_state!(r::CuDeviceVector{SVector{N,T}}, v::CuDeviceVector{SVector{N,T}}, f::CuDeviceVector{SVector{N,T}},
+     noise::CuDeviceVector{SVector{N,T}},c1s::CuDeviceVector{T}, c2s::CuDeviceVector{T}, c3s::CuDeviceVector{T},
+     αs::CuDeviceVector{T}, a::T,rr::CuDeviceVector{SVector{N,T}}, vv::CuDeviceVector{SVector{N,T}}, ssdot::CuDeviceVector{T}) where {N,T}
+     Npart = length(r)
 
-	        particle.f = SZeros(dim)
-		end
-    end
+     tid = threadIdx().x
+     gtid = (blockIdx().x - 1) * blockDim().x + tid  # global thread id
+
+     @inbounds begin
+         if gtid <= Npart
+             pos = r[gtid]
+             vel = v[gtid]
+             frc = f[gtid]
+             rnd = noise[gtid]
+             c1  = c1s[gtid]
+             c2  = c2s[gtid]
+             c3  = c3s[gtid]
+             α   = αs[gtid]
+             sdt = ssdot[gtid]
+             vel = c1 .* vel .+ c3 .* rnd .+ c2 .* frc
+             pos = pos .+ c2 .* vel
+             sdt = (a*dot(vel,vel)- dot(c3 .* rnd,vel))/α
+         end
+         sync_threads()
+         if gtid <= Npart
+             rr[gtid] = pos
+             vv[gtid] = vel
+             ssdot[gtid] = sdt
+         end
+        sync_threads()
+     end
+     return nothing
 end

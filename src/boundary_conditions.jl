@@ -1,76 +1,28 @@
+export PBC_kernel!
+export PBC
+function PBC_kernel!(r::CuDeviceVector{T}, r_d::CuDeviceVector{T}, periodicity::T,::Val{TH}) where {T,TH}
+    Npart = length(r)
+    tid = threadIdx().x
+    gtid = (blockIdx().x - UInt32(1)) * blockDim().x + tid  # global thread id
 
-
-export PBC_PassiveBP!
-export PBC_ActiveTP!
-
-
-"""
-    PBC_PassiveBP!(position; period)
-
-Returns a new position after applying periodic boundary conditions.  The
-periodicity is given by `period`.  If `period < 0`, then no periodic boundary
-condition is applied.
-"""
-
-
-@inline function PBC_PassiveBP!(Particle::Particle, periodicity::SVector)
-	dim = size(Particle.r,1)
-	Particle.r = SVector{dim,Float64}(mod.(Particle.r, periodicity))
+    @inbounds begin
+        if gtid <= Npart
+            pos = r[gtid]
+            pos = mod.(pos, periodicity)
+#        else
+#            pos = zero(T)
+        end
+        sync_threads()
+        if gtid <= Npart
+            r_d[gtid] = pos
+        end
+    end
+    return nothing
 end
 
-"""
-@inline function PBC_PassiveBP!(Particle::Particle, periodicity::SVector)
-	dim = size(Particle.r,1)
-	a = zeros(dim)
-	if dim == 2
-		for i in 1:2
-			if periodicity[i] > 0.0
-	        	a[i] = mod(Particle.r[i], periodicity[i])
-			else
-				a[i] = Particle.r[i]
-	    	end
-		end
-		Particle.r = SVector{2,Float64}(a)
-	elseif dim == 3
-		for i in 1:3
-			if periodicity[i] > 0.0
-	        	a[i] = mod(Particle.r[i], periodicity[i])
-			else
-				a[i] = Particle[i]
-	    	end
-		end
-		Particle.r = SVector{3,Float64}(a)
-	end
-end
-"""
-
-@inline function PBC_ActiveTP!(ActiveTP::Particle, periodicity::SVector)
-	dim = size(ActiveTP.r,1)
-	a = zeros(dim)
-	b = zeros(dim)
-	if dim == 2
-		@inbounds for i in 1:2
-			if periodicity[i] > 0.0
-	        	a[i] = mod(ActiveTP.r[i], periodicity[i])
-				b[i] = a[i] - ActiveTP.r[i] + ActiveTP.r_pseu[i]
-			else
-				a[i] = ActiveTP.r[i]
-				b[i] = ActiveTP.r_pseu[i]
-	    	end
-		end
-		ActiveTP.r = SVector{2,Float64}(a)
-		ActiveTP.r_pseu = SVector{2,Float64}(b)
-	elseif dim == 3
-		@inbounds for i in 1:3
-			if periodicity[i] > 0.0
-	        	a[i] = mod(ActiveTP.r[i], periodicity[i])
-				b[i] = a[i] - ActiveTP.r[i] + ActiveTP.r_pseu[i]
-			else
-				a[i] = ActiveTP.r[i]
-				b[i] = ActiveTP.r_pseu[i]
-	    	end
-		end
-		ActiveTP.r = SVector{3,Float64}(a)
-		ActiveTP.r_pseu = SVector{3,Float64}(b)
-	end
+function PBC!(coords::CuVector{T}, periodicity::T; nthreads=128) where T
+    Npart = length(coords)
+    r_d = similar(coords)
+    CUDA.@sync @cuda blocks=ceil(Int, Npart/nthreads) threads=nthreads PBC_kernel!(coords, r_d, periodicity,Val(nthreads))
+    return r_d
 end
