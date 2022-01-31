@@ -31,7 +31,7 @@ function calculate_forces!(r::CuDeviceVector{T}, f::CuDeviceVector{T}, cut_off::
             dr = mod.(dr,periodicity)
             dist = sqrt(sum(abs2, dr))
             if dist < cut_off
-                k = Float32(5.0e10)
+                k = Float32(2.5e3)
                 inv_dist = 1.0f0/(dist+Float32(1e-7))
                 f_int = k*(cut_off*inv_dist-1.0f0)
                 acc -= f_int * dr
