@@ -10,7 +10,7 @@ function update_parts_LD(coords::CuVector{SVector{N,T}}, vels::CuVector{SVector{
     v_d = similar(coords)
     sdot_d = similar(αs)
 
-    CUDA.@sync @cuda blocks=ceil(Int, Npart/nthreads) threads=nthreads calculate_state!(coords, vels, frcs, noises, c1s, c2s, c3s, αs, a, r_d, v_d, sdot_d)
+    CUDA.@sync @cuda blocks=ceil(Int, Npart/nthreads) threads=nthreads Langevin!(coords, vels, frcs, noises, c1s, c2s, c3s, αs, a, r_d, v_d, sdot_d)
     return r_d, v_d, sdot_d
 end
 
@@ -31,9 +31,9 @@ end
 
 
 
-export calculate_state!
+export Langevin!
 
-function calculate_state!(r::CuDeviceVector{SVector{N,T}}, v::CuDeviceVector{SVector{N,T}}, f::CuDeviceVector{SVector{N,T}},
+function Langevin!(r::CuDeviceVector{SVector{N,T}}, v::CuDeviceVector{SVector{N,T}}, f::CuDeviceVector{SVector{N,T}},
      noise::CuDeviceVector{SVector{N,T}},c1s::CuDeviceVector{T}, c2s::CuDeviceVector{T}, c3s::CuDeviceVector{T},
      αs::CuDeviceVector{T}, a::T,rr::CuDeviceVector{SVector{N,T}}, vv::CuDeviceVector{SVector{N,T}}, ssdot::CuDeviceVector{T}) where {N,T}
      Npart = length(r)
