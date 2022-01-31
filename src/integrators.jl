@@ -14,9 +14,9 @@ function update_parts_LD(coords::CuVector{SVector{N,T}}, vels::CuVector{SVector{
     return r_d, v_d, sdot_d
 end
 
-function update_parts_BD(coords::CuVector{SVector{N,T}}, vels::CuVector{SVector{N,T}}, frcs::CuVector{SVector{N,T}},
-    noises::CuVector{SVector{N,T}},c1s::CuVector{T},c2s::CuVector{T},
-    c3s::CuVector{T},αs::CuVector{T},a::T; nthreads=128) where {N,T}
+function update_parts_BD(coords::CuVector{SVector{N,T}}, vels::CuVector{SVector{N,T}},
+     frcs::CuVector{SVector{N,T}},noises::CuVector{SVector{N,T}}, c1s::CuVector{T},
+     c2s::CuVector{T},αs::CuVector{T}; nthreads=128) where {N,T}
     Npart = UInt32(length(coords))
 
     r_d = similar(coords)
