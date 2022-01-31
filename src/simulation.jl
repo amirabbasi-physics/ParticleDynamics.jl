@@ -64,7 +64,7 @@ function run_simulation!(dim::Int, Npart::Int, freq::Int, r₀::CuVector{SVector
     for _ in 1:freq
         f_int = forces_fun(r,periodicity,cut_off)
         f_noise = noise2D(Npart)
-        r, v, sdot = update_parts_BD(r, v, f_int, f_noise, c1, c2)
+        r, v, sdot = update_parts_BD(r, v, f_int, f_noise, c1, c2,α)
         r  = PBC!(r,periodicity)
     end
     return r, v, f_int, sdot
