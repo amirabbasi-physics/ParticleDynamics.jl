@@ -1,4 +1,5 @@
-export update_parts
+export update_parts_LD
+export update_parts_BD
 
 function update_parts_LD(coords::CuVector{SVector{N,T}}, vels::CuVector{SVector{N,T}}, frcs::CuVector{SVector{N,T}},
     noises::CuVector{SVector{N,T}},c1s::CuVector{T},c2s::CuVector{T},
