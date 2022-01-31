@@ -1,29 +1,29 @@
 export update_parts_LD
 export update_parts_BD
 
-function update_parts_LD(coords::CuVector{SVector{N,T}}, vels::CuVector{SVector{N,T}}, frcs::CuVector{SVector{N,T}},
+function update_parts_LD(r::CuVector{SVector{N,T}}, v::CuVector{SVector{N,T}}, f::CuVector{SVector{N,T}},
     noises::CuVector{SVector{N,T}},c1s::CuVector{T},c2s::CuVector{T},
     c3s::CuVector{T},αs::CuVector{T},a::T; nthreads=128) where {N,T}
-    Npart = UInt32(length(coords))
+    Npart = UInt32(length(r))
 
-    r_d = similar(coords)
-    v_d = similar(coords)
+    r_d = similar(r)
+    v_d = similar(r)
     sdot_d = similar(αs)
 
-    CUDA.@sync @cuda blocks=ceil(Int, Npart/nthreads) threads=nthreads Langevin!(coords, vels, frcs, noises, c1s, c2s, c3s, αs, a, r_d, v_d, sdot_d)
+    CUDA.@sync @cuda blocks=ceil(Int, Npart/nthreads) threads=nthreads Langevin!(r, v, f, noises, c1s, c2s, c3s, αs, a, r_d, v_d, sdot_d)
     return r_d, v_d, sdot_d
 end
 
-function update_parts_BD(coords::CuVector{SVector{N,T}}, vels::CuVector{SVector{N,T}},
-     frcs::CuVector{SVector{N,T}},noises::CuVector{SVector{N,T}}, c1s::CuVector{T},
+function update_parts_BD(r::CuVector{SVector{N,T}}, v::CuVector{SVector{N,T}},
+     f::CuVector{SVector{N,T}},noises::CuVector{SVector{N,T}}, c1s::CuVector{T},
      c2s::CuVector{T},αs::CuVector{T}; nthreads=128) where {N,T}
-    Npart = UInt32(length(coords))
+    Npart = UInt32(length(r))
 
-    r_d = similar(coords)
-    v_d = similar(coords)
+    r_d = similar(r)
+    v_d = similar(r)
     sdot_d = similar(αs)
 
-    CUDA.@sync @cuda blocks=ceil(Int, Npart/nthreads) threads=nthreads Brownian!(coords, vels, frcs, noises, c1s, c2s, αs, r_d, v_d, sdot_d)
+    CUDA.@sync @cuda blocks=ceil(Int, Npart/nthreads) threads=nthreads Brownian!(r, v, f, noises, c1s, c2s, αs, r_d, v_d, sdot_d)
     return r_d, v_d, sdot_d
 end
 
