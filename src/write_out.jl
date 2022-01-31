@@ -2,42 +2,31 @@ using DelimitedFiles
 
 export write_xyz
 
-function write_xyz(ofname, nPart,step , dim, particles)
+function write_xyz(ofname::String, Npart::Int, σ::T, L::T, step::Int, dim::Int, part_type::Vector{String},r::Vector{SVector{N,T}},
+    v::Vector{SVector{N,T}}, f::Vector{SVector{N,T}}, Sdot::Vector{T}) where {N,T}
     out_file = ofname*".xyz"
-    if isnothing(particles[1].τΓ)
-        snapshot = [vcat(particles[i].part_type,particles[i].σ/2,particles[i].r,particles[i].v) for i in 1:nPart]
-    else
-        snapshot = [vcat(particles[i].part_type,particles[i].σ/2,particles[i].r,particles[i].v,particles[i].r_pseu,particles[i].v_pseu) for i in 1:nPart]
-    end
-
-    open(out_file,"a+") do file
-        println(file,nPart)
-        if dim == 2
-            println(file,"ITEM: ATOMS radius x y v_x v_y")
-            writedlm(file,snapshot)
-        elseif dim == 3
-            println(file,"ITEM: ATOMS radius x y z v_x v_y v_z")
-            writedlm(file,snapshot)
+    snapshot = [vcat(part_type[i],σ/2,r[i],v[i],f[i],Sdot[i]) for i in 1:Npart]
+    if step == 0
+       open(out_file,"w") do file
+            println(file,Npart)
+            if dim == 2
+                println(file,"""Lattice="$L $L 1.0 0.0 0.0 0.0 0.0 0.0 0.0" Properties="Particle Type:S:1:Radius:R:1:Position:R:2:Velocity:R:2:Force:R:2:Entropy:R:1" """)
+                writedlm(file,snapshot)
+            elseif dim == 3
+                println(file,"""Lattice="$L $L 1.0 0.0 0.0 0.0 0.0 0.0 0.0" Properties="Particle Type:S:1:Radius:R:1:Position:R:3:Velocity:R:3:Force:R:3:Entropy:R:1" """)
+                writedlm(file,snapshot)
+            end
         end
-    end
-end
-
-function write_log(ofname, nPart,step , dim, particles)
-    out_file = ofname*".log"
-    if isnothing(particles[1].τΓ)
-        snapshot = [vcat(particles[i].part_type,particles[i].σ/2,particles[i].r,particles[i].v) for i in 1:nPart]
     else
-        snapshot = [vcat(particles[i].part_type,particles[i].σ/2,particles[i].r,particles[i].v,particles[i].r_pseu,particles[i].v_pseu) for i in 1:nPart]
-    end
-
-    open(out_file,"a+") do file
-        println(file,nPart)
-        if dim == 2
-            println(file,"ITEM: ATOMS radius x y v_x v_y")
-            writedlm(file,snapshot)
-        elseif dim == 3
-            println(file,"ITEM: ATOMS radius x y z v_x v_y v_z")
-            writedlm(file,snapshot)
+        open(out_file,"a+") do file
+            println(file,Npart)
+            if dim == 2
+                println(file,"""Lattice="$L $L 1.0 0.0 0.0 0.0 0.0 0.0 0.0" Properties="Particle Type:S:1:Radius:R:1:Position:R:2:Velocity:R:2:Force:R:2:Entropy:R:1" """)
+                writedlm(file,snapshot)
+            elseif dim == 3
+                println(file,"""Lattice="$L $L 1.0 0.0 0.0 0.0 0.0 0.0 0.0" Properties="Particle Type:S:1:Radius:R:1:Position:R:3:Velocity:R:3:Force:R:3:Entropy:R:1" """)
+                writedlm(file,snapshot)
+            end
         end
     end
 end

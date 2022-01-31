@@ -1,90 +1,45 @@
+export forces_fun
+function forces_fun(coords::CuVector{SVector{N,T}}, periodicity::SVector{N,T}, cut_off::T; nthreads=128) where {N,T}
+    Npart = UInt32(length(coords))
 
-
-export compute_interactions!
-
-"""
-function compute_interactions!(harm_rep.particles, periodicity::SVector)
-	dim = size(periodicity,1)
-	if dim == 2
-		N = nPart
-    	tid = threadIdx().x
-    	gtid = (blockIdx().x - 1) * blockDim().x + tid  # global thread id
-    	shared = @cuStaticSharedMem(T, TH)
-		full_blocks = N ÷ blockDim().x
-    	rest = N % blockDim().x
-
-		@inbounds begin
-        if gtid <= N
-            pos = particle[gtid]
-        else
-            pos = zero(T)
-        end
-        acc = zero(T)
-
-		@inbounds @use_threads harm_rep.multithreaded for particle in harm_rep.particles
-			i = trunc(Int64, particle.r[1] / harm_rep.cell_list.cell_dr[1])
-			j = trunc(Int64, particle.r[2] / harm_rep.cell_list.cell_dr[2])
-			f_x, f_y = 0.0, 0.0
-			for dj = -1 : 1, di = -1 : 1
-				idi = mod(i + di, harm_rep.cell_list.num_cells[1]) + 1
-				jdj = mod(j + dj, harm_rep.cell_list.num_cells[2]) + 1
-				pid = harm_rep.cell_list.start_pid[idi, jdj]
-				while pid > 0
-					neighbor = harm_rep.cell_list.particles[pid]
-					Δx = wrap_displacement(particle.r[1] - neighbor.r[1]; period = periodicity[1])
-					Δy = wrap_displacement(particle.r[2] - neighbor.r[2]; period = periodicity[2])
-					Δr² = Δx^2 + Δy^2
-					Δr  = sqrt(Δr²)
-
-					rc² = harm_rep.rc^2
-					if 0.0 < Δr² < rc²
-						coef = harm_rep.k*(harm_rep.rc - Δr)/Δr
-						f_x += (_f_x = coef * Δx )
-						f_y += (_f_y = coef * Δy )
-						if harm_rep.use_newton_3rd
-							neighbor.f = neighbor.f - SVector{2,Float64}(f_x,f_y)
-						end
-					end
-					pid = harm_rep.cell_list.next_pid[pid]
-				end
-			end
-			particle.f = particle.f + SVector{2,Float64}(f_x,f_y)
-		end
-	elseif dim == 3
-		@inbounds @use_threads harm_rep.multithreaded for particle in harm_rep.particles
-	        i = trunc(Int64, particle.r[1] / harm_rep.cell_list.cell_dr[1])
-	        j = trunc(Int64, particle.r[2] / harm_rep.cell_list.cell_dr[2])
-			k = trunc(Int64, particle.r[3] / harm_rep.cell_list.cell_dr[3])
-	        f_x, f_y,f_z = 0.0, 0.0, 0.0
-	        for dk = -1 : 1, dj = -1 : 1, di = -1 : 1
-	            idi = mod(i + di, harm_rep.cell_list.num_cells[1]) + 1
-	            jdj = mod(j + dj, harm_rep.cell_list.num_cells[2]) + 1
-				kdk = mod(k + dk, harm_rep.cell_list.num_cells[3]) + 1
-	            pid = harm_rep.cell_list.start_pid[idi, jdj, kdk]
-	            while pid > 0
-	                neighbor = harm_rep.cell_list.particles[pid]
-	                Δx = wrap_displacement(particle.r[1] - neighbor.r[1]; period = periodicity[1])
-	                Δy = wrap_displacement(particle.r[2] - neighbor.r[2]; period = periodicity[2])
-					Δz = wrap_displacement(particle.r[3] - neighbor.r[3]; period = periodicity[3])
-					Δr² = Δx^2 + Δy^2 + Δz^2
-					Δr  = sqrt(Δr²)
-
-					rc² = harm_rep.rc^2
-					if 0.0 < Δr² < rc²
-						coef = harm_rep.k*(harm_rep.rc - Δr)/Δr
-
-	                    f_x += (_f_x = coef * Δx)
-	                    f_y += (_f_y = coef * Δy)
-						f_z += (_f_z = coef * Δz)
-	                    if harm_rep.use_newton_3rd
-	                        neighbor.f = neighbor.f - SVector{3,Float64}(f_x,f_y,f_z)
-	                    end
-	                end
-	                pid = harm_rep.cell_list.next_pid[pid]
-	            end
-	        end
-	        particle.f = particle.f + SVector{3,Float64}(f_x,f_y,f_z)
-	    end
-	end
+    f_d = similar(coords)
+    nblocks = Npart ÷ nthreads
+    CUDA.@sync @cuda blocks=nblocks threads=nthreads calculate_forces!(coords, f_d, cut_off, periodicity)
+    return f_d
 end
-"""
+
+
+
+export calculate_forces!
+
+function calculate_forces!(r::CuDeviceVector{T}, f::CuDeviceVector{T}, cut_off::Float32, periodicity::T) where T
+    Npart = UInt32(length(r))
+    gtid = (blockIdx().x - 1) * blockDim().x + threadIdx().x  # global thread id
+    #shared = CuStaticSharedArray(T, 128)
+    shared = @cuStaticSharedMem(T,128)
+    tile = 0
+    pos = r[gtid]
+    acc = zero(T)
+    f[gtid] = acc
+    for i in 1:blockDim().x:Npart
+        idx = tile * blockDim().x + threadIdx().x
+        shared[threadIdx().x] = r[idx]
+        sync_threads()
+
+        @inbounds @simd for j in 1:blockDim().x
+            dr = shared[j]-pos
+            dr = mod.(dr,periodicity)
+            dist = sqrt(sum(abs2, dr))
+            if dist < cut_off
+                k = Float32(1.0e-2)
+                inv_dist = 1.0f0/(dist+Float32(1e-7))
+                f_int = k*(cut_off*inv_dist-1.0f0)
+                acc -= f_int * dr
+            end
+        end
+        sync_threads()
+        tile += 1
+    end
+    f[gtid] = acc
+    return nothing
+end

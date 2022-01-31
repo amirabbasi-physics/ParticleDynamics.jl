@@ -16,72 +16,31 @@ export kinetic
 end
 
 
-function run_simulation!(simulation::Simulation; message_interval::Float64 = 30.0)
-    println("Number of threads available: ", Threads.nthreads())
-    println("Number of particles: ", length(simulation.particles))
-    println("Description: ", simulation.descriptor)
-    println("")
-
-	periodicity = simulation.periodicity
-	dim = size(periodicity,1)
-    prev_step = 0
-    time_elapsed = 0.0
-    interval_start = time()
-	avg_param_counter = 0
-	Force_tot = 0.0
-	kinetic_tot = 0.0
-	kinetic_theo = 0.0
-	kinetic_tol = 0.0
-    for step = 1 : simulation.num_steps
-		if mod(step, 100) == 0
-			Force_tot = 0.0
-			kinetic_tot = 0.0
-			kinetic_theo = 0.0
-			kinetic_tol = 0.0
-			avg_param_counter = 0
-		end
-		for interaction in simulation.interactions
-			compute_interactions!(interaction, periodicity)
-		end
-		for particle in simulation.particles
-			Force_tot += sum([abs.(particle.f[i]) for i=1:dim])
-		end
-        for integrator in simulation.integrators
-			avg_param_counter += 1
-			Update_Particles!(integrator, periodicity)
-			num_parts = size(simulation.particles,1)
-			[kinetic_tot += sum(kinetic(simulation.particles[i].v,simulation.particles[i].τm,simulation.particles[i].τD)) for i = 1:num_parts]
-			[kinetic_theo += size(periodicity,1)*0.5*sum(simulation.particles[i].α + 1.0) for i = 1:num_parts]
-        end
+function run_simulation!(dim::Int, Npart::Int, freq::Int, r₀::CuVector{SVector{N,T}}, v₀::CuVector{SVector{N,T}}, 
+        S₀::CuVector{T}, c₁₀::CuVector{T}, c₂₀::CuVector{T},c₃₀::CuVector{T}, α₀::CuVector{T}, a::T,
+        cut_off::T, periodicity::SVector{N,T}, forces_fun::Function,update_parts::Function, noise2D!::Function) where {N,T}
+    r  = copy(r₀)
+    v  = copy(v₀)
 
 
-		#################### Revise R!!!!!! #########################
-		if mod(step, simulation.save_interval) == 0
-			write_xyz(simulation.output_file, size(simulation.particles,1), step, dim, simulation.particles)
-		end
-		kinetic_tol = 100.0*(kinetic_tot-kinetic_theo)/kinetic_theo
-		if mod(step, 50) == 0
-			for cell_list in simulation.cell_lists
-	            update_cell_list!(cell_list, dim)
-	        end
-		end
+    c1 = copy(c₁₀)
+    c2 = copy(c₂₀)
+    c3 = copy(c₃₀)
+    α  = copy(α₀)
 
-        interval_time = time() - interval_start
-        if interval_time > message_interval || step == simulation.num_steps
-            time_elapsed += interval_time
-			step_diff = step - prev_step
-            rate = step_diff / interval_time
-            println(hr_min_sec(time_elapsed), " | ",
-                    step, "/", simulation.num_steps, " (", round(step / simulation.num_steps * 100, digits = 1), "%) | ",
-                    round(rate, digits = 1), " steps/s | ",
-                    hr_min_sec((simulation.num_steps - step) / rate)," | ","Total Absolute Force : ", round(Force_tot/avg_param_counter,digits = 2))
-            prev_step = step
-            interval_start = time()
-        end
+    f_int = similar(v₀)
+    f_noise = similar(v₀)
+    sdot  = similar(S₀)
+
+
+    for _ in 1:freq
+        f_int = forces_fun(r,periodicity,cut_off)
+        f_noise = noise2D!(Npart)
+        r, v, sdot = update_parts(r, v, f_int, f_noise, c1, c2, c3, α, a)
+        r  = PBC!(r,periodicity)
     end
-    println("Average steps/s: ", round(simulation.num_steps / time_elapsed, digits = 1))
+    return r, v, f_int, sdot
 end
-
 
 @inline function kinetic(v::SVector,τm::Float64,τD::Float64)
 	return (τm/(2.0*τD))*dot(v,v)
