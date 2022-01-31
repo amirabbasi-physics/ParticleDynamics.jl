@@ -16,9 +16,10 @@ export kinetic
 end
 
 
-function run_simulation!(dim::Int, Npart::Int, freq::Int, r₀::CuVector{SVector{N,T}}, v₀::CuVector{SVector{N,T}},
-        S₀::CuVector{T}, c₁₀::CuVector{T}, c₂₀::CuVector{T},c₃₀::CuVector{T}, α₀::CuVector{T}, a::T,
-        cut_off::T, periodicity::SVector{N,T}, forces_fun::Function,update_parts_LD::Function, noise2D::Function) where {N,T}
+function run_simulation!(dim::Int, Npart::Int, freq::Int, r₀::CuVector{SVector{N,T}},
+	v₀::CuVector{SVector{N,T}},S₀::CuVector{T}, c₁₀::CuVector{T}, c₂₀::CuVector{T},
+	c₃₀::CuVector{T}, α₀::CuVector{T}, a::T,cut_off::T, periodicity::SVector{N,T},
+	forces_fun::Function,update_parts_LD::Function, noise2D::Function) where {N,T}
     r  = copy(r₀)
     v  = copy(v₀)
 
@@ -43,10 +44,10 @@ function run_simulation!(dim::Int, Npart::Int, freq::Int, r₀::CuVector{SVector
 end
 
 
-
-function run_simulation!(dim::Int, Npart::Int, freq::Int, r₀::CuVector{SVector{N,T}}, v₀::CuVector{SVector{N,T}},
-        S₀::CuVector{T}, c₁₀::CuVector{T}, c₂₀::CuVector{T},c₃₀::CuVector{T}, α₀::CuVector{T},
-        cut_off::T, periodicity::SVector{N,T}, forces_fun::Function,update_parts_BD::Function, noise2D::Function) where {N,T}
+function run_simulation!(dim::Int, Npart::Int, freq::Int, r₀::CuVector{SVector{N,T}},
+	v₀::CuVector{SVector{N,T}},S₀::CuVector{T}, c₁₀::CuVector{T}, c₂₀::CuVector{T},
+	α₀::CuVector{T},cut_off::T, periodicity::SVector{N,T},forces_fun::Function,
+	update_parts_BD::Function, noise2D::Function) where {N,T}
     r  = copy(r₀)
     v  = copy(v₀)
 
