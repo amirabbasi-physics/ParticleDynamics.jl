@@ -17,7 +17,7 @@ end
 
 
 function run_simulation!(dim::Int, Npart::Int, freq::Int, r₀::CuVector{SVector{N,T}},
-	v₀::CuVector{SVector{N,T}},S₀::CuVector{T}, c₁₀::CuVector{T}, c₂₀::CuVector{T},
+	v₀::CuVector{SVector{N,T}},Epot₀::CuVector{T},Ekin₀::CuVector{T},S₀::CuVector{T}, c₁₀::CuVector{T}, c₂₀::CuVector{T},
 	c₃₀::CuVector{T}, α₀::CuVector{T}, a::T,cut_off::T, periodicity::SVector{N,T},
 	forces_fun::Function,update_parts_LD::Function, noise2D::Function) where {N,T}
     r  = copy(r₀)
@@ -29,12 +29,15 @@ function run_simulation!(dim::Int, Npart::Int, freq::Int, r₀::CuVector{SVector
     c3 = copy(c₃₀)
     α  = copy(α₀)
 
-    f_int = similar(v₀)
-    f_noise = similar(v₀)
-    sdot  = similar(S₀)
+	f_int = zero(similar(v₀))
+    f_noise = zero(similar(v₀))
+    sdot  = zero(similar(S₀))
+	sdot_ave = similar(sdot)
 
 
     for _ in 1:freq
+		f_int = zero(similar(v₀))
+	    f_noise = zero(similar(v₀))
         f_int = forces_fun(r,periodicity,cut_off)
         f_noise = noise2D(Npart)
         r, v, sdot = update_parts_LD(r, v, f_int, f_noise, c1, c2, c3, α, a)
@@ -42,6 +45,7 @@ function run_simulation!(dim::Int, Npart::Int, freq::Int, r₀::CuVector{SVector
     end
     return r, v, f_int, sdot
 end
+
 
 
 function run_simulation!(dim::Int, Npart::Int, freq::Int, r₀::CuVector{SVector{N,T}},
@@ -56,18 +60,22 @@ function run_simulation!(dim::Int, Npart::Int, freq::Int, r₀::CuVector{SVector
     c2 = copy(c₂₀)
     α  = copy(α₀)
 
-    f_int = zero(similar(v₀))
+    f_int	= zero(similar(v₀))
     f_noise = zero(similar(v₀))
-    sdot  = similar(S₀)
+    sdot	= zero(similar(S₀))
 
+	sdot_ave= similar(sdot)
 
     for _ in 1:freq
-        f_int = forces_fun(r,periodicity,cut_off)
+		f_int = zero(similar(v₀))
+	    f_noise = zero(similar(v₀))
+        f_int   = forces_fun(r,periodicity,cut_off)
         f_noise = noise2D(Npart)
         r, v, sdot = update_parts_BD(r, v, f_int, f_noise, c1, c2,α)
+		sdot_ave .+= sdot
         r  = PBC!(r,periodicity)
     end
-    return r, v, f_int, sdot
+    return r, v, f_int, sdot_ave ./freq
 end
 
 @inline function kinetic(v::SVector,τm::Float64,τD::Float64)
