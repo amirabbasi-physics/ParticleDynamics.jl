@@ -56,8 +56,8 @@ function run_simulation!(dim::Int, Npart::Int, freq::Int, r₀::CuVector{SVector
     c2 = copy(c₂₀)
     α  = copy(α₀)
 
-    f_int = similar(v₀)
-    f_noise = similar(v₀)
+    f_int = zero(similar(v₀))
+    f_noise = zero(similar(v₀))
     sdot  = similar(S₀)
 
 
