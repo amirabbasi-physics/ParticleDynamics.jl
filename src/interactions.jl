@@ -7,16 +7,23 @@ function forces_fun(coords::CuVector{SVector{N,T}}, periodicity::SVector{N,T}, c
     CUDA.@sync @cuda blocks=nblocks threads=nthreads calculate_forces!(coords, f_d, cut_off, periodicity)
     return f_d
 end
+export harm_rep
 
-
+@inline function harm_rep(dx::T, dy::T, dist::T, k::T, σ::T) where T
+    inv_dist = 1.0f0/(dist + T(1.0e-8))
+    f_int = k*(σ*inv_dist - 1.0f0)
+    f_x = f_int*dx
+    f_y = f_int*dy
+    return SVector{2,T}(f_x,f_y)
+end
 
 export calculate_forces!
 
 function calculate_forces!(r::CuDeviceVector{T}, f::CuDeviceVector{T}, cut_off::Float32, periodicity::T) where T
     Npart = UInt32(length(r))
     gtid = (blockIdx().x - 1) * blockDim().x + threadIdx().x  # global thread id
-    #shared = CuStaticSharedArray(T, 128)
-    shared = @cuStaticSharedMem(T,128)
+    shared = CuStaticSharedArray(T, 128)
+    dim = UInt32(length(periodicity))
     tile = 0
     pos = r[gtid]
     acc = zero(T)
@@ -27,14 +34,14 @@ function calculate_forces!(r::CuDeviceVector{T}, f::CuDeviceVector{T}, cut_off::
         sync_threads()
 
         @inbounds @simd for j in 1:blockDim().x
-            dr = shared[j]-pos
-            dr = mod.(dr,periodicity)
-            dist = sqrt(sum(abs2, dr))
+            dx  = pos[1] - shared[j][1]
+            dy  = pos[2] - shared[j][2]
+            dx = ifelse(abs(dx) > periodicity[1] / 2, dx - sign(dx) * periodicity[1] ,dx)
+            dy = ifelse(abs(dy) > periodicity[2] / 2, dy - sign(dy) * periodicity[2] ,dy)
+            dr² = dx*dx + dy*dy
+            dist  = sqrt(dr²)
             if dist < cut_off
-                k = Float32(2.5e3)
-                inv_dist = 1.0f0/(dist+Float32(1e-7))
-                f_int = k*(cut_off*inv_dist-1.0f0)
-                acc -= f_int * dr
+                acc = harm_rep(dx,dy,dist, 2500000.0f0, 1.0f0)
             end
         end
         sync_threads()
