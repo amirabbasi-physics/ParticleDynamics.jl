@@ -41,7 +41,8 @@ function calculate_forces!(r::CuDeviceVector{T}, f::CuDeviceVector{T}, cut_off::
             dr² = dx*dx + dy*dy
             dist  = sqrt(dr²)
             if dist < cut_off
-                acc = harm_rep(dx,dy,dist, 2500000.0f0, 1.0f0)
+                k = Float32(1.0e6)
+                acc = harm_rep(dx,dy,dist, k, cut_off)
             end
         end
         sync_threads()
