@@ -52,8 +52,8 @@ function Langevin!(r::CuDeviceVector{SVector{N,T}}, v::CuDeviceVector{SVector{N,
              c3  = c3s[gtid]
              α   = αs[gtid]
              sdt = ssdot[gtid]
-             vel = c1 .* vel .+ c3 .* rnd .+ c2 .* frc
              pos = pos .+ c2 .* vel
+             vel = c1 .* vel .+ c3 .* rnd .+ c2 .* frc
              sdt = (a*dot(vel,vel)- dot(c3 .* rnd,vel))/α
          end
          sync_threads()
@@ -88,8 +88,8 @@ function Brownian!(r::CuDeviceVector{SVector{N,T}}, v::CuDeviceVector{SVector{N,
              c2  = c2s[gtid]
              α   = αs[gtid]
              sdt = ssdot[gtid]
-             vel = frc .+ c2 .* rnd
              pos = pos .+ c1 .* vel
+             vel = frc .+ c2 .* rnd
              sdt = (dot(vel,vel)- dot(c2 .* rnd,vel))/α
          end
          sync_threads()
