@@ -1,5 +1,5 @@
 export forces_fun
-function forces_fun(coords::CuVector{SVector{N,T}}, periodicity::SVector{N,T}, cut_off::T; nthreads=128) where {N,T}
+function forces_fun(coords::CuVector{SVector{N,T}}, periodicity::CuVector{SVector{N,T}}, cut_off::T; nthreads=128) where {N,T}
     Npart = UInt32(length(coords))
 
     f_d = similar(coords)
@@ -19,7 +19,7 @@ end
 
 export calculate_forces!
 
-function calculate_forces!(r::CuDeviceVector{T}, f::CuDeviceVector{T}, cut_off::Float32, periodicity::T) where T
+function calculate_forces!(r::CuDeviceVector{T}, f::CuDeviceVector{T}, cut_off::Float32, periodicity::CuDeviceVector{T}) where T
     Npart = UInt32(length(r))
     gtid = (blockIdx().x - 1) * blockDim().x + threadIdx().x  # global thread id
     shared = CuStaticSharedArray(T, 128)
