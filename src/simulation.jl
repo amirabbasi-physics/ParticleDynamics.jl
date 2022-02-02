@@ -76,7 +76,7 @@ function run_simulation!(dim::Int, Npart::Int, freq::Int, r₀::CuVector{SVector
 		#r  = PBC!(r,periodicity)
 		PBC!(r,periodicity)
     end
-    return r, v, f_int, sdot
+    return nothing
 end
 
 @inline function kinetic(v::SVector,τm::Float64,τD::Float64)
