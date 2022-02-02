@@ -33,7 +33,7 @@ function write_xyz(ofname::String, Npart::Int, σ::T, L::T, step::Int, dim::Int,
 end
 
 
-function write_log(ofname::String, Npart::Int, step::Int, Sdot::Vector{T}) where {N,T}
+function write_log(ofname::String, Npart::Int, step::Int, Sdot::Vector{T}) where T
     out_file = ofname*".log"
     data = hcat(step,sum(Sdot)/Npart)
     if step == 0
