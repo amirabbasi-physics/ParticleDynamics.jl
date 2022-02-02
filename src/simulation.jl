@@ -64,18 +64,19 @@ function run_simulation!(dim::Int, Npart::Int, freq::Int, r₀::CuVector{SVector
     f_noise = zero(similar(v₀))
     sdot	= zero(similar(S₀))
 
-	sdot_ave= similar(sdot)
 
     for _ in 1:freq
+		sdot	= zero(similar(S₀))
 		f_int = zero(similar(v₀))
 	    f_noise = zero(similar(v₀))
         f_int   = forces_fun(r,periodicity,cut_off)
         f_noise = noise2D(Npart)
-        r, v, sdot = update_parts_BD(r, v, f_int, f_noise, c1, c2,α)
-		sdot_ave .+= sdot
-        r  = PBC!(r,periodicity)
+        update_parts_BD!(r, v, f_int, f_noise,sdot, c1, c2,α)
+
+		#r  = PBC!(r,periodicity)
+		PBC!(r,periodicity)
     end
-    return r, v, f_int, sdot_ave ./freq
+    return r, v, f_int, sdot
 end
 
 @inline function kinetic(v::SVector,τm::Float64,τD::Float64)
