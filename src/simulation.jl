@@ -60,20 +60,19 @@ function run_simulation!(dim::Int, Npart::Int, freq::Int, r₀::CuVector{SVector
     c2 = copy(c₂₀)
     α  = copy(α₀)
 
-    f_int	= zero(similar(v₀))
-    f_noise = zero(similar(v₀))
-    sdot	= zero(similar(S₀))
+    f_int	= similar(v₀)
+    f_noise = similar(v₀)
+    sdot	= similar(S₀)
 
 
     for _ in 1:freq
-		sdot	= zero(similar(S₀))
-		f_int = zero(similar(v₀))
-	    f_noise = zero(similar(v₀))
+		#sdot	= zero(similar(S₀))
+		#f_int = zero(similar(v₀))
+	    #f_noise = zero(similar(v₀))
         f_int   = forces_fun(r,periodicity,cut_off)
         f_noise = noise2D(Npart)
         update_parts_BD!(r, v, f_int, f_noise,sdot, c1, c2,α)
 
-		#r  = PBC!(r,periodicity)
 		PBC!(r,periodicity)
     end
     return nothing
