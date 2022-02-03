@@ -70,7 +70,7 @@ function Brownian!(r::CuDeviceVector{SVector{N,T}}, v::CuDeviceVector{SVector{N,
 
      @inbounds begin
          if gtid <= Npart
-             pos = r[gtid]
+             pos_tmp = r[gtid]
              vel = v[gtid]
              frc = f[gtid]
              rnd = noise[gtid]
@@ -78,8 +78,8 @@ function Brownian!(r::CuDeviceVector{SVector{N,T}}, v::CuDeviceVector{SVector{N,
              c2  = c2s[gtid]
              α   = αs[gtid]
              sdt = sdot[gtid]
-             pos = pos .+ c1 .* vel
-             vel = frc .+ c2 .* rnd
+             pos = pos_tmp .+ c1 .* frc + c2 .* rnd
+             vel = (pos .- pos_tmp) ./ c1
              sdt = (dot(vel,vel)- dot(c2 .* rnd,vel))/α
          end
          sync_threads()
