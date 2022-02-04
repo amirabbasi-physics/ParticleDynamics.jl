@@ -21,6 +21,7 @@ import Random: randperm
 include("definitions.jl")
 include("simulation.jl")
 include("integrators.jl")
+include("analysis.jl")
 #include("cell_list.jl")
 include("boundary_conditions.jl")
 include("interactions.jl")

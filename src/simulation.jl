@@ -17,18 +17,22 @@ end
 
 
 function run_simulation!(dim::Int, Npart::Int, freq::Int, r₀::CuVector{SVector{N,T}},
-	v₀::CuVector{SVector{N,T}},S₀::CuVector{T}, c₁₀::CuVector{T}, c₂₀::CuVector{T}, c₃₀::CuVector{T},
+	v₀::CuVector{SVector{N,T}},f₀::CuVector{SVector{N,T}},S₀::CuVector{T},Epot₀::CuVector{T}, c₁₀::CuVector{T}, c₂₀::CuVector{T}, c₃₀::CuVector{T},
 	α₀::CuVector{T}, a²::T, cut_off::T, periodicity::SVector{N,T},forces_fun::Function,
 	update_parts_LD!::Function, noise2D::Function) where {N,T}
+	S₀ = zero(S₀)
     for _ in 1:freq
-		f_int = zero(similar(v₀))
-	    f_noise = zero(similar(v₀))
-        f_int = forces_fun(r₀,periodicity,cut_off)
+		Epot_tmp = Epot₀
+		v_tmp = v₀
+        forces_fun!(r₀,f₀,Epot₀,periodicity,cut_off)
         f_noise = noise2D(Npart)
-        update_parts_LD!(r₀, v₀, f_int, f_noise, S₀, c₁₀, c₂₀, c₃₀, α₀, a²)
-
+        update_parts_LD!(r₀, v₀, f₀, f_noise, c₁₀, c₂₀, c₃₀,a²)
+		entropy_prod!(S₀, Epot₀,Epot_tmp,v₀,v_tmp,c₂₀,α₀,a²)
 		PBC!(r₀,periodicity)
     end
+	#@cuprintln(sum(S₀))
+	S₀ .= S₀./freq
+	#@cuprintln(sum(S₀))
     return nothing
 end
 
