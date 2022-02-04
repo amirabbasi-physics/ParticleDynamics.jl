@@ -18,6 +18,7 @@ function PBC_kernel!(r::CuDeviceVector{T}, periodicity::T,::Val{TH}) where {T,TH
         if gtid <= Npart
             r[gtid] = pos
         end
+        sync_threads()
     end
     return nothing
 end

@@ -1,25 +1,25 @@
-export forces_fun
+export forces_fun!
 
-function forces_fun(r::CuVector{SVector{N,T}}, periodicity::SVector{N,T}, cut_off::T; nthreads=128) where {N,T}
+function forces_fun!(r::CuVector{SVector{N,T}}, f₀::CuVector{SVector{N,T}},Epot₀::CuVector{T},periodicity::SVector{N,T}, cut_off::T; nthreads=128) where {N,T}
     Npart = length(r)
-    f_d = similar(r)
     nblocks = Npart ÷ nthreads
-    CUDA.@sync @cuda blocks=nblocks threads=nthreads calculate_forces!(r, f_d, cut_off, periodicity)
-    return f_d
+    CUDA.@sync @cuda blocks=nblocks threads=nthreads calculate_forces!(r, f₀, Epot₀, cut_off, periodicity)
+    return nothing
 end
 export harm_rep
 
 @inline function harm_rep(dx::T, dy::T, dist::T, k::T, σ::T) where T
     inv_dist = 1.0f0/dist
     f_int = k*(σ*inv_dist - 1.0f0)
+    e_int = (k/2.0f0)*(σ*inv_dist - 1.0f0)^2.0f0
     f_x = f_int*dx
     f_y = f_int*dy
-    return SVector{2,T}(f_x,f_y)
+    return SVector{2,T}(f_x,f_y) , f_int
 end
 
 export calculate_forces!
 
-function calculate_forces!(r::CuDeviceVector{T}, f::CuDeviceVector{T},
+function calculate_forces!(r::CuDeviceVector{T}, f::CuDeviceVector{T}, e::CuDeviceVector{Float32},
      cut_off::Float32, periodicity::T) where T
     Npart = length(r)
     gtid = (blockIdx().x - 1) * blockDim().x + threadIdx().x  # global thread id
@@ -29,9 +29,7 @@ function calculate_forces!(r::CuDeviceVector{T}, f::CuDeviceVector{T},
     tile = 0
     pos = r[gtid]
     acc = zero(T)
-
-    #f[gtid] = acc
-    #Epot[gtid] = epot
+    epot= 0.0f0
 
     for i in 1:blockDim().x:Npart
         idx = tile * blockDim().x + threadIdx().x
@@ -45,14 +43,15 @@ function calculate_forces!(r::CuDeviceVector{T}, f::CuDeviceVector{T},
             dy = ifelse(abs(dy) > periodicity[2] / 2, dy - sign(dy) * periodicity[2] ,dy)
             dr² = dx*dx + dy*dy
             dist  = sqrt(dr²)
-            if 0.0f0 <dist < cut_off
-                k = Float32(1.0e5)
-                acc = harm_rep(dx,dy,dist, k, cut_off)
+            if 0.0f0 < dist < cut_off
+                k = Float32(1.0e8)
+                acc, epot = harm_rep(dx,dy,dist, k, cut_off)
             end
         end
         sync_threads()
         tile += 1
     end
     f[gtid] = acc
+    e[gtid] = epot
     return nothing
 end
