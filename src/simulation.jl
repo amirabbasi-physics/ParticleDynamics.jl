@@ -20,7 +20,7 @@ function run_simulation!(dim::Int, Npart::Int, freq::Int, r₀::CuVector{SVector
 	v₀::CuVector{SVector{N,T}},f₀::CuVector{SVector{N,T}},S₀::CuVector{T},Epot₀::CuVector{T}, c₁₀::CuVector{T}, c₂₀::CuVector{T}, c₃₀::CuVector{T},
 	α₀::CuVector{T}, a²::T, cut_off::T, periodicity::SVector{N,T},forces_fun::Function,
 	update_parts_LD!::Function, noise2D::Function) where {N,T}
-	S₀ = zero(S₀)
+	S₀ = deepcopy(zero(S₀))
     for _ in 1:freq
 		Epot_tmp = deepcopy(Epot₀)
 		v_tmp = deepcopy(v₀)
@@ -36,8 +36,8 @@ function run_simulation!(dim::Int, Npart::Int, freq::Int, r₀::CuVector{SVector
 		PBC!(r₀,periodicity)
 		#@cuprintln(sum(dot.(v_tmp,v_tmp) .- dot.(v₀,v₀)))
     end
-	S₀ .= S₀./freq
-    return nothing
+	#S₀ .= S₀./freq
+    return S₀
 end
 
 
