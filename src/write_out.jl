@@ -33,12 +33,12 @@ function write_xyz(ofname::String, Npart::Int, σ::T, L::T, step::Int, dim::Int,
 end
 
 
-function write_log(ofname::String, Npart::Int, step::Int, Sdot::Vector{T}) where T
+function write_log(ofname::String, Npart::Int, step::Int, Sdot1::Vector{T}, Sdot2::Vector{T}) where T
     out_file = ofname*".log"
-    data = hcat(step,sum(Sdot)/Npart)
+    data = hcat(step,sum(Sdot1)/Npart, sum(Sdot2)/Npart)
     if step == 0
        open(out_file,"w") do file
-            println(file,"Time step       Entropy production rate")
+            println(file,"Time step       EPR_1      EPR_2")
             writedlm(file,data)
         end
     else

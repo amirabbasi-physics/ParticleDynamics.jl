@@ -17,10 +17,11 @@ end
 
 
 function run_simulation!(dim::Int, Npart::Int, freq::Int, r₀::CuVector{SVector{N,T}},
-	v₀::CuVector{SVector{N,T}},f₀::CuVector{SVector{N,T}},S₀::CuVector{T},Epot₀::CuVector{T}, c₁₀::CuVector{T}, c₂₀::CuVector{T}, c₃₀::CuVector{T},
+	v₀::CuVector{SVector{N,T}},f₀::CuVector{SVector{N,T}},S₀₁::CuVector{T},S₀₂::CuVector{T}, Epot₀::CuVector{T}, c₁₀::CuVector{T}, c₂₀::CuVector{T}, c₃₀::CuVector{T},
 	α₀::CuVector{T}, a²::T, cut_off::T, periodicity::SVector{N,T},forces_fun::Function,
 	update_parts_LD!::Function, noise2D::Function) where {N,T}
-	S₀ = deepcopy(zero(S₀))
+	S₀₁ = deepcopy(zero(S₀₁))
+	S₀₂ = deepcopy(zero(S₀₂))
     for _ in 1:freq
 		Epot_tmp = deepcopy(Epot₀)
 		v_tmp = deepcopy(v₀)
@@ -31,13 +32,15 @@ function run_simulation!(dim::Int, Npart::Int, freq::Int, r₀::CuVector{SVector
 		#@cuprintln(sum(dot.(v₀,v₀)))
         update_parts_LD!(r₀, v₀, f₀, f_noise, c₁₀, c₂₀, c₃₀,a²)
 		#@cuprintln(sum(dot.(v₀,v₀)))
-		entropy_prod!(S₀, Epot₀,Epot_tmp,v₀,v_tmp,c₂₀,α₀,a²)
+		entropy_prod!(S₀₁, Epot₀,Epot_tmp,v₀,v_tmp,c₂₀,α₀,a²)
+		entropy_prod!(S₀₂,v₀,f_noise,c₂₀,c₃₀,α₀,a²)
 		#@cuprintln(sum(S₀))
 		PBC!(r₀,periodicity)
 		#@cuprintln(sum(dot.(v_tmp,v_tmp) .- dot.(v₀,v₀)))
     end
-	S₀ .= S₀./freq
-    return S₀
+	S₀₁ .= S₀₁./freq
+	S₀₂ .= S₀₂./freq
+    return S₀₁, S₀₂
 end
 
 
