@@ -22,17 +22,21 @@ function run_simulation!(dim::Int, Npart::Int, freq::Int, r₀::CuVector{SVector
 	update_parts_LD!::Function, noise2D::Function) where {N,T}
 	S₀ = zero(S₀)
     for _ in 1:freq
-		Epot_tmp = Epot₀
-		v_tmp = v₀
+		Epot_tmp = deepcopy(Epot₀)
+		v_tmp = deepcopy(v₀)
+		#@cuprintln(sum(Epot_tmp))
         forces_fun!(r₀,f₀,Epot₀,periodicity,cut_off)
+		#@cuprintln(sum(Epot₀)-sum(Epot_tmp))
         f_noise = noise2D(Npart)
+		#@cuprintln(sum(dot.(v₀,v₀)))
         update_parts_LD!(r₀, v₀, f₀, f_noise, c₁₀, c₂₀, c₃₀,a²)
+		#@cuprintln(sum(dot.(v₀,v₀)))
 		entropy_prod!(S₀, Epot₀,Epot_tmp,v₀,v_tmp,c₂₀,α₀,a²)
+		#@cuprintln(sum(S₀))
 		PBC!(r₀,periodicity)
+		#@cuprintln(sum(dot.(v_tmp,v_tmp) .- dot.(v₀,v₀)))
     end
-	#@cuprintln(sum(S₀))
 	S₀ .= S₀./freq
-	#@cuprintln(sum(S₀))
     return nothing
 end
 

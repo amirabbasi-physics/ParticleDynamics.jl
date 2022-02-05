@@ -26,8 +26,8 @@ function Langevin!(r::CuDeviceVector{SVector{N,T}}, v::CuDeviceVector{SVector{N,
              c1  = c1s[gtid]
              c2  = c2s[gtid]
              c3  = c3s[gtid]
-             pos = pos .+ (c2/a²) .* vel
-             vel = c1 .* vel .+ c2 .* frc .+ c3 .* rnd
+             pos = pos .+ c2 .* vel
+             vel = c1 .* vel .+ (a²*c2) .* frc .+ (a²*c3) .* rnd
          end
          sync_threads()
          if gtid <= Npart

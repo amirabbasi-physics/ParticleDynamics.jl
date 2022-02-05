@@ -23,8 +23,8 @@ function entropy_kernel!(S₀::CuDeviceVector{T},Epot₀::CuDeviceVector{T},Epot
             c2  = c2s[gtid]
             α  = αs[gtid]
             sdt = S₀[gtid]
-            ent = 100.0f0+(1.0f0/(2.0f0*a²))*(dot(vel,vel) - dot(vel_tmp,vel_tmp)) + (epot-epot_tmp)
-            sdt = ent
+            ent = ((1.0f0/(2.0f0*a²))*(dot(vel,vel) - dot(vel_tmp,vel_tmp)) + (epot-epot_tmp))/α
+            sdt += ent
         end
         sync_threads()
 
