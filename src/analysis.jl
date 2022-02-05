@@ -23,9 +23,9 @@ function entropy_kernel!(S₀::CuDeviceVector{T},Epot₀::CuDeviceVector{T},Epot
             c2  = c2s[gtid]
             α  = αs[gtid]
             sdt = S₀[gtid]
-            ent = ((1.0f0/(2.0f0*a²))*(dot(vel,vel) - dot(vel_tmp,vel_tmp)) + (epot-epot_tmp))/α
-            sdt += ent
+            sdt += ((0.50f0/a²)*(dot(vel,vel) - dot(vel_tmp,vel_tmp))+(epot - epot_tmp))/(α*c2)
         end
+
         sync_threads()
 
         if gtid <= Npart
