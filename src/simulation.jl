@@ -36,7 +36,7 @@ function run_simulation!(dim::Int, Npart::Int, freq::Int, r₀::CuVector{SVector
 		PBC!(r₀,periodicity)
 		#@cuprintln(sum(dot.(v_tmp,v_tmp) .- dot.(v₀,v₀)))
     end
-	#S₀ .= S₀./freq
+	S₀ .= S₀./freq
     return S₀
 end
 
