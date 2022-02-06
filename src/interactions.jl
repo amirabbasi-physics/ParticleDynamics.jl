@@ -11,7 +11,7 @@ export harm_rep
 @inline function harm_rep(dx::T, dy::T, dist::T, k::T, σ::T) where T
     inv_dist = 1.0f0/dist
     f_int = k*(σ*inv_dist - 1.0f0)
-    e_int = (k/2.0f0)*(σ*inv_dist - 1.0f0)^2.0f0
+    e_int = (1.0f0/2.0f0)*(k/2.0f0)*(σ*inv_dist - 1.0f0)^2.0f0
     f_x = f_int*dx
     f_y = f_int*dy
     return SVector{2,T}(f_x,f_y) , f_int

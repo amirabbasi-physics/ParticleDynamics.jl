@@ -33,13 +33,13 @@ function write_xyz(ofname::String, Npart::Int, σ::T, L::T, step::Int, dim::Int,
 end
 
 
-function write_log(ofname::String, Npart::Int, step::Int, Sdot1::Vector{T}, Sdot2::Vector{T}) where T
+function write_log(ofname::String, Npart::Int, step::Int, Ekin0::Vector{T}, Epot0::Vector{T}, α::Vector{T}) where T
     out_file = ofname*".log"
-    data = hcat(step,sum(Sdot1)/Npart, sum(Sdot2)/Npart)
+    data = hcat(step, sum(Ekin0)/Npart, sum(Epot0)/Npart, (sum(Ekin0 ./α )+sum(Epot0 ./ α))/Npart)
     if step == 0
        open(out_file,"w") do file
-            println(file,"Time step       EPR_1      EPR_2")
-            writedlm(file,data)
+            println(file,"Time step     Kinetic_energy      Potential_energy     Total_energy_rescaled")
+            #writedlm(file,data)
         end
     else
         open(out_file,"a+") do file
