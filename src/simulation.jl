@@ -17,13 +17,11 @@ end
 
 
 function run_simulation!(dim::Int, Npart::Int, freq::Int, r₀::CuVector{SVector{N,T}},
-	v₀::CuVector{SVector{N,T}},f₀::CuVector{SVector{N,T}}, Ekin₀::CuVector{T}, Epot₀::CuVector{T}, c₁₀::CuVector{T}, c₂₀::CuVector{T}, c₃₀::CuVector{T},
+	v₀::CuVector{SVector{N,T}},f₀::CuVector{SVector{N,T}}, c₁₀::CuVector{T}, c₂₀::CuVector{T}, c₃₀::CuVector{T},
 	α₀::CuVector{T}, a²::T, cut_off::T, periodicity::SVector{N,T},forces_fun::Function,
 	update_parts_LD!::Function, noise2D::Function) where {N,T}
-	Epot₀₁ = deepcopy(zero(Epot₀))
-	Ekin₀₁ = deepcopy(zero(Ekin₀))
     for _ in 1:freq
-        forces_fun!(r₀,f₀,Epot₀₁,periodicity,cut_off)
+        forces_fun!(r₀,f₀,periodicity,cut_off)
         f_noise = noise2D(Npart)
         update_parts_LD!(r₀, v₀, f₀, f_noise, c₁₀, c₂₀, c₃₀,a²)
 		#kinetic!(Ekin₀₁,v₀,a²)
@@ -33,7 +31,7 @@ function run_simulation!(dim::Int, Npart::Int, freq::Int, r₀::CuVector{SVector
 end
 
 
-
+"""
 function run_simulation!(dim::Int, Npart::Int, freq::Int, r₀::CuVector{SVector{N,T}},
 	v₀::CuVector{SVector{N,T}},S₀::CuVector{T}, c₁₀::CuVector{T}, c₂₀::CuVector{T},
 	α₀::CuVector{T},cut_off::T, periodicity::SVector{N,T},forces_fun::Function,
@@ -50,3 +48,4 @@ function run_simulation!(dim::Int, Npart::Int, freq::Int, r₀::CuVector{SVector
     end
     return nothing
 end
+"""

@@ -1,9 +1,9 @@
 export forces_fun!
 
-function forces_fun!(r::CuVector{SVector{N,T}}, f₀::CuVector{SVector{N,T}},Epot₀::CuVector{T},periodicity::SVector{N,T}, cut_off::T; nthreads=128) where {N,T}
+function forces_fun!(r::CuVector{SVector{N,T}}, f₀::CuVector{SVector{N,T}},periodicity::SVector{N,T}, cut_off::T; nthreads=128) where {N,T}
     Npart = length(r)
     nblocks = Npart ÷ nthreads
-    CUDA.@sync @cuda blocks=nblocks threads=nthreads calculate_forces!(r, f₀, Epot₀, cut_off, periodicity)
+    CUDA.@sync @cuda blocks=nblocks threads=nthreads calculate_forces!(r, f₀, cut_off, periodicity)
     return nothing
 end
 export harm_rep
@@ -19,7 +19,7 @@ end
 
 export calculate_forces!
 
-function calculate_forces!(r::CuDeviceVector{T}, f::CuDeviceVector{T}, e::CuDeviceVector{Float32},
+function calculate_forces!(r::CuDeviceVector{T}, f::CuDeviceVector{T},
      cut_off::Float32, periodicity::T) where T
     Npart = length(r)
     gtid = (blockIdx().x - 1) * blockDim().x + threadIdx().x  # global thread id
@@ -52,6 +52,5 @@ function calculate_forces!(r::CuDeviceVector{T}, f::CuDeviceVector{T}, e::CuDevi
         tile += 1
     end
     f[gtid] = acc
-    e[gtid] = epot
     return nothing
 end
