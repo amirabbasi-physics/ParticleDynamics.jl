@@ -26,12 +26,10 @@ function run_simulation!(dim::Int, Npart::Int, freq::Int, r₀::CuVector{SVector
         forces_fun!(r₀,f₀,Epot₀₁,periodicity,cut_off)
         f_noise = noise2D(Npart)
         update_parts_LD!(r₀, v₀, f₀, f_noise, c₁₀, c₂₀, c₃₀,a²)
-		kinetic!(Ekin₀₁,v₀,a²)
+		#kinetic!(Ekin₀₁,v₀,a²)
 		PBC!(r₀,periodicity)
     end
-	Epot₀₁ .= Epot₀₁ ./ freq
-	Ekin₀₁ .= Ekin₀₁ ./ freq
-    return Ekin₀₁, Epot₀₁
+    return nothing
 end
 
 
