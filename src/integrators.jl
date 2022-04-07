@@ -23,10 +23,10 @@ function Langevin!(r::CuDeviceVector{SVector{N,T}}, v::CuDeviceVector{SVector{N,
              vel = v[gtid]
              frc = f[gtid]
              rnd = noise[gtid]
-             rnd = (a²*c3) * rnd
              c1  = c1s[gtid]
              c2  = c2s[gtid]
              c3  = c3s[gtid]
+             rnd = (a²*c3) * rnd
              pos = pos .+ c2 .* vel
              vel = c1 .* vel .+ (a²*c2) .* frc .+ rnd
          end
