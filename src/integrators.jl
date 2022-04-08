@@ -3,16 +3,16 @@ export update_parts_BD!
 
 
 function update_parts_LD!(r::CuVector{SVector{N,T}}, v::CuVector{SVector{N,T}}, f::CuVector{SVector{N,T}},
-    noise::CuVector{SVector{N,T}},c1s::CuVector{T},c2s::CuVector{T},c3s::CuVector{T},a²::T; nthreads=128) where {N,T}
+    fR::CuVector{SVector{N,T}},sdot::CuVector{T},c1s::CuVector{T},c2s::CuVector{T},c3s::CuVector{T},a²::T; nthreads=128) where {N,T}
     Npart = UInt32(length(r))
-    CUDA.@sync @cuda blocks=ceil(Int, Npart/nthreads) threads=nthreads Langevin!(r, v, f, noise, c1s, c2s, c3s, a²)
-    return nothing
+    CUDA.@sync @cuda blocks=ceil(Int, Npart/nthreads) threads=nthreads Langevin!(r, v, f, fR,sdot, c1s, c2s, c3s, a²)
+    return r, v, fR, sdot
 end
 
 export Langevin!
 
 function Langevin!(r::CuDeviceVector{SVector{N,T}}, v::CuDeviceVector{SVector{N,T}}, f::CuDeviceVector{SVector{N,T}},
-     noise::CuDeviceVector{SVector{N,T}},c1s::CuDeviceVector{T}, c2s::CuDeviceVector{T}, c3s::CuDeviceVector{T},a²::T) where {N,T}
+     noise::CuDeviceVector{SVector{N,T}},entropy::CuDeviceVector{T}, c1s::CuDeviceVector{T}, c2s::CuDeviceVector{T}, c3s::CuDeviceVector{T},a²::T) where {N,T}
      Npart = length(r)
      tid = threadIdx().x
      gtid = (blockIdx().x - 1) * blockDim().x + tid  # global thread id
@@ -26,16 +26,20 @@ function Langevin!(r::CuDeviceVector{SVector{N,T}}, v::CuDeviceVector{SVector{N,
              c1  = c1s[gtid]
              c2  = c2s[gtid]
              c3  = c3s[gtid]
+             ent = entropy[gtid]
              vel_tmp = vel
              rnd_force = (a²*c3) * rnd
              pos = pos .+ c2 .* vel_tmp
-             vel = c1 .* vel_tmp .+ (a²*c2) .* frc .+ c2*rnd_force
-             entropy = -a²*vel_tmp*vel_tmp + 0.5*(vel+vel_tmp)*rnd_force
+             vel = c1 .* vel_tmp .+ (a²*c2) .* frc .+ c2 .*rnd_force
+             v_mean = 0.5 .* (vel+vel_tmp)
+             ent = -dot(vel_tmp,vel_tmp) .+ 0.5 .* dot(v_mean,rnd_force)
          end
          sync_threads()
          if gtid <= Npart
              r[gtid] = pos
              v[gtid] = vel
+             noise[gtid] = rnd_force
+             entropy[gtid] = ent
          end
         sync_threads()
      end
