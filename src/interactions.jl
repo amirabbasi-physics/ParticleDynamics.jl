@@ -44,7 +44,7 @@ function calculate_forces!(r::CuDeviceVector{T}, f::CuDeviceVector{T},
             dr² = dx*dx + dy*dy
             dist  = sqrt(dr²)
             if 0.0f0 < dist < cut_off
-                k = Float32(1.0e8)
+                k = Float32(1.0e10)
                 acc, epot = harm_rep(dx,dy,dist, k, cut_off)
             end
         end
