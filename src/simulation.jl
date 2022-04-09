@@ -1,5 +1,6 @@
 export hr_min_sec
-export run_simulation!
+export run_simulation2D!
+export run_simulation3D!
 export Force
 export kinetic
 
@@ -16,13 +17,14 @@ export kinetic
 end
 
 
-function run_simulation!(dim::Int, Npart::Int, freq::Int, r₀::CuVector{SVector{N,T}},
+function run_simulation2D!(dim::Int, Npart::Int, freq::Int, r₀::CuVector{SVector{N,T}},
 	v₀::CuVector{SVector{N,T}},f₀::CuVector{SVector{N,T}},fR₀::CuVector{SVector{N,T}}, Sdot₀::CuVector{T}, c₁₀::CuVector{T}, c₂₀::CuVector{T}, c₃₀::CuVector{T},
 	α₀::CuVector{T}, a²::T, cut_off::T, periodicity::SVector{N,T},forces_fun::Function,
 	update_parts_LD!::Function, noise2D::Function) where {N,T}
 	Sdot₀ = zero(Sdot₀)
     for _ in 1:freq
-        forces_fun!(r₀,f₀,periodicity,cut_off)
+		f₀ = zero(f₀)
+        f₀ = forces_fun!(r₀,f₀,periodicity,cut_off)
         fR₀ = noise2D(Npart)
         update_parts_LD!(r₀, v₀, f₀, fR₀, Sdot₀, c₁₀, c₂₀, c₃₀,a²)
 		#kinetic!(Ekin₀₁,v₀,a²)
@@ -32,7 +34,22 @@ function run_simulation!(dim::Int, Npart::Int, freq::Int, r₀::CuVector{SVector
     return r₀, v₀, f₀, Sdot₀
 end
 
-
+function run_simulation3D!(dim::Int, Npart::Int, freq::Int, r₀::CuVector{SVector{N,T}},
+	v₀::CuVector{SVector{N,T}},f₀::CuVector{SVector{N,T}},fR₀::CuVector{SVector{N,T}}, Sdot₀::CuVector{T}, c₁₀::CuVector{T}, c₂₀::CuVector{T}, c₃₀::CuVector{T},
+	α₀::CuVector{T}, a²::T, cut_off::T, periodicity::SVector{N,T},forces_fun::Function,
+	update_parts_LD!::Function, noise3D::Function) where {N,T}
+	Sdot₀ = zero(Sdot₀)
+    for _ in 1:freq
+		f₀ = zero(f₀)
+        f₀ = forces_fun!(r₀,f₀,periodicity,cut_off)
+        fR₀ = noise3D(Npart)
+        update_parts_LD!(r₀, v₀, f₀, fR₀, Sdot₀, c₁₀, c₂₀, c₃₀,a²)
+		#kinetic!(Ekin₀₁,v₀,a²)
+		PBC!(r₀,periodicity)
+    end
+	Sdot₀ = Sdot₀ ./freq
+    return r₀, v₀, f₀, Sdot₀
+end
 """
 function run_simulation!(dim::Int, Npart::Int, freq::Int, r₀::CuVector{SVector{N,T}},
 	v₀::CuVector{SVector{N,T}},S₀::CuVector{T}, c₁₀::CuVector{T}, c₂₀::CuVector{T},
