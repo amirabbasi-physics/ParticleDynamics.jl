@@ -27,12 +27,17 @@ function Langevin!(r::CuDeviceVector{SVector{N,T}}, v::CuDeviceVector{SVector{N,
              c2  = c2s[gtid]
              c3  = c3s[gtid]
              ent = entropy[gtid]
-             vel_tmp = vel
-             rnd_force = (a²*c3) * rnd
-             pos = pos .+ c2 .* vel_tmp
-             vel = c1 .* vel_tmp .+ (a²*c2) .* frc .+ c2 .*rnd_force
-             v_mean = 0.5 .* (vel+vel_tmp)
-             ent = -dot(vel_tmp,vel_tmp) .+ 0.5 .* dot(v_mean,rnd_force)
+
+             rnd_force = c3 * rnd
+             vel_prev = vel
+
+             vel_tmp = vel_prev .- (a²*c2) .* vel_prev + (a²*c2) .* rnd_force
+             d_vel =  - (0.5*a²*c2) .* (vel_prev .+ vel_tmp) + (a²*c2) .* rnd_force
+             vel = vel_prev + d_vel
+             pos = pos .+ c2 .* vel
+
+             ent = - c2 .* dot(vel_prev,vel_prev) .+ 0.5 * dot((2 .* vel_prev .+ d_vel), c2 .* rnd_force)
+
          end
          sync_threads()
          if gtid <= Npart
