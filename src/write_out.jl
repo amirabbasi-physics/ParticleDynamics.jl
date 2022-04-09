@@ -14,7 +14,7 @@ function write_xyz(ofname::String, Npart::Int, σ::T, L::T, step::Int, dim::Int,
                 println(file,"""Lattice="$L $L 1.0 0.0 0.0 0.0 0.0 0.0 0.0" Properties="Particle Type:S:1:Radius:R:1:Position:R:2:Velocity:R:2:Force:R:2:Entropy:R:1" """)
                 writedlm(file,snapshot)
             elseif dim == 3
-                println(file,"""Lattice="$L $L 1.0 0.0 0.0 0.0 0.0 0.0 0.0" Properties="Particle Type:S:1:Radius:R:1:Position:R:3:Velocity:R:3:Force:R:3:Entropy:R:1" """)
+                println(file,"""Lattice="$L $L $L 0.0 0.0 0.0 0.0 0.0 0.0" Properties="Particle Type:S:1:Radius:R:1:Position:R:3:Velocity:R:3:Force:R:3:Entropy:R:1" """)
                 writedlm(file,snapshot)
             end
         end
@@ -25,7 +25,7 @@ function write_xyz(ofname::String, Npart::Int, σ::T, L::T, step::Int, dim::Int,
                 println(file,"""Lattice="$L $L 1.0 0.0 0.0 0.0 0.0 0.0 0.0" Properties="Particle Type:S:1:Radius:R:1:Position:R:2:Velocity:R:2:Force:R:2:Entropy:R:1" """)
                 writedlm(file,snapshot)
             elseif dim == 3
-                println(file,"""Lattice="$L $L 1.0 0.0 0.0 0.0 0.0 0.0 0.0" Properties="Particle Type:S:1:Radius:R:1:Position:R:3:Velocity:R:3:Force:R:3:Entropy:R:1" """)
+                println(file,"""Lattice="$L $L $L 0.0 0.0 0.0 0.0 0.0 0.0" Properties="Particle Type:S:1:Radius:R:1:Position:R:3:Velocity:R:3:Force:R:3:Entropy:R:1" """)
                 writedlm(file,snapshot)
             end
         end

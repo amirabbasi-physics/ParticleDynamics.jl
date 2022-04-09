@@ -26,17 +26,20 @@ function Langevin!(r::CuDeviceVector{SVector{N,T}}, v::CuDeviceVector{SVector{N,
              c1  = c1s[gtid]
              c2  = c2s[gtid]
              c3  = c3s[gtid]
-             ent = entropy[gtid]
+             dQ = entropy[gtid]
 
              rnd_force = c3 * rnd
              vel_prev = vel
 
-             vel_tmp = vel_prev .- (a²*c2) .* vel_prev + (a²*c2) .* rnd_force
+             #Euler-Heaun Method
+             vel_tmp = vel_prev .- (a²*c2) .* vel_prev - (a²*c2) .* frc + (a²*c2) .* rnd_force
              d_vel =  - (0.5*a²*c2) .* (vel_prev .+ vel_tmp) + (a²*c2) .* rnd_force
              vel = vel_prev + d_vel
              pos = pos .+ c2 .* vel
 
-             ent = - c2 .* dot(vel_prev,vel_prev) .+ 0.5 * dot((2 .* vel_prev .+ d_vel), c2 .* rnd_force)
+             # Euler-Maruyama method
+
+             dQ = - c2 .* dot(vel_prev,vel_prev) .+ 0.5 * dot((2 .* vel_prev .+ d_vel), c2 .* rnd_force)
 
          end
          sync_threads()
@@ -44,7 +47,7 @@ function Langevin!(r::CuDeviceVector{SVector{N,T}}, v::CuDeviceVector{SVector{N,
              r[gtid] = pos
              v[gtid] = vel
              noise[gtid] = rnd_force
-             entropy[gtid] = ent
+             entropy[gtid] = dQ
          end
         sync_threads()
      end
