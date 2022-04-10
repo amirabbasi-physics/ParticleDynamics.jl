@@ -3,16 +3,16 @@ export update_parts_BD!
 
 
 function update_parts_LD!(r::CuVector{SVector{N,T}}, v::CuVector{SVector{N,T}}, f::CuVector{SVector{N,T}},
-    fR::CuVector{SVector{N,T}},sdot::CuVector{T},c1s::CuVector{T},c2s::CuVector{T},c3s::CuVector{T},a²::T; nthreads=128) where {N,T}
+    fR::CuVector{SVector{N,T}},dq::CuVector{T},eₖ::CuVector{T},c1s::CuVector{T},c2s::CuVector{T},c3s::CuVector{T},a²::T; nthreads=128) where {N,T}
     Npart = UInt32(length(r))
-    CUDA.@sync @cuda blocks=ceil(Int, Npart/nthreads) threads=nthreads Langevin!(r, v, f, fR,sdot, c1s, c2s, c3s, a²)
-    return r, v, fR, sdot
+    CUDA.@sync @cuda blocks=ceil(Int, Npart/nthreads) threads=nthreads Langevin!(r, v, f, fR, dq, eₖ, c1s, c2s, c3s, a²)
+    return nothing
 end
 
 export Langevin!
 
 function Langevin!(r::CuDeviceVector{SVector{N,T}}, v::CuDeviceVector{SVector{N,T}}, f::CuDeviceVector{SVector{N,T}},
-     noise::CuDeviceVector{SVector{N,T}},entropy::CuDeviceVector{T}, c1s::CuDeviceVector{T}, c2s::CuDeviceVector{T}, c3s::CuDeviceVector{T},a²::T) where {N,T}
+     noise::CuDeviceVector{SVector{N,T}},dq::CuDeviceVector{T},eₖ::CuDeviceVector{T}, c1s::CuDeviceVector{T}, c2s::CuDeviceVector{T}, c3s::CuDeviceVector{T},a²::T) where {N,T}
      Npart = length(r)
      tid = threadIdx().x
      gtid = (blockIdx().x - 1) * blockDim().x + tid  # global thread id
@@ -26,7 +26,8 @@ function Langevin!(r::CuDeviceVector{SVector{N,T}}, v::CuDeviceVector{SVector{N,
              c1  = c1s[gtid]
              c2  = c2s[gtid]
              c3  = c3s[gtid]
-             dQ = entropy[gtid]
+             dQ  = dq[gtid]
+             Eₖ   = eₖ[gtid]
 
              rnd_force = c3 * rnd
              vel_prev = vel
@@ -43,14 +44,15 @@ function Langevin!(r::CuDeviceVector{SVector{N,T}}, v::CuDeviceVector{SVector{N,
              pos = pos .+ c2 .* vel
 
              dQ = - c2 .* dot(vel_prev,vel_prev) .+ 0.5 * dot((2 .* vel_prev .+ d_vel), c2 .* rnd_force)
-
+             Eₖ = dot(vel,vel)
          end
          sync_threads()
          if gtid <= Npart
              r[gtid] = pos
              v[gtid] = vel
              noise[gtid] = rnd_force
-             entropy[gtid] = dQ
+             dq[gtid] = dQ
+             eₖ[gtid] = Eₖ
          end
         sync_threads()
      end
