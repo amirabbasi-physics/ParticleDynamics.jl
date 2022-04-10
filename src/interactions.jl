@@ -1,11 +1,13 @@
 export forces_fun!
 
-function forces_fun!(r::CuVector{SVector{N,T}}, f₀::CuVector{SVector{N,T}},periodicity::SVector{N,T}, cut_off::T; nthreads=128) where {N,T}
+function forces_fun!(r::CuVector{SVector{N,T}}, f₀::CuVector{SVector{N,T}}, Eₚ₀::CuVector{T},periodicity::SVector{N,T}, cut_off::T;
+     nthreads=128) where {N,T}
     Npart = length(r)
     nblocks = Npart ÷ nthreads
-    CUDA.@sync @cuda blocks=nblocks threads=nthreads calculate_forces!(r, f₀, cut_off, periodicity)
+    CUDA.@sync @cuda blocks=nblocks threads=nthreads calculate_forces!(r, f₀, Eₚ₀, cut_off, periodicity)
     return f₀
 end
+
 export harm_rep2D
 export harm_rep3D
 
@@ -31,7 +33,7 @@ end
 
 export calculate_forces!
 
-function calculate_forces!(r::CuDeviceVector{T}, f::CuDeviceVector{T},
+function calculate_forces!(r::CuDeviceVector{T}, f::CuDeviceVector{T},Eₚ₀::CuDeviceVector{Float32},
      cut_off::Float32, periodicity::T;k=Float32(1.0e7)) where T
     Npart = length(r)
     gtid = (blockIdx().x - 1) * blockDim().x + threadIdx().x  # global thread id
@@ -57,13 +59,16 @@ function calculate_forces!(r::CuDeviceVector{T}, f::CuDeviceVector{T},
                 dr² = dx*dx + dy*dy
                 dist  = sqrt(dr²)
                 if 0.0f0 < dist < cut_off
-                    acc, epot = harm_rep2D(dx,dy,dist, k, cut_off)
+                    frc, ep = harm_rep2D(dx,dy,dist, k, cut_off)
+                    acc = acc .+ frc
+                    epot = epot + ep
                 end
             end
             sync_threads()
             tile += 1
         end
         f[gtid] = acc
+        Eₚ₀[gtid] = epot
         return nothing
     elseif dim == 3
         for i in 1:blockDim().x:Npart
@@ -81,13 +86,16 @@ function calculate_forces!(r::CuDeviceVector{T}, f::CuDeviceVector{T},
                 dr² = dx*dx + dy*dy + dz*dz
                 dist  = sqrt(dr²)
                 if 0.0f0 < dist < cut_off
-                    acc, epot = harm_rep3D(dx,dy,dz,dist, k, cut_off)
+                    frc, ep = harm_rep3D(dx,dy,dz,dist, k, cut_off)
+                    acc = acc .+ frc
+                    epot = epot + ep
                 end
             end
             sync_threads()
             tile += 1
         end
         f[gtid] = acc
+        Eₚ₀[gtid] = epot
         return nothing
     end
 end
