@@ -15,7 +15,7 @@ export harm_rep3D
     e_int = (1.0f0/2.0f0)*(k/2.0f0)*(σ*inv_dist - 1.0f0)^2.0f0
     f_x = f_int*dx
     f_y = f_int*dy
-    return SVector{2,T}(f_x,f_y) , f_int
+    return SVector{2,T}(f_x,f_y) , e_int
 end
 
 @inline function harm_rep3D(dx::T, dy::T, dz::T, dist::T, k::T, σ::T) where T
@@ -25,7 +25,7 @@ end
     f_x = f_int*dx
     f_y = f_int*dy
     f_z = f_int*dz
-    return SVector{3,T}(f_x,f_y,f_z) , f_int
+    return SVector{3,T}(f_x,f_y,f_z) , e_int
 end
 
 
@@ -57,7 +57,7 @@ function calculate_forces!(r::CuDeviceVector{T}, f::CuDeviceVector{T},
                 dr² = dx*dx + dy*dy
                 dist  = sqrt(dr²)
                 if 0.0f0 < dist < cut_off
-                    k = Float32(1.0e10)
+                    k = Float32(1.0e9)
                     acc, epot = harm_rep2D(dx,dy,dist, k, cut_off)
                 end
             end
@@ -82,7 +82,7 @@ function calculate_forces!(r::CuDeviceVector{T}, f::CuDeviceVector{T},
                 dr² = dx*dx + dy*dy + dz*dz
                 dist  = sqrt(dr²)
                 if 0.0f0 < dist < cut_off
-                    k = Float32(1.0e10)
+                    k = Float32(1.0e9)
                     acc, epot = harm_rep3D(dx,dy,dz,dist, k, cut_off)
                 end
             end

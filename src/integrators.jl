@@ -32,12 +32,15 @@ function Langevin!(r::CuDeviceVector{SVector{N,T}}, v::CuDeviceVector{SVector{N,
              vel_prev = vel
 
              #Euler-Heaun Method
-             vel_tmp = vel_prev .- (a²*c2) .* vel_prev - (a²*c2) .* frc + (a²*c2) .* rnd_force
-             d_vel =  - (0.5*a²*c2) .* (vel_prev .+ vel_tmp) + (a²*c2) .* rnd_force
-             vel = vel_prev + d_vel
-             pos = pos .+ c2 .* vel
+             #vel_tmp = vel_prev .- (a²*c2) .* vel_prev - (a²*c2) .* frc + (a²*c2) .* rnd_force
+             #d_vel =  - (0.5*a²*c2) .* (vel_prev .+ vel_tmp) + (a²*c2) .* rnd_force
+             #vel = vel_prev + d_vel
+             #pos = pos .+ c2 .* vel
 
              # Euler-Maruyama method
+             vel = c1 .* vel_prev + (a²*c2) .* frc + (a²*c2) .* rnd_force
+             d_vel =  vel .- vel_prev
+             pos = pos .+ c2 .* vel
 
              dQ = - c2 .* dot(vel_prev,vel_prev) .+ 0.5 * dot((2 .* vel_prev .+ d_vel), c2 .* rnd_force)
 
