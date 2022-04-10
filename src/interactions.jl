@@ -32,7 +32,7 @@ end
 export calculate_forces!
 
 function calculate_forces!(r::CuDeviceVector{T}, f::CuDeviceVector{T},
-     cut_off::Float32, periodicity::T) where T
+     cut_off::Float32, periodicity::T;k=Float32(1.0e7)) where T
     Npart = length(r)
     gtid = (blockIdx().x - 1) * blockDim().x + threadIdx().x  # global thread id
 
@@ -57,7 +57,6 @@ function calculate_forces!(r::CuDeviceVector{T}, f::CuDeviceVector{T},
                 dr² = dx*dx + dy*dy
                 dist  = sqrt(dr²)
                 if 0.0f0 < dist < cut_off
-                    k = Float32(1.0e9)
                     acc, epot = harm_rep2D(dx,dy,dist, k, cut_off)
                 end
             end
@@ -82,7 +81,6 @@ function calculate_forces!(r::CuDeviceVector{T}, f::CuDeviceVector{T},
                 dr² = dx*dx + dy*dy + dz*dz
                 dist  = sqrt(dr²)
                 if 0.0f0 < dist < cut_off
-                    k = Float32(1.0e9)
                     acc, epot = harm_rep3D(dx,dy,dz,dist, k, cut_off)
                 end
             end
