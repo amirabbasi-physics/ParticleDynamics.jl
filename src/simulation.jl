@@ -18,9 +18,9 @@ end
 
 
 function run_simulation2D!(dim::Int, Npart::Int, freq::Int, r₀::CuVector{SVector{N,T}},
-	v₀::CuVector{SVector{N,T}},f₀::CuVector{SVector{N,T}},fR₀::CuVector{SVector{N,T}}, dQ₀::CuVector{T}, c₁₀::CuVector{T}, c₂₀::CuVector{T}, c₃₀::CuVector{T},
-	α₀::CuVector{T}, a²::T, cut_off::T, periodicity::SVector{N,T},forces_fun::Function,
-	update_parts_LD!::Function, noise2D::Function) where {N,T}
+	v₀::CuVector{SVector{N,T}},f₀::CuVector{SVector{N,T}},fR₀::CuVector{SVector{N,T}}, dQ₀::CuVector{T}, Eₖ₀::CuVector{T},
+	Eₚ₀::CuVector{T}, c₁₀::CuVector{T}, c₂₀::CuVector{T}, c₃₀::CuVector{T},α₀::CuVector{T}, a²::T, cut_off::T,
+	periodicity::SVector{N,T},forces_fun::Function,	update_parts_LD!::Function, noise2D::Function) where {N,T}
 	dQ₀ = zero(dQ₀)
 	Eₖ₀ = zero(Eₖ₀)
 	Eₚ₀ = zero(Eₚ₀)
