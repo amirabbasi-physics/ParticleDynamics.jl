@@ -6,7 +6,7 @@ export write_log
 function write_xyz(ofname::String, Npart::Int, σ::T, L::T, step::Int, dim::Int, part_type::Vector{String},r::Vector{SVector{N,T}},
     v::Vector{SVector{N,T}}, f::Vector{SVector{N,T}}) where {N,T}
     out_file = ofname*".xyz"
-    snapshot = [vcat(part_type[i],σ/2,r[i],v[i],f[i]) for i in 1:Npart]
+    snapshot = [vcat(part_type[i],σ/2,r[i],v[i],f[i]) for i = 1:Npart]
     if step == 0
        open(out_file,"w") do file
             println(file,Npart)
@@ -42,7 +42,7 @@ function write_log(ofname::String, Npart::Int, step::Int, c2::T, τD::T, τm::T,
     data = hcat(step, Ekin, Epot, sdot)
     if step == 0
        open(out_file,"w") do file
-            println(file,"Time step     Kinetic_energy      Potential_energy     Entropy production rate")
+            println(file,"Time  E_kin  E_pot  EPR")
             #writedlm(file,data)
         end
     else
