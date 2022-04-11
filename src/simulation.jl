@@ -22,16 +22,19 @@ function run_simulation2D!(dim::Int, Npart::Int, freq::Int, r₀::CuVector{SVect
 	α₀::CuVector{T}, a²::T, cut_off::T, periodicity::SVector{N,T},forces_fun::Function,
 	update_parts_LD!::Function, noise2D::Function) where {N,T}
 	dQ₀ = zero(dQ₀)
+	Eₖ₀ = zero(Eₖ₀)
+	Eₚ₀ = zero(Eₚ₀)
     for _ in 1:freq
 		f₀ = zero(f₀)
         f₀ = forces_fun!(r₀,f₀,periodicity,cut_off)
         fR₀ = noise2D(Npart)
-        update_parts_LD!(r₀, v₀, f₀, fR₀, dQ₀, c₁₀, c₂₀, c₃₀,a²)
-		#kinetic!(Ekin₀₁,v₀,a²)
+        update_parts_LD!(r₀, v₀, f₀, fR₀, dQ₀, Eₖ₀, c₁₀, c₂₀, c₃₀,a²)
 		PBC!(r₀,periodicity)
     end
 	dQ₀ = dQ₀ ./freq
-    return r₀, v₀, f₀, dQ₀
+	Eₖ₀ = Eₖ₀ ./freq
+	Eₚ₀ = Eₚ₀ ./freq
+    return r₀, v₀, f₀, dQ₀, Eₖ₀, Eₚ₀
 end
 
 function run_simulation3D!(dim::Int, Npart::Int, freq::Int, r₀::CuVector{SVector{N,T}},
@@ -46,7 +49,6 @@ function run_simulation3D!(dim::Int, Npart::Int, freq::Int, r₀::CuVector{SVect
         f₀ = forces_fun!(r₀,f₀,Eₚ₀,periodicity,cut_off)
         fR₀ = noise3D(Npart)
         update_parts_LD!(r₀, v₀, f₀, fR₀, dQ₀, Eₖ₀, c₁₀, c₂₀, c₃₀,a²)
-		#kinetic!(Ekin₀₁,v₀,a²)
 		PBC!(r₀,periodicity)
     end
 	dQ₀ = dQ₀ ./freq
