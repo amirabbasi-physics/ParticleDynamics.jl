@@ -30,10 +30,11 @@ function run_simulation2D!(dim::Int, Npart::Int, freq::Int, r₀::CuVector{SVect
         fR₀ = noise2D(Npart)
         update_parts_LD!(r₀, v₀, f₀, fR₀, dQ₀, Eₖ₀, c₁₀, c₂₀, c₃₀,a²)
 		PBC!(r₀,periodicity)
+		dQ₀ = dQ₀ .+ dQ₀ ./freq
+		Eₖ₀ = Eₖ₀ .+ Eₖ₀ ./freq
+		Eₚ₀ = Eₚ₀ .+ Eₚ₀ ./freq
     end
-	dQ₀ = dQ₀ ./freq
-	Eₖ₀ = Eₖ₀ ./freq
-	Eₚ₀ = Eₚ₀ ./freq
+
     return r₀, v₀, f₀, dQ₀, Eₖ₀, Eₚ₀
 end
 
@@ -50,10 +51,10 @@ function run_simulation3D!(dim::Int, Npart::Int, freq::Int, r₀::CuVector{SVect
         fR₀ = noise3D(Npart)
         update_parts_LD!(r₀, v₀, f₀, fR₀, dQ₀, Eₖ₀, c₁₀, c₂₀, c₃₀,a²)
 		PBC!(r₀,periodicity)
+		dQ₀ = dQ₀ .+ dQ₀ ./freq
+		Eₖ₀ = Eₖ₀ .+ Eₖ₀ ./freq
+		Eₚ₀ = Eₚ₀ .+ Eₚ₀ ./freq
     end
-	dQ₀ = dQ₀ ./freq
-	Eₖ₀ = Eₖ₀ ./freq
-	Eₚ₀ = Eₚ₀ ./freq
     return r₀, v₀, f₀, dQ₀, Eₖ₀, Eₚ₀
 end
 """
