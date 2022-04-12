@@ -47,7 +47,7 @@ function write_log(ofname::String, Npart::Int, step::Int, c2::T, τD::T, τm::T,
         end
     else
         open(out_file,"a+") do file
-            println("Time = ",data[1], "E_kin = ", data[2], "E_pot = " ,data[3], "EPR = ", data[4])
+            println("Time = ",data[1], " | E_kin = ", data[2], " | E_pot = " ,data[3], " | EPR = ", data[4])
             writedlm(file,data)
         end
     end
