@@ -30,7 +30,6 @@ end
     return SVector{3,T}(f_x,f_y,f_z) , e_int
 end
 
-
 export forces_kernel!
 
 function forces_kernel!(r::CuDeviceVector{T}, f::CuDeviceVector{T},Eₚ₀::CuDeviceVector{Float32},
