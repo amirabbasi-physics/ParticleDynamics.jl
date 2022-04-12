@@ -1,10 +1,10 @@
-export forces_fun!
+export forces!
 
-function forces_fun!(r::CuVector{SVector{N,T}}, f₀::CuVector{SVector{N,T}}, Eₚ₀::CuVector{T},periodicity::SVector{N,T}, cut_off::T;
+function forces!(r::CuVector{SVector{N,T}}, f₀::CuVector{SVector{N,T}}, Eₚ₀::CuVector{T},periodicity::SVector{N,T}, cut_off::T, k::T;
      nthreads=128) where {N,T}
     Npart = length(r)
     nblocks = Npart ÷ nthreads
-    CUDA.@sync @cuda blocks=nblocks threads=nthreads calculate_forces!(r, f₀, Eₚ₀, cut_off, periodicity)
+    CUDA.@sync @cuda blocks=nblocks threads=nthreads forces_kernel!(r, f₀, Eₚ₀, cut_off, periodicity, k)
     return f₀
 end
 
@@ -31,10 +31,10 @@ end
 end
 
 
-export calculate_forces!
+export forces_kernel!
 
-function calculate_forces!(r::CuDeviceVector{T}, f::CuDeviceVector{T},Eₚ₀::CuDeviceVector{Float32},
-     cut_off::Float32, periodicity::T;k=Float32(1.0e7)) where T
+function forces_kernel!(r::CuDeviceVector{T}, f::CuDeviceVector{T},Eₚ₀::CuDeviceVector{Float32},
+     cut_off::Float32, periodicity::T, k::Float32) where T
     Npart = length(r)
     gtid = (blockIdx().x - 1) * blockDim().x + threadIdx().x  # global thread id
 

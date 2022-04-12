@@ -19,14 +19,14 @@ end
 
 function run_simulation2D!(dim::Int, Npart::Int, freq::Int, r₀::CuVector{SVector{N,T}},
 	v₀::CuVector{SVector{N,T}},f₀::CuVector{SVector{N,T}},fR₀::CuVector{SVector{N,T}}, dQ₀::CuVector{T}, Eₖ₀::CuVector{T},
-	Eₚ₀::CuVector{T},c₁₀::CuVector{T}, c₂₀::CuVector{T}, c₃₀::CuVector{T},α₀::CuVector{T}, a²::T, cut_off::T,
-	periodicity::SVector{N,T},forces_fun!::Function,update_parts_LD!::Function, noise2D::Function) where {N,T}
+	Eₚ₀::CuVector{T},c₁₀::CuVector{T}, c₂₀::CuVector{T}, c₃₀::CuVector{T},α₀::CuVector{T}, a²::T, cut_off::T,k::T,
+	periodicity::SVector{N,T},forces!::Function,update_parts_LD!::Function, noise2D::Function) where {N,T}
 	dQ₀ = zero(dQ₀)
 	Eₖ₀ = zero(Eₖ₀)
 	Eₚ₀ = zero(Eₚ₀)
     for _ in 1:freq
 		f₀ = zero(f₀)
-        f₀ = forces_fun!(r₀,f₀,Eₚ₀,periodicity,cut_off)
+        f₀ = forces!(r₀,f₀,Eₚ₀,periodicity,cut_off,k)
         fR₀ = noise2D(Npart)
         update_parts_LD!(r₀, v₀, f₀, fR₀, dQ₀, Eₖ₀, c₁₀, c₂₀, c₃₀,a²)
 		PBC!(r₀,periodicity)
@@ -39,14 +39,14 @@ end
 
 function run_simulation3D!(dim::Int, Npart::Int, freq::Int, r₀::CuVector{SVector{N,T}},
 	v₀::CuVector{SVector{N,T}},f₀::CuVector{SVector{N,T}},fR₀::CuVector{SVector{N,T}}, dQ₀::CuVector{T}, Eₖ₀::CuVector{T},
-	Eₚ₀::CuVector{T},c₁₀::CuVector{T}, c₂₀::CuVector{T}, c₃₀::CuVector{T},α₀::CuVector{T}, a²::T, cut_off::T,
-	periodicity::SVector{N,T},forces_fun!::Function,update_parts_LD!::Function, noise3D::Function) where {N,T}
+	Eₚ₀::CuVector{T},c₁₀::CuVector{T}, c₂₀::CuVector{T}, c₃₀::CuVector{T},α₀::CuVector{T}, a²::T, cut_off::T,k::T,
+	periodicity::SVector{N,T},forces!::Function,update_parts_LD!::Function, noise3D::Function) where {N,T}
 	dQ₀ = zero(dQ₀)
 	Eₖ₀ = zero(Eₖ₀)
 	Eₚ₀ = zero(Eₚ₀)
     for _ in 1:freq
 		f₀ = zero(f₀)
-        f₀ = forces_fun!(r₀,f₀,Eₚ₀,periodicity,cut_off)
+        f₀ = forces!(r₀,f₀,Eₚ₀,periodicity,cut_off,k)
         fR₀ = noise3D(Npart)
         update_parts_LD!(r₀, v₀, f₀, fR₀, dQ₀, Eₖ₀, c₁₀, c₂₀, c₃₀,a²)
 		PBC!(r₀,periodicity)
