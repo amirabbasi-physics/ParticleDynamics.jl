@@ -40,12 +40,12 @@ function Langevin!(r::CuDeviceVector{SVector{N,T}}, v::CuDeviceVector{SVector{N,
              #pos = pos .+ c2 .* vel
 
              # Euler-Maruyama method
-             vel = c1 .* vel_prev + (a²*c2) .* frc + (a²*c2) .* rnd_force
+             vel = c1 .* vel_prev + c2 .* frc + (a²*c2) .* rnd_force
              d_vel =  vel .- vel_prev
              pos = pos .+ c2 .* vel
 
              dQ = - c2 .* dot(vel_prev,vel_prev) .+ 0.5 * dot((2 .* vel_prev .+ d_vel), c2 .* rnd_force)
-             Eₖ = dot(vel,vel)
+             Eₖ = 0.5f0*dot(vel,vel)/a²
          end
          sync_threads()
          if gtid <= Npart
@@ -60,7 +60,7 @@ function Langevin!(r::CuDeviceVector{SVector{N,T}}, v::CuDeviceVector{SVector{N,
      return nothing
 end
 
-
+"""
 function update_parts_BD!(r::CuVector{SVector{N,T}}, v::CuVector{SVector{N,T}},
      f::CuVector{SVector{N,T}},noises::CuVector{SVector{N,T}},c1s::CuVector{T},
      c2s::CuVector{T}; nthreads=128) where {N,T}
@@ -98,3 +98,4 @@ function Brownian!(r::CuDeviceVector{SVector{N,T}}, v::CuDeviceVector{SVector{N,
      end
      return nothing
 end
+"""
