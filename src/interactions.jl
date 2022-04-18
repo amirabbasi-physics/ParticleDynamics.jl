@@ -1,29 +1,29 @@
 export forces!
 
-function forces!(r::CuVector{SVector{N,T}}, f₀::CuVector{SVector{N,T}}, Eₚ₀::CuVector{T},periodicity::SVector{N,T}, cut_off::T, k::T;
-     nthreads=128) where {N,T}
+function forces!(r::CuVector{SVector{N,T}}, f₀::CuVector{SVector{N,T}}, Eₚ₀::CuVector{T},periodicity::SVector{N,T}, cut_off::T, τm::T,
+     τD::T, τₕ::T;nthreads=128) where {N,T}
     Npart = length(r)
     nblocks = Npart ÷ nthreads
-    CUDA.@sync @cuda blocks=nblocks threads=nthreads forces_kernel!(r, f₀, Eₚ₀, cut_off, periodicity, k)
+    CUDA.@sync @cuda blocks=nblocks threads=nthreads forces_kernel!(r, f₀, Eₚ₀, cut_off, periodicity, τm, τD, τₕ)
     return f₀
 end
 
 export harm_rep2D
 export harm_rep3D
 
-@inline function harm_rep2D(dx::T, dy::T, dist::T, k::T, σ::T) where T
+@inline function harm_rep2D(dx::T, dy::T, dist::T, τm::T, τD::T, τₕ::T, σ::T) where T
     inv_dist = 1.0f0/dist
-    f_int = k*(σ*inv_dist - 1.0f0)
-    e_int = (1.0f0/2.0f0)*(k/2.0f0)*(σ*inv_dist - 1.0f0)^2.0f0
+    f_int = (τD^2/(τm*τₕ))*(σ*inv_dist - 1.0f0)
+    e_int = (1.0f0/2.0f0)*(τD/(2.0f0*τₕ))*(σ*inv_dist - 1.0f0)^2.0f0
     f_x = f_int*dx
     f_y = f_int*dy
     return SVector{2,T}(f_x,f_y) , e_int
 end
 
-@inline function harm_rep3D(dx::T, dy::T, dz::T, dist::T, k::T, σ::T) where T
+@inline function harm_rep3D(dx::T, dy::T, dz::T, dist::T, τm::T, τD::T, τₕ::T, σ::T) where T
     inv_dist = 1.0f0/dist
-    f_int = k*(σ*inv_dist - 1.0f0)
-    e_int = (1.0f0/2.0f0)*(k/2.0f0)*(σ*inv_dist - 1.0f0)^2.0f0
+    f_int = (τD^2/(τm*τₕ))*(σ*inv_dist - 1.0f0)
+    e_int = (1.0f0/2.0f0)*(τD/(2.0f0*τₕ))*(σ*inv_dist - 1.0f0)^2.0f0
     f_x = f_int*dx
     f_y = f_int*dy
     f_z = f_int*dz
@@ -33,7 +33,7 @@ end
 export forces_kernel!
 
 function forces_kernel!(r::CuDeviceVector{T}, f::CuDeviceVector{T},Eₚ₀::CuDeviceVector{Float32},
-     cut_off::Float32, periodicity::T, k::Float32) where T
+     cut_off::Float32, periodicity::T, τm::Float32, τD::Float32, τₕ::Float32) where T
     Npart = length(r)
     gtid = (blockIdx().x - 1) * blockDim().x + threadIdx().x  # global thread id
 
@@ -58,7 +58,7 @@ function forces_kernel!(r::CuDeviceVector{T}, f::CuDeviceVector{T},Eₚ₀::CuDe
                 dr² = dx*dx + dy*dy
                 dist  = sqrt(dr²)
                 if 0.0f0 < dist < cut_off
-                    frc, ep = harm_rep2D(dx,dy,dist, k, cut_off)
+                    frc, ep = harm_rep2D(dx,dy,dist,cut_off,τm, τD, τₕ)
                     acc = acc .+ frc
                     epot = epot + ep
                 end
@@ -85,7 +85,7 @@ function forces_kernel!(r::CuDeviceVector{T}, f::CuDeviceVector{T},Eₚ₀::CuDe
                 dr² = dx*dx + dy*dy + dz*dz
                 dist  = sqrt(dr²)
                 if 0.0f0 < dist < cut_off
-                    frc, ep = harm_rep3D(dx,dy,dz,dist, k, cut_off)
+                    frc, ep = harm_rep3D(dx,dy,dz,dist, cut_off, τm, τD, τₕ)
                     acc = acc .+ frc
                     epot = epot + ep
                 end

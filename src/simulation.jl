@@ -19,42 +19,47 @@ end
 
 function run_simulation2D!(dim::Int, Npart::Int, freq::Int, r₀::CuVector{SVector{N,T}},
 	v₀::CuVector{SVector{N,T}},f₀::CuVector{SVector{N,T}},fR₀::CuVector{SVector{N,T}}, dQ₀::CuVector{T}, Eₖ₀::CuVector{T},
-	Eₚ₀::CuVector{T},c₁₀::CuVector{T}, c₂₀::CuVector{T}, c₃₀::CuVector{T},α₀::CuVector{T}, a²::T, cut_off::T,k::T,
+	Eₚ₀::CuVector{T},c₁₀::CuVector{T}, c₂₀::CuVector{T}, c₃₀::CuVector{T},α₀::CuVector{T}, a²::T, cut_off::T, τm::T, τD::T, τₕ::T,
 	periodicity::SVector{N,T},forces!::Function,update_parts_LD!::Function, noise2D::Function) where {N,T}
-	dQ₀ = zero(dQ₀)
-	Eₖ₀ = zero(Eₖ₀)
-	Eₚ₀ = zero(Eₚ₀)
+	dQ = zero(dQ₀)
+	Eₖ = zero(Eₖ₀)
+	Eₚ = zero(Eₚ₀)
     for _ in 1:freq
 		f₀ = zero(f₀)
-        f₀ = forces!(r₀,f₀,Eₚ₀,periodicity,cut_off,k)
+        f₀ = forces!(r₀,f₀,Eₚ₀,periodicity,cut_off, τm, τD, τₕ)
         fR₀ = noise2D(Npart)
         update_parts_LD!(r₀, v₀, f₀, fR₀, dQ₀, Eₖ₀, c₁₀, c₂₀, c₃₀,a²)
 		PBC!(r₀,periodicity)
-		dQ₀ = dQ₀ .+ dQ₀ ./freq
-		Eₖ₀ = Eₖ₀ .+ Eₖ₀ ./freq
-		Eₚ₀ = Eₚ₀ .+ Eₚ₀ ./freq
+		dQ = dQ .+ dQ₀ ./freq
+		Eₖ = Eₖ .+ Eₖ₀ ./freq
+		Eₚ = Eₚ .+ Eₚ₀ ./freq
     end
-
+	dQ₀ = dQ
+	Eₖ₀ = Eₖ
+	Eₚ₀ = Eₚ
     return r₀, v₀, f₀, dQ₀, Eₖ₀, Eₚ₀
 end
 
 function run_simulation3D!(dim::Int, Npart::Int, freq::Int, r₀::CuVector{SVector{N,T}},
 	v₀::CuVector{SVector{N,T}},f₀::CuVector{SVector{N,T}},fR₀::CuVector{SVector{N,T}}, dQ₀::CuVector{T}, Eₖ₀::CuVector{T},
-	Eₚ₀::CuVector{T},c₁₀::CuVector{T}, c₂₀::CuVector{T}, c₃₀::CuVector{T},α₀::CuVector{T}, a²::T, cut_off::T,k::T,
+	Eₚ₀::CuVector{T},c₁₀::CuVector{T}, c₂₀::CuVector{T}, c₃₀::CuVector{T},α₀::CuVector{T}, a²::T, cut_off::T, τm::T, τD::T, τₕ::T,
 	periodicity::SVector{N,T},forces!::Function,update_parts_LD!::Function, noise3D::Function) where {N,T}
-	dQ₀ = zero(dQ₀)
-	Eₖ₀ = zero(Eₖ₀)
-	Eₚ₀ = zero(Eₚ₀)
+	dQ = zero(dQ₀)
+	Eₖ = zero(Eₖ₀)
+	Eₚ = zero(Eₚ₀)
     for _ in 1:freq
 		f₀ = zero(f₀)
-        f₀ = forces!(r₀,f₀,Eₚ₀,periodicity,cut_off,k)
+        f₀ = forces!(r₀,f₀,Eₚ₀,periodicity,cut_off, τm, τD, τₕ)
         fR₀ = noise3D(Npart)
         update_parts_LD!(r₀, v₀, f₀, fR₀, dQ₀, Eₖ₀, c₁₀, c₂₀, c₃₀,a²)
 		PBC!(r₀,periodicity)
-		dQ₀ = dQ₀ .+ dQ₀ ./freq
-		Eₖ₀ = Eₖ₀ .+ Eₖ₀ ./freq
-		Eₚ₀ = Eₚ₀ .+ Eₚ₀ ./freq
+		dQ = dQ .+ dQ₀ ./freq
+		Eₖ = Eₖ .+ Eₖ₀ ./freq
+		Eₚ = Eₚ .+ Eₚ₀ ./freq
     end
+	dQ₀ = dQ
+	Eₖ₀ = Eₖ
+	Eₚ₀ = Eₚ
     return r₀, v₀, f₀, dQ₀, Eₖ₀, Eₚ₀
 end
 """
