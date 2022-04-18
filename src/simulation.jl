@@ -24,6 +24,9 @@ function run_simulation2D!(dim::Int, Npart::Int, freq::Int, r₀::CuVector{SVect
 	dQ = zero(dQ₀)
 	Eₖ = zero(Eₖ₀)
 	Eₚ = zero(Eₚ₀)
+	dQ₀ = zero(dQ₀)
+	Eₖ₀ = zero(Eₖ₀)
+	Eₚ₀ = zero(Eₚ₀)
     for _ in 1:freq
 		f₀ = zero(f₀)
         f₀ = forces!(r₀,f₀,Eₚ₀,periodicity,cut_off, τm, τD, τₕ)
@@ -47,6 +50,9 @@ function run_simulation3D!(dim::Int, Npart::Int, freq::Int, r₀::CuVector{SVect
 	dQ = zero(dQ₀)
 	Eₖ = zero(Eₖ₀)
 	Eₚ = zero(Eₚ₀)
+	dQ₀ = zero(dQ₀)
+	Eₖ₀ = zero(Eₖ₀)
+	Eₚ₀ = zero(Eₚ₀)
     for _ in 1:freq
 		f₀ = zero(f₀)
         f₀ = forces!(r₀,f₀,Eₚ₀,periodicity,cut_off, τm, τD, τₕ)
