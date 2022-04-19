@@ -30,27 +30,27 @@ function Langevin!(r::CuDeviceVector{SVector{N,T}}, v::CuDeviceVector{SVector{N,
              dQ  = dq[gtid]
              Eₖ   = eₖ[gtid]
 
-             rnd_force = c3 * rnd
+             rnd_force = c3 .* rnd
              vel_prev = vel
 
              #Euler-Heaun Method
-             #vel_tmp = vel_prev .- (a²*c2) .* vel_prev - (a²*c2) .* frc + (a²*c2) .* rnd_force
-             #d_vel =  - (0.5*a²*c2) .* (vel_prev .+ vel_tmp) + (a²*c2) .* rnd_force
-             #vel = vel_prev + d_vel
-             #pos = pos .+ c2 .* vel
+             vel_tmp = c1 .* vel_prev - (a²*c2) .* frc + (a²*c2) .* rnd_force
+             d_vel =  - (0.5f0*a²*c2) .* (vel_prev + vel_tmp) + (a²*c2) .* rnd_force
+             vel_next = vel_prev + d_vel
+             pos = pos + c2 .* vel_next
 
              # Euler-Maruyama method
-             vel = c1 .* vel_prev + c2 .* frc + (a²*c2) .* rnd_force
-             d_vel =  vel .- vel_prev
-             pos = pos .+ c2 .* vel
+             #vel_next = c1 .* vel_prev .+ (a²*c2) .* frc .+ (a²*c2) .* rnd_force
+             #d_vel =  vel_next .- vel_prev
+             #pos = pos .+ (0.50f0*c2) .* (vel_next .+ vel_prev)
 
-             dQ = - c2 .* dot(vel_prev,vel_prev) .+ 0.5 * dot((2 .* vel_prev .+ d_vel), c2 .* rnd_force)
-             Eₖ = 0.5f0*dot(vel,vel)/a²
+             dQ = - c2 .* dot(vel_prev,vel_prev) .+ 0.5f0 * dot((2.0f0 .* vel_prev .+ d_vel), c2 .* rnd_force)
+             Eₖ = 0.5f0*dot(vel_next,vel_next)/a²
          end
          sync_threads()
          if gtid <= Npart
              r[gtid] = pos
-             v[gtid] = vel
+             v[gtid] = vel_next
              noise[gtid] = rnd_force
              dq[gtid] = dQ
              eₖ[gtid] = Eₖ
