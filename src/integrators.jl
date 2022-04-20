@@ -33,16 +33,16 @@ function Langevin!(r::CuDeviceVector{SVector{N,T}}, v::CuDeviceVector{SVector{N,
              rnd_force = c3 .* rnd
              vel_prev = vel
 
-             #Euler-Heaun Method
-             vel_tmp = c1 .* vel_prev - (a²*c2) .* frc + (a²*c2) .* rnd_force
-             d_vel =  - (0.5f0*a²*c2) .* (vel_prev + vel_tmp) + (a²*c2) .* rnd_force
-             vel_next = vel_prev + d_vel
-             pos = pos + c2 .* vel_next
+             #Euler-Heun Method
+             #vel_tmp = c1 .* vel_prev - (a²*c2) .* frc + (a²*c2) .* rnd_force
+             #d_vel =  - (0.5f0*a²*c2) .* (vel_prev + vel_tmp) + (a²*c2) .* rnd_force
+             #vel_next = vel_prev + d_vel
+             #pos = pos + c2 .* vel_next
 
              # Euler-Maruyama method
-             #vel_next = c1 .* vel_prev .+ (a²*c2) .* frc .+ (a²*c2) .* rnd_force
-             #d_vel =  vel_next .- vel_prev
-             #pos = pos .+ (0.50f0*c2) .* (vel_next .+ vel_prev)
+             vel_next = c1 .* vel_prev .+ (a²*c2) .* frc .+ (a²*c2) .* rnd_force
+             d_vel =  vel_next .- vel_prev
+             pos = pos .+ c2 .* vel_prev
 
              dQ = - c2 .* dot(vel_prev,vel_prev) .+ 0.5f0 * dot((2.0f0 .* vel_prev .+ d_vel), c2 .* rnd_force)
              Eₖ = 0.5f0*dot(vel_next,vel_next)/a²
