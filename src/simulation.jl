@@ -1,9 +1,6 @@
 export hr_min_sec
 export run_simulation2D!
 export run_simulation3D!
-export Force
-export kinetic
-
 
 
 @inline function hr_min_sec(time::Float64)
@@ -45,7 +42,7 @@ function run_simulation2D!(dim::Int, Npart::Int, freq::Int, r₀::CuVector{SVect
 	Eₚ₀ = Eₚ
     return r₀, v₀, f₀, dQ₀, Eₖ₀, Eₚ₀
 end
-"""
+
 function run_simulation3D!(dim::Int, Npart::Int, freq::Int, r₀::CuVector{SVector{N,T}},
 	v₀::CuVector{SVector{N,T}},f₀::CuVector{SVector{N,T}},fR₀::CuVector{SVector{N,T}}, dQ₀::CuVector{T}, Eₖ₀::CuVector{T},
 	Eₚ₀::CuVector{T},c₁₀::CuVector{T}, c₂₀::CuVector{T}, c₃₀::CuVector{T},α₀::CuVector{T}, ϵ::T, cut_off::T,
@@ -74,7 +71,7 @@ function run_simulation3D!(dim::Int, Npart::Int, freq::Int, r₀::CuVector{SVect
 	Eₚ₀ = Eₚ
     return r₀, v₀, f₀, dQ₀, Eₖ₀, Eₚ₀
 end
-"""
+
 
 function run_simulation3D!(dim::Int, Npart::Int, freq::Int, r₀::CuVector{SVector{N,T}},
 	v₀::CuVector{SVector{N,T}},f₀::CuVector{SVector{N,T}},fR₀::CuVector{SVector{N,T}}, dQ₀::CuVector{T}, Eₖ₀::CuVector{T},

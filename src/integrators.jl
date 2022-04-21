@@ -21,12 +21,12 @@ function update_positions!(r::CuVector{SVector{N,T}}, v::CuVector{SVector{N,T}},
     return nothing
 end
 
-function update_velocities!(r::CuVector{SVector{N,T}}, v::CuVector{SVector{N,T}}, f₀::CuVector{SVector{N,T}},
-    f::CuVector{SVector{N,T}},fR::CuVector{SVector{N,T}},c1s::CuVector{T},c2s::CuVector{T},c3s::CuVector{T};
+function update_velocities!(v::CuVector{SVector{N,T}}, f₀::CuVector{SVector{N,T}},
+    f::CuVector{SVector{N,T}},fR::CuVector{SVector{N,T}},dq::CuVector{T},eₖ::CuVector{T},c1s::CuVector{T},c2s::CuVector{T},c3s::CuVector{T};
      nthreads=128) where {N,T}
     Npart = UInt32(length(r))
     nblocks = Npart ÷ nthreads
-    CUDA.@sync @cuda blocks=nblocks threads=nthreads update_velocities_kernel!(r, v, f₀, f, fR, c1s, c2s, c3s)
+    CUDA.@sync @cuda blocks=nblocks threads=nthreads update_velocities_kernel!(v, f₀, f, fR, dq, eₖ, c1s, c2s, c3s)
     return nothing
 end
 
@@ -64,7 +64,7 @@ function update_positions_kernel!(r::CuDeviceVector{SVector{N,T}}, v::CuDeviceVe
      return nothing
 end
 
-function update_velocities_kernel!(r::CuDeviceVector{SVector{N,T}}, v::CuDeviceVector{SVector{N,T}},
+function update_velocities_kernel!(v::CuDeviceVector{SVector{N,T}},
     f₀::CuDeviceVector{SVector{N,T}}, f::CuDeviceVector{SVector{N,T}}, noise::CuDeviceVector{SVector{N,T}},
     dq::CuDeviceVector{T}, eₖ::CuDeviceVector{T}, c1s::CuDeviceVector{T}, c2s::CuDeviceVector{T},
      c3s::CuDeviceVector{T}) where {N,T}
@@ -74,7 +74,6 @@ function update_velocities_kernel!(r::CuDeviceVector{SVector{N,T}}, v::CuDeviceV
 
      @inbounds begin
          if gtid <= Npart
-             pos = r[gtid]
              vel_prev = v[gtid]
              frc_prev = f₀[gtid]
              frc = f[gtid]
