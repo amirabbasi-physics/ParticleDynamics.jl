@@ -53,7 +53,7 @@ function update_positions_kernel!(r::CuDeviceVector{SVector{N,T}}, v::CuDeviceVe
 
              b = 1.0f0 / (1.0f0 + 0.50f0*c1*c2)
              bdt = b*c2
-             pos = pos .+ bdt .* vel .+ (0.50f0*bdt*c1*c2) .* frc .+ (0.50f0*bdt*c1) .* rnd_force
+             pos = pos + bdt .* vel + (0.50f0*bdt*c1*c2) .* frc + (0.50f0*bdt*c1) .* rnd_force
          end
          sync_threads()
          if gtid <= Npart
