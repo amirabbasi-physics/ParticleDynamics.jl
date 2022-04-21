@@ -65,8 +65,9 @@ function update_positions_kernel!(r::CuDeviceVector{SVector{N,T}}, v::CuDeviceVe
 end
 
 function update_velocities_kernel!(r::CuDeviceVector{SVector{N,T}}, v::CuDeviceVector{SVector{N,T}},
-    f₀::CuDeviceVector{SVector{N,T}}, f::CuDeviceVector{SVector{N,T}},noise::CuDeviceVector{SVector{N,T}},
-     c1s::CuDeviceVector{T},c2s::CuDeviceVector{T}, c3s::CuDeviceVector{T}) where {N,T}
+    f₀::CuDeviceVector{SVector{N,T}}, f::CuDeviceVector{SVector{N,T}}, noise::CuDeviceVector{SVector{N,T}},
+    dq::CuDeviceVector{T}, eₖ::CuDeviceVector{T}, c1s::CuDeviceVector{T}, c2s::CuDeviceVector{T},
+     c3s::CuDeviceVector{T}) where {N,T}
      Npart = length(r)
      tid = threadIdx().x
      gtid = (blockIdx().x - 1) * blockDim().x + tid  # global thread id
@@ -74,22 +75,29 @@ function update_velocities_kernel!(r::CuDeviceVector{SVector{N,T}}, v::CuDeviceV
      @inbounds begin
          if gtid <= Npart
              pos = r[gtid]
-             vel = v[gtid]
+             vel_prev = v[gtid]
              frc_prev = f₀[gtid]
              frc = f[gtid]
              rnd = noise[gtid]
              c1  = c1s[gtid]
              c2  = c2s[gtid]
              c3  = c3s[gtid]
+             dQ  = dq[gtid]
+             Eₖ   = eₖ[gtid]
 
              rnd_force = (c2*c3) .* rnd
              a = (1.0f0 - 0.50f0*c1*c2) / (1.0f0 + 0.50f0*c1*c2)
              b = 1.0f0 / (1.0f0 + 0.50f0*c1*c2)
-             vel = a .* vel .+ (0.5f0*c1*c2) .* (a .* frc_prev .+ frc) .+ (b*c1) .* rnd_force
+             vel_next = a .* vel_prev .+ (0.5f0*c1*c2) .* (a .* frc_prev .+ frc) .+ (b*c1) .* rnd_force
+
+             dQ = - c2 .* dot(vel_prev,vel_prev) .+ 0.5f0 * dot((vel_prev .+ vel_next), c2 .* rnd_force)
+             Eₖ = 0.5f0*dot(vel_next,vel_next)/c1
          end
          sync_threads()
          if gtid <= Npart
-             r[gtid] = pos
+             v[gtid]  = vel_next
+             dq[gtid] = dQ
+             eₖ[gtid] = Eₖ
          end
         sync_threads()
      end
