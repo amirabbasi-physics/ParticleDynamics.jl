@@ -24,7 +24,7 @@ end
 function update_velocities!(v::CuVector{SVector{N,T}}, f₀::CuVector{SVector{N,T}},
     f::CuVector{SVector{N,T}},fR::CuVector{SVector{N,T}},dq::CuVector{T},eₖ::CuVector{T},c1s::CuVector{T},c2s::CuVector{T},c3s::CuVector{T};
      nthreads=128) where {N,T}
-    Npart = UInt32(length(r))
+    Npart = UInt32(length(v))
     nblocks = Npart ÷ nthreads
     CUDA.@sync @cuda blocks=nblocks threads=nthreads update_velocities_kernel!(v, f₀, f, fR, dq, eₖ, c1s, c2s, c3s)
     return nothing
