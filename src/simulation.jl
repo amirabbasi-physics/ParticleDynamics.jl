@@ -45,7 +45,7 @@ function run_simulation2D!(dim::Int, Npart::Int, freq::Int, r₀::CuVector{SVect
 	Eₚ₀ = Eₚ
     return r₀, v₀, f₀, dQ₀, Eₖ₀, Eₚ₀
 end
-
+"""
 function run_simulation3D!(dim::Int, Npart::Int, freq::Int, r₀::CuVector{SVector{N,T}},
 	v₀::CuVector{SVector{N,T}},f₀::CuVector{SVector{N,T}},fR₀::CuVector{SVector{N,T}}, dQ₀::CuVector{T}, Eₖ₀::CuVector{T},
 	Eₚ₀::CuVector{T},c₁₀::CuVector{T}, c₂₀::CuVector{T}, c₃₀::CuVector{T},α₀::CuVector{T}, ϵ::T, cut_off::T,
@@ -74,8 +74,7 @@ function run_simulation3D!(dim::Int, Npart::Int, freq::Int, r₀::CuVector{SVect
 	Eₚ₀ = Eₚ
     return r₀, v₀, f₀, dQ₀, Eₖ₀, Eₚ₀
 end
-
-export run_simulation3D_new!
+"""
 
 function run_simulation3D!(dim::Int, Npart::Int, freq::Int, r₀::CuVector{SVector{N,T}},
 	v₀::CuVector{SVector{N,T}},f₀::CuVector{SVector{N,T}},fR₀::CuVector{SVector{N,T}}, dQ₀::CuVector{T}, Eₖ₀::CuVector{T},
@@ -84,9 +83,12 @@ function run_simulation3D!(dim::Int, Npart::Int, freq::Int, r₀::CuVector{SVect
 	dQ = similar(dQ₀)
 	Eₖ = similar(Eₖ₀)
 	Eₚ = similar(Eₚ₀)
+	f = similar(f₀)
+
 	dQ = zero(dQ)
 	Eₖ = zero(Eₖ)
 	Eₚ = zero(Eₚ)
+	f = zero(f)
 	dQ₀ = zero(dQ₀)
 	Eₖ₀ = zero(Eₖ₀)
 	Eₚ₀ = zero(Eₚ₀)
@@ -96,7 +98,7 @@ function run_simulation3D!(dim::Int, Npart::Int, freq::Int, r₀::CuVector{SVect
         update_positions!(r₀, v₀, f₀, fR₀, c₁₀, c₂₀, c₃₀)
 		PBC!(r₀,periodicity)
 		f = forces!(r₀, f, Eₚ₀, periodicity, ϵ, cut_off)
-		update_velocities!(v₀, f₀, f, fR₀)
+		update_velocities!(v₀, f₀, f, fR₀, dQ₀, Eₖ₀, c₁₀, c₂₀, c₃₀)
 		f₀ = f
 		dQ = dQ .+ dQ₀ ./freq
 		Eₖ = Eₖ .+ Eₖ₀ ./freq
