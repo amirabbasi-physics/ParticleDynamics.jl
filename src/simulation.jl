@@ -19,7 +19,7 @@ end
 
 function run_simulation2D!(dim::Int, Npart::Int, freq::Int, r₀::CuVector{SVector{N,T}},
 	v₀::CuVector{SVector{N,T}},f₀::CuVector{SVector{N,T}},fR₀::CuVector{SVector{N,T}}, dQ₀::CuVector{T}, Eₖ₀::CuVector{T},
-	Eₚ₀::CuVector{T},c₁₀::CuVector{T}, c₂₀::CuVector{T}, c₃₀::CuVector{T},α₀::CuVector{T}, a²::T, ϵ::T, cut_off::T,
+	Eₚ₀::CuVector{T},c₁₀::CuVector{T}, c₂₀::CuVector{T}, c₃₀::CuVector{T},α₀::CuVector{T}, ϵ::T, cut_off::T,
 	periodicity::SVector{N,T},forces!::Function,update_parts_LD!::Function, noise2D::Function) where {N,T}
 	dQ = similar(dQ₀)
 	Eₖ = similar(Eₖ₀)
@@ -34,7 +34,7 @@ function run_simulation2D!(dim::Int, Npart::Int, freq::Int, r₀::CuVector{SVect
 		f₀ = zero(f₀)
         f₀ = forces!(r₀,f₀,Eₚ₀, periodicity, ϵ, cut_off)
         fR₀ = noise2D(Npart)
-        update_parts_LD!(r₀, v₀, f₀, fR₀, dQ₀, Eₖ₀, c₁₀, c₂₀, c₃₀,a²)
+        update_parts_LD!(r₀, v₀, f₀, fR₀, dQ₀, Eₖ₀, c₁₀, c₂₀, c₃₀)
 		PBC!(r₀,periodicity)
 		dQ = dQ .+ dQ₀ ./freq
 		Eₖ = Eₖ .+ Eₖ₀ ./freq
@@ -48,7 +48,7 @@ end
 
 function run_simulation3D!(dim::Int, Npart::Int, freq::Int, r₀::CuVector{SVector{N,T}},
 	v₀::CuVector{SVector{N,T}},f₀::CuVector{SVector{N,T}},fR₀::CuVector{SVector{N,T}}, dQ₀::CuVector{T}, Eₖ₀::CuVector{T},
-	Eₚ₀::CuVector{T},c₁₀::CuVector{T}, c₂₀::CuVector{T}, c₃₀::CuVector{T},α₀::CuVector{T}, a²::T, ϵ::T, cut_off::T,
+	Eₚ₀::CuVector{T},c₁₀::CuVector{T}, c₂₀::CuVector{T}, c₃₀::CuVector{T},α₀::CuVector{T}, ϵ::T, cut_off::T,
 	periodicity::SVector{N,T},forces!::Function,update_parts_LD!::Function, noise3D::Function) where {N,T}
 	dQ = similar(dQ₀)
 	Eₖ = similar(Eₖ₀)
@@ -63,7 +63,7 @@ function run_simulation3D!(dim::Int, Npart::Int, freq::Int, r₀::CuVector{SVect
 		f₀ = zero(f₀)
         f₀ = forces!(r₀,f₀,Eₚ₀, periodicity, ϵ, cut_off)
         fR₀ = noise3D(Npart)
-        update_parts_LD!(r₀, v₀, f₀, fR₀, dQ₀, Eₖ₀, c₁₀, c₂₀, c₃₀,a²)
+        update_parts_LD!(r₀, v₀, f₀, fR₀, dQ₀, Eₖ₀, c₁₀, c₂₀, c₃₀)
 		PBC!(r₀,periodicity)
 		dQ = dQ .+ dQ₀ ./freq
 		Eₖ = Eₖ .+ Eₖ₀ ./freq
@@ -79,7 +79,7 @@ export run_simulation3D_new!
 
 function run_simulation3D_new!(dim::Int, Npart::Int, freq::Int, r₀::CuVector{SVector{N,T}},
 	v₀::CuVector{SVector{N,T}},f₀::CuVector{SVector{N,T}},fR₀::CuVector{SVector{N,T}}, dQ₀::CuVector{T}, Eₖ₀::CuVector{T},
-	Eₚ₀::CuVector{T},c₁₀::CuVector{T}, c₂₀::CuVector{T}, c₃₀::CuVector{T},α₀::CuVector{T}, a²::T, ϵ::T, cut_off::T,
+	Eₚ₀::CuVector{T},c₁₀::CuVector{T}, c₂₀::CuVector{T}, c₃₀::CuVector{T},α₀::CuVector{T}, ϵ::T, cut_off::T,
 	periodicity::SVector{N,T},forces!::Function,update_parts_LD!::Function, noise3D::Function) where {N,T}
 	dQ = similar(dQ₀)
 	Eₖ = similar(Eₖ₀)
@@ -93,7 +93,7 @@ function run_simulation3D_new!(dim::Int, Npart::Int, freq::Int, r₀::CuVector{S
     for _ in 1:freq
 		f = f₀
         fR₀ = noise3D(Npart)
-        update_positions!(r₀, v₀, f₀, f, fR₀, dQ₀, Eₖ₀, c₁₀, c₂₀, c₃₀, a²)
+        update_positions!(r₀, v₀, f₀, fR₀, c₁₀, c₂₀, c₃₀)
 		PBC!(r₀,periodicity)
 		f = forces!(r₀, f, Eₚ₀, periodicity, ϵ, cut_off)
 		update_velocities!(v₀, f₀, f, fR₀)
