@@ -10,6 +10,8 @@ function update_parts_LD!(r::CuVector{SVector{N,T}}, v::CuVector{SVector{N,T}}, 
     return nothing
 end
 
+export update_positions!
+export update_velocities!
 
 function update_positions!(r::CuVector{SVector{N,T}}, v::CuVector{SVector{N,T}}, f::CuVector{SVector{N,T}},
     fR::CuVector{SVector{N,T}},c1s::CuVector{T},c2s::CuVector{T},c3s::CuVector{T}; nthreads=128) where {N,T}
@@ -19,7 +21,17 @@ function update_positions!(r::CuVector{SVector{N,T}}, v::CuVector{SVector{N,T}},
     return nothing
 end
 
+function update_velocities!(r::CuVector{SVector{N,T}}, v::CuVector{SVector{N,T}}, f₀::CuVector{SVector{N,T}},
+    f::CuVector{SVector{N,T}},fR::CuVector{SVector{N,T}},c1s::CuVector{T},c2s::CuVector{T},c3s::CuVector{T};
+     nthreads=128) where {N,T}
+    Npart = UInt32(length(r))
+    nblocks = Npart ÷ nthreads
+    CUDA.@sync @cuda blocks=nblocks threads=nthreads update_velocities_kernel!(r, v, f₀, f, fR, c1s, c2s, c3s)
+    return nothing
+end
+
 export update_positions_kernel!
+export update_velocities_kernel!
 
 function update_positions_kernel!(r::CuDeviceVector{SVector{N,T}}, v::CuDeviceVector{SVector{N,T}}, f::CuDeviceVector{SVector{N,T}},
      noise::CuDeviceVector{SVector{N,T}}, c1s::CuDeviceVector{T},c2s::CuDeviceVector{T}, c3s::CuDeviceVector{T}) where {N,T}
@@ -37,9 +49,8 @@ function update_positions_kernel!(r::CuDeviceVector{SVector{N,T}}, v::CuDeviceVe
              c2  = c2s[gtid]
              c3  = c3s[gtid]
 
-             rnd_force = c3 .* rnd
+             rnd_force = (c2*c3) .* rnd
 
-             # Euler-Maruyama method
              b = 1.0f0 / (1.0f0 + 0.50f0*c1*c2)
              bdt = b*c2
              pos = pos .+ bdt .* vel .+ (0.50f0*bdt*c1*c2) .* frc .+ (0.50f0*bdt*c1) .* rnd_force
@@ -53,6 +64,37 @@ function update_positions_kernel!(r::CuDeviceVector{SVector{N,T}}, v::CuDeviceVe
      return nothing
 end
 
+function update_velocities_kernel!(r::CuDeviceVector{SVector{N,T}}, v::CuDeviceVector{SVector{N,T}},
+    f₀::CuDeviceVector{SVector{N,T}}, f::CuDeviceVector{SVector{N,T}},noise::CuDeviceVector{SVector{N,T}},
+     c1s::CuDeviceVector{T},c2s::CuDeviceVector{T}, c3s::CuDeviceVector{T}) where {N,T}
+     Npart = length(r)
+     tid = threadIdx().x
+     gtid = (blockIdx().x - 1) * blockDim().x + tid  # global thread id
+
+     @inbounds begin
+         if gtid <= Npart
+             pos = r[gtid]
+             vel = v[gtid]
+             frc_prev = f₀[gtid]
+             frc = f[gtid]
+             rnd = noise[gtid]
+             c1  = c1s[gtid]
+             c2  = c2s[gtid]
+             c3  = c3s[gtid]
+
+             rnd_force = (c2*c3) .* rnd
+             a = (1.0f0 - 0.50f0*c1*c2) / (1.0f0 + 0.50f0*c1*c2)
+             b = 1.0f0 / (1.0f0 + 0.50f0*c1*c2)
+             vel = a .* vel .+ (0.5f0*c1*c2) .* (a .* frc_prev .+ frc) .+ (b*c1) .* rnd_force
+         end
+         sync_threads()
+         if gtid <= Npart
+             r[gtid] = pos
+         end
+        sync_threads()
+     end
+     return nothing
+end
 
 
 export Langevin_kernel!

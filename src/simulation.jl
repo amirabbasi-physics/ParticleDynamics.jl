@@ -77,10 +77,10 @@ end
 
 export run_simulation3D_new!
 
-function run_simulation3D_new!(dim::Int, Npart::Int, freq::Int, r₀::CuVector{SVector{N,T}},
+function run_simulation3D!(dim::Int, Npart::Int, freq::Int, r₀::CuVector{SVector{N,T}},
 	v₀::CuVector{SVector{N,T}},f₀::CuVector{SVector{N,T}},fR₀::CuVector{SVector{N,T}}, dQ₀::CuVector{T}, Eₖ₀::CuVector{T},
 	Eₚ₀::CuVector{T},c₁₀::CuVector{T}, c₂₀::CuVector{T}, c₃₀::CuVector{T},α₀::CuVector{T}, ϵ::T, cut_off::T,
-	periodicity::SVector{N,T},forces!::Function,update_parts_LD!::Function, noise3D::Function) where {N,T}
+	periodicity::SVector{N,T},forces!::Function,update_positions!::Function,update_velocities!::Function, noise3D::Function) where {N,T}
 	dQ = similar(dQ₀)
 	Eₖ = similar(Eₖ₀)
 	Eₚ = similar(Eₚ₀)
