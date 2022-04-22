@@ -53,7 +53,7 @@ function update_positions_kernel!(r::CuDeviceVector{SVector{N,T}}, v::CuDeviceVe
 
              b = 1.0f0 / (1.0f0 + 0.50f0*c1*c2)
              bdt = b*c2
-             pos = pos .+ bdt .* vel .+ (0.50f0*bdt*c1*c2) .* frc .+ (0.50f0*bdt*c1) .* rnd_force
+             pos = pos + bdt .* vel + (0.50f0*bdt*c1*c2) .* frc + (0.50f0*bdt*c1) .* rnd_force
          end
          sync_threads()
          if gtid <= Npart
@@ -87,7 +87,7 @@ function update_velocities_kernel!(v::CuDeviceVector{SVector{N,T}},
              rnd_force = (c2*c3) .* rnd
              a = (1.0f0 - 0.50f0*c1*c2) / (1.0f0 + 0.50f0*c1*c2)
              b = 1.0f0 / (1.0f0 + 0.50f0*c1*c2)
-             vel_next = a .* vel_prev .+ (0.5f0*c1*c2*a) .* frc_prev + (0.5f0*c1*c2) .* frc .+ (b*c1) .* rnd_force
+             vel_next = a .* vel_prev + (0.5f0*c1*c2*a) .* frc_prev + (0.5f0*c1*c2) .* frc + (b*c1) .* rnd_force
 
              dQ = - c2 .* dot(vel_prev,vel_prev) .+ 0.5f0 * dot((vel_prev .+ vel_next), rnd_force)
              Eₖ = 0.5f0*dot(vel_next,vel_next)/c1
