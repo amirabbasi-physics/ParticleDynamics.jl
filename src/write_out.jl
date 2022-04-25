@@ -35,7 +35,7 @@ end
 
 function write_log(ofname::String, step::Int, c2::T, alpha_lst::Vector{T}, Eₖ::Vector{T}, Eₚ::Vector{T}, dQ::Vector{T}) where T
     out_file = ofname*".log"
-    sdot = -Float32(sum(dQ ./ alpha_lst)/c2)
+    sdot = Float32(sum(dQ ./ alpha_lst)/c2)
     Ekin = sum(Eₖ)
     Epot = sum(Eₚ)
 
