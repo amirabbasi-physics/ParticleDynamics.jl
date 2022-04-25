@@ -89,7 +89,7 @@ function update_velocities_kernel!(v::CuDeviceVector{SVector{N,T}},
              b = 1.0f0 / (1.0f0 + 0.50f0*c1*c2)
              vel_next = a .* vel_prev + (0.5f0*c1*c2*a) .* frc_prev + (0.5f0*c1*c2) .* frc + (b*c1) .* rnd_force
 
-             dQ = - c2 .* dot(vel_prev,vel_prev) .+ 0.5f0 * dot((vel_prev .+ vel_next), rnd_force)
+             dQ = -(0.25f0*c2) .* dot((vel_prev + vel_next),vel_prev) .+ 0.5f0 * dot((vel_prev + vel_next), rnd_force)
              Eₖ = 0.5f0*dot(vel_next,vel_next)/c1
          end
          sync_threads()
@@ -130,11 +130,11 @@ function Langevin_kernel!(r::CuDeviceVector{SVector{N,T}}, v::CuDeviceVector{SVe
 
              # Euler-Maruyama method
              a = c1*c2
-             vel_next = (1.0f0-a).* vel_prev .+ a .* frc .+ a .* rnd_force
+             vel_next = (1.0f0-a).* vel_prev .+ (0.0f0*a) .* frc .+ a .* rnd_force
              d_vel =  vel_next .- vel_prev
              pos = pos .+ c2 .* vel_prev
 
-             dQ = - c2 .* dot(vel_prev,vel_prev) .+ 0.5f0 * dot((2.0f0 .* vel_prev .+ d_vel), c2 .* rnd_force)
+             dQ = - (0.50f0*c2) .* dot((vel_prev .+ vel_next),vel_prev) .+ 0.5f0 * dot((vel_prev .+ vel_next), c2 .* rnd_force)
              Eₖ = 0.5f0*dot(vel_next,vel_next)/c1
          end
          sync_threads()
