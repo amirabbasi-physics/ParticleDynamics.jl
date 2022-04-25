@@ -89,7 +89,7 @@ function update_velocities_kernel!(v::CuDeviceVector{SVector{N,T}},
              b = 1.0f0 / (1.0f0 + 0.50f0*c1*c2)
              vel_next = a .* vel_prev + (0.5f0*c1*c2*a) .* frc_prev + (0.5f0*c1*c2) .* frc + (b*c1) .* rnd_force
 
-             dQ = -(0.25f0*c2) .* dot((vel_prev + vel_next),vel_prev) .+ 0.5f0 * dot((vel_prev + vel_next), rnd_force)
+             dQ = -(0.25f0*c2) .* dot((vel_prev + vel_next),(vel_prev + vel_next)) .+ 0.5f0 * dot((vel_prev + vel_next), rnd_force)
              Eₖ = 0.5f0*dot(vel_next,vel_next)/c1
          end
          sync_threads()
