@@ -35,7 +35,7 @@ function forces_kernel!(r::CuDeviceVector{T}, f::CuDeviceVector{T},Eₚ₀::CuDe
      cut_off::Float32, periodicity::T, ϵ::Float32) where T
     Npart = length(r)
     gtid = (blockIdx().x - 1) * blockDim().x + threadIdx().x  # global thread id
-
+    tid = threadIdx().x
     shared = CuStaticSharedArray(T, 128)
     dim = length(periodicity)
     tile = 0
@@ -46,7 +46,7 @@ function forces_kernel!(r::CuDeviceVector{T}, f::CuDeviceVector{T},Eₚ₀::CuDe
     if dim == 2
         for i in 1:blockDim().x:Npart
             idx = tile * blockDim().x + threadIdx().x
-            shared[threadIdx().x] = r[idx]
+            shared[tid] = r[idx]
             sync_threads()
 
             @inbounds for j in 1:blockDim().x
@@ -71,7 +71,7 @@ function forces_kernel!(r::CuDeviceVector{T}, f::CuDeviceVector{T},Eₚ₀::CuDe
     elseif dim == 3
         for i in 1:blockDim().x:Npart
             idx = tile * blockDim().x + threadIdx().x
-            shared[threadIdx().x] = r[idx]
+            shared[tid] = r[idx]
             sync_threads()
 
             @inbounds for j in 1:blockDim().x
