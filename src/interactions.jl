@@ -49,7 +49,7 @@ function forces_kernel!(r::CuDeviceVector{T}, f::CuDeviceVector{T},Eₚ₀::CuDe
             shared[threadIdx().x] = r[idx]
             sync_threads()
 
-            @inbounds @simd for j in 1:blockDim().x
+            @inbounds for j in 1:blockDim().x
                 dx  = pos[1] - shared[j][1]
                 dy  = pos[2] - shared[j][2]
                 dx = ifelse(abs(dx) > periodicity[1] / 2, dx - sign(dx) * periodicity[1] ,dx)
@@ -74,7 +74,7 @@ function forces_kernel!(r::CuDeviceVector{T}, f::CuDeviceVector{T},Eₚ₀::CuDe
             shared[threadIdx().x] = r[idx]
             sync_threads()
 
-            @inbounds @simd for j in 1:blockDim().x
+            @inbounds for j in 1:blockDim().x
                 dx  = pos[1] - shared[j][1]
                 dy  = pos[2] - shared[j][2]
                 dz  = pos[3] - shared[j][3]
