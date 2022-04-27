@@ -81,7 +81,6 @@ function run_simulation3D!(dim::Int, Npart::Int, freq::Int, r₀::CuVector{SVect
 	Eₖ = similar(Eₖ₀)
 	Eₚ = similar(Eₚ₀)
 	f = similar(f₀)
-
 	dQ = zero(dQ)
 	Eₖ = zero(Eₖ)
 	Eₚ = zero(Eₚ)
