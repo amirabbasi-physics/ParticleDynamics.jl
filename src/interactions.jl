@@ -10,7 +10,7 @@ end
 export harm_rep2D
 export harm_rep3D
 
-@inline function harm_rep2D(dx::T, dy::T, dist::T, ϵ::T, σ::T) where T
+@inline function harm_rep2D(dx::T, dy::T, dist::T, ϵ::T, σ::T) where {T}
     inv_dist = 1.0f0/dist
     f_int = ϵ*(inv_dist - 1.0f0/σ)
     e_int = 0.25f0*ϵ*(1.0f0-dist/σ)^2.0f0
@@ -19,7 +19,7 @@ export harm_rep3D
     return SVector{2,T}(f_x,f_y) , e_int
 end
 
-@inline function harm_rep3D(dx::T, dy::T, dz::T, dist::T, ϵ::T, σ::T) where T
+@inline function harm_rep3D(dx::T, dy::T, dz::T, dist::T, ϵ::T, σ::T) where {T}
     inv_dist = 1.0f0/dist
     f_int = ϵ*(inv_dist - 1.0f0/σ)
     e_int = 0.25f0*ϵ*(1.0f0-dist/σ)^2.0f0
@@ -32,7 +32,7 @@ end
 export forces_kernel!
 
 function forces_kernel!(r::CuDeviceVector{T}, f::CuDeviceVector{T},Eₚ₀::CuDeviceVector{Float32},
-     cut_off::Float32, periodicity::T, ϵ::Float32) where T
+     cut_off::Float32, periodicity::T, ϵ::Float32) where {T}
     Npart = length(r)
     gtid = (blockIdx().x - 1) * blockDim().x + threadIdx().x  # global thread id
     tid = threadIdx().x
