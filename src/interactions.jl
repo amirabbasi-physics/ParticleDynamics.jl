@@ -10,7 +10,7 @@ end
 export harm_rep2D
 export harm_rep3D
 
-@inline function harm_rep2D(dx::T, dy::T, dist::T, ϵ::T, σ::T) where T
+@inline function harm_rep2D(dx::T, dy::T, dist::T, ϵ::T, σ::T) where {T}
     inv_dist = 1.0f0/dist
     f_int = ϵ*(inv_dist - 1.0f0/σ)
     e_int = 0.25f0*ϵ*(1.0f0-dist/σ)^2.0f0
@@ -19,7 +19,7 @@ export harm_rep3D
     return SVector{2,T}(f_x,f_y) , e_int
 end
 
-@inline function harm_rep3D(dx::T, dy::T, dz::T, dist::T, ϵ::T, σ::T) where T
+@inline function harm_rep3D(dx::T, dy::T, dz::T, dist::T, ϵ::T, σ::T) where {T}
     inv_dist = 1.0f0/dist
     f_int = ϵ*(inv_dist - 1.0f0/σ)
     e_int = 0.25f0*ϵ*(1.0f0-dist/σ)^2.0f0
@@ -32,10 +32,10 @@ end
 export forces_kernel!
 
 function forces_kernel!(r::CuDeviceVector{T}, f::CuDeviceVector{T},Eₚ₀::CuDeviceVector{Float32},
-     cut_off::Float32, periodicity::T, ϵ::Float32) where T
+     cut_off::Float32, periodicity::T, ϵ::Float32) where {T}
     Npart = length(r)
     gtid = (blockIdx().x - 1) * blockDim().x + threadIdx().x  # global thread id
-
+    tid = threadIdx().x
     shared = CuStaticSharedArray(T, 128)
     dim = length(periodicity)
     tile = 0
@@ -45,11 +45,11 @@ function forces_kernel!(r::CuDeviceVector{T}, f::CuDeviceVector{T},Eₚ₀::CuDe
 
     if dim == 2
         for i in 1:blockDim().x:Npart
-            idx = tile * blockDim().x + threadIdx().x
-            shared[threadIdx().x] = r[idx]
+            idx = tile * blockDim().x + tid
+            shared[tid] = r[idx]
             sync_threads()
 
-            @inbounds @simd for j in 1:blockDim().x
+            @inbounds for j in 1:blockDim().x
                 dx  = pos[1] - shared[j][1]
                 dy  = pos[2] - shared[j][2]
                 dx = ifelse(abs(dx) > periodicity[1] / 2, dx - sign(dx) * periodicity[1] ,dx)
@@ -70,11 +70,11 @@ function forces_kernel!(r::CuDeviceVector{T}, f::CuDeviceVector{T},Eₚ₀::CuDe
         return nothing
     elseif dim == 3
         for i in 1:blockDim().x:Npart
-            idx = tile * blockDim().x + threadIdx().x
-            shared[threadIdx().x] = r[idx]
+            idx = tile * blockDim().x + tid
+            shared[tid] = r[idx]
             sync_threads()
 
-            @inbounds @simd for j in 1:blockDim().x
+            @inbounds for j in 1:blockDim().x
                 dx  = pos[1] - shared[j][1]
                 dy  = pos[2] - shared[j][2]
                 dz  = pos[3] - shared[j][3]
@@ -96,4 +96,5 @@ function forces_kernel!(r::CuDeviceVector{T}, f::CuDeviceVector{T},Eₚ₀::CuDe
         Eₚ₀[gtid] = epot
         return nothing
     end
+    return nothing
 end
