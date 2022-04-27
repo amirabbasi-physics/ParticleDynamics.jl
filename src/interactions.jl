@@ -45,7 +45,7 @@ function forces_kernel!(r::CuDeviceVector{T}, f::CuDeviceVector{T},Eₚ₀::CuDe
 
     if dim == 2
         for i in 1:blockDim().x:Npart
-            idx = tile * blockDim().x + threadIdx().x
+            idx = tile * blockDim().x + tid
             shared[tid] = r[idx]
             sync_threads()
 
@@ -70,7 +70,7 @@ function forces_kernel!(r::CuDeviceVector{T}, f::CuDeviceVector{T},Eₚ₀::CuDe
         return nothing
     elseif dim == 3
         for i in 1:blockDim().x:Npart
-            idx = tile * blockDim().x + threadIdx().x
+            idx = tile * blockDim().x + tid
             shared[tid] = r[idx]
             sync_threads()
 
