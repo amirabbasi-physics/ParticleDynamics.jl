@@ -94,7 +94,7 @@ function run_simulation3D!(dim::Int, Npart::Int, freq::Int, r₀::CuVector{SVect
         fR₀ = noise3D(Npart)
         update_positions!(r₀, v₀, f₀, fR₀, c₁₀, c₂₀, c₃₀)
 		PBC!(r₀,periodicity)
-		#f = forces!(r₀, f, Eₚ₀, periodicity, ϵ, cut_off)
+		f = forces!(r₀, f, Eₚ₀, periodicity, ϵ, cut_off)
 		update_velocities!(v₀, f₀, f, fR₀, dQ₀, Eₖ₀, c₁₀, c₂₀, c₃₀)
 		f₀ = f
 		dQ = dQ .+ dQ₀ ./freq
@@ -106,21 +106,3 @@ function run_simulation3D!(dim::Int, Npart::Int, freq::Int, r₀::CuVector{SVect
 	Eₚ₀ = Eₚ
     return r₀, v₀, f₀, dQ₀, Eₖ₀, Eₚ₀
 end
-"""
-function run_simulation!(dim::Int, Npart::Int, freq::Int, r₀::CuVector{SVector{N,T}},
-	v₀::CuVector{SVector{N,T}},S₀::CuVector{T}, c₁₀::CuVector{T}, c₂₀::CuVector{T},
-	α₀::CuVector{T},cut_off::T, periodicity::SVector{N,T},forces_fun::Function,
-	update_parts_BD!::Function, noise2D::Function) where {N,T}
-    for _ in 1:freq
-		sdot	= zero(similar(S₀))
-		f_int = zero(similar(v₀))
-	    f_noise = zero(similar(v₀))
-        f_int   = forces_fun(r₀,periodicity,cut_off)
-        f_noise = noise2D(Npart)
-        update_parts_BD!(r₀, v₀, f_int, f_noise,S₀, c₁₀, c₂₀,α₀)
-
-		PBC!(r₀,periodicity)
-    end
-    return nothing
-end
-"""
