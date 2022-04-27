@@ -94,7 +94,7 @@ function run_simulation3D!(dim::Int, Npart::Int, freq::Int, r₀::CuVector{SVect
         fR₀ = noise3D(Npart)
         update_positions!(r₀, v₀, f₀, fR₀, c₁₀, c₂₀, c₃₀)
 		PBC!(r₀,periodicity)
-		f = forces!(r₀, f, Eₚ₀, periodicity, ϵ, cut_off)
+		#f = forces!(r₀, f, Eₚ₀, periodicity, ϵ, cut_off)
 		update_velocities!(v₀, f₀, f, fR₀, dQ₀, Eₖ₀, c₁₀, c₂₀, c₃₀)
 		f₀ = f
 		dQ = dQ .+ dQ₀ ./freq
