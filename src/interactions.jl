@@ -96,4 +96,5 @@ function forces_kernel!(r::CuDeviceVector{T}, f::CuDeviceVector{T},Eₚ₀::CuDe
         Eₚ₀[gtid] = epot
         return nothing
     end
+    return nothing
 end
