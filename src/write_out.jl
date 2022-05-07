@@ -36,9 +36,9 @@ end
 
 function write_log(ofname::String, step::Int, c2::T, alpha_lst::Vector{T}, Eₖ::Vector{T}, Eₚ::Vector{T}, dQ::Vector{T}) where T
     out_file = ofname*".log"
-    sdot = -Float32(sum(dQ ./ alpha_lst)/(length(dQ)))
-    Ekin = sum(Eₖ)/length(Eₖ)
-    Epot = sum(Eₚ)/length(Eₚ)
+    sdot = -Float32(sum(dQ ./ alpha_lst))
+    Ekin = sum(Eₖ)
+    Epot = sum(Eₚ)
 
     data = hcat(step, Ekin, Epot, sdot)
     if step == 0
