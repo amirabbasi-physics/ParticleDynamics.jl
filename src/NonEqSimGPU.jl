@@ -10,6 +10,7 @@ Flush output so that jobs can be monitored on cluster.
 end
 
 
+
 using CUDA
 using StaticArrays
 using DelimitedFiles
