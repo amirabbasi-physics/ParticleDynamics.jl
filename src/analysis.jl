@@ -7,6 +7,7 @@ function kinetic!(Ekin0::CuVector{T}, v::CuVector{SVector{N,T}}, a²::T; nthread
     return nothing
 end
 
+
 function kinetic_kernel!(Ekin0::CuDeviceVector{T}, v::CuDeviceVector{SVector{N,T}}, a²::T,::Val{TH}) where {N,T,TH}
     Npart = length(v)
     tid = threadIdx().x
