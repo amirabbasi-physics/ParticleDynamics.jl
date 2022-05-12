@@ -52,7 +52,6 @@ function entropy_kernel!(S₀₂::CuDeviceVector{T},v₀::CuDeviceVector{SVector
     Npart = length(v₀)
     tid = threadIdx().x
     gtid = (blockIdx().x - UInt32(1)) * blockDim().x + tid  # global thread id
-
     @inbounds begin
         if gtid <= Npart
             vel = v₀[gtid]
