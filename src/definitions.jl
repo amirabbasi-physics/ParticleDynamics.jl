@@ -40,8 +40,6 @@ function fcc_sphere(Npart, L_box, r0, rad)
     return new_pos
 end
 
-
-
 export fcc_lattice
 function fcc_lattice(Npart::Int64,σ::T,M_x::Int64, M_y::Int64, M_z::Int64) where T
     """Calculates the positions of an fcc lattice with the lattice constant a
