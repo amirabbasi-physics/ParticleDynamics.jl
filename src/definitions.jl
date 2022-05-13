@@ -28,19 +28,32 @@ function simplecubic_lattice(s_x::Float32, s_y::Float32, s_z::Float32, M_x::Int6
     end
     return positions
 end
-export fcc_lattice
+export fcc_sphere
+function fcc_sphere(Npart, L_box, r0, rad)
+    new_pos = Array{SVector{3,Float32}, 1}()
+    for i = 1:Npart
+        dist = SVector{3,Float32}([0.5f0*L_box,0.5f0*L_box,0.5f0*L_box]) .- r0[i]
+        if norm(dist) <= rad
+            push!(new_pos , r0[i])
+        end
+    end
+    return new_pos
+end
 
-function fcc_lattice(Npart::Int64, L::T,σ::T,M_x::Int64, M_y::Int64, M_z::Int64) where T
+
+
+export fcc_lattice
+function fcc_lattice(Npart::Int64,σ::T,M_x::Int64, M_y::Int64, M_z::Int64) where T
     """Calculates the positions of an fcc lattice with the lattice constant a
     in a cubic box with the given dimensions"""
-
+    lattice_const = sqrt(2.0f0)*σ
     # initialize coordinates: time 4 since there are 4 atoms in each unit cell
     positions = Array{SVector{3,Float32}, 1}()
     pos_num = 0
     for i = 1: M_x
         for j = 1: M_y
             for k = 1: M_z
-                pos = [pos_fcc(σ)[n] .+ @SVector [i .*σ, j .*σ , k .*σ] for n = 1:4]
+                pos = [pos_fcc(lattice_const)[n] .+ @SVector [i .*lattice_const, j .*lattice_const , k .*lattice_const] for n = 1:4]
                 for nn = 1:4
                     if pos_num < Npart
                         push!(positions, pos[nn])
