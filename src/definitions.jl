@@ -29,11 +29,12 @@ function simplecubic_lattice(s_x::Float32, s_y::Float32, s_z::Float32, M_x::Int6
     return positions
 end
 export fcc_sphere
-function fcc_sphere(Npart, L_box, r0, rad)
+function fcc_sphere(L_box::T, r0::Array{SVector{N,T}}, rad::T) where {N,T}
     new_pos = Array{SVector{3,Float32}, 1}()
-    for i = 1:Npart
-        dist = SVector{3,Float32}([0.5f0*L_box,0.5f0*L_box,0.5f0*L_box]) .- r0[i]
-        if norm(dist) <= rad
+    r_center = SVector{3,Float32}([0.5f0*L_box,0.5f0*L_box,0.5f0*L_box])
+    for i = 1:length(r0)
+        dist = r0[i] .- r_center
+        if norm(dist)/rad <= 1
             push!(new_pos , r0[i])
         end
     end
@@ -41,22 +42,24 @@ function fcc_sphere(Npart, L_box, r0, rad)
 end
 
 export fcc_lattice
-function fcc_lattice(Npart::Int64,σ::T,M_x::Int64, M_y::Int64, M_z::Int64) where T
+function fcc_lattice(L_box::T,lattice_const::T,M_x::Int64, M_y::Int64, M_z::Int64) where T
     """Calculates the positions of an fcc lattice with the lattice constant a
     in a cubic box with the given dimensions"""
-    lattice_const = sqrt(2.0f0)*σ
     # initialize coordinates: time 4 since there are 4 atoms in each unit cell
     positions = Array{SVector{3,Float32}, 1}()
-    pos_num = 0
-    for i = 1: M_x
-        for j = 1: M_y
-            for k = 1: M_z
-                pos = [pos_fcc(lattice_const)[n] .+ @SVector [i .*lattice_const, j .*lattice_const , k .*lattice_const] for n = 1:4]
+    #pos_num = 0
+    r_x = lattice_const*M_x/2
+    r_y = lattice_const*M_y/2
+    r_z = lattice_const*M_z/2
+    for i = 0:M_x-1
+        for j = 0:M_y-1
+            for k = 0:M_z-1
+                pos = [pos_fcc(lattice_const)[n] .+ @SVector [i * lattice_const - r_x, j * lattice_const - r_y, k * lattice_const - r_z] for n = 1:4]
                 for nn = 1:4
-                    if pos_num < Npart
+                    #if pos_num < Npart
                         push!(positions, pos[nn])
-                        pos_num += 1
-                    end
+                        #pos_num += 1
+                    #end
                 end
             end
         end
@@ -64,7 +67,7 @@ function fcc_lattice(Npart::Int64,σ::T,M_x::Int64, M_y::Int64, M_z::Int64) wher
     return positions
 end
 export pos_fcc
-function pos_fcc(σ::Float32)
+function pos_fcc(σ::T) where T
     """returns the positions (x,y,z) of the 4 atoms in a fcc unit cell with the lattice constant a."""
     p₁ = @SVector [0.f0, 0.f0, 0.f0]
     p₂ = @SVector [0.f0, 0.5f0*σ, 0.5f0*σ]
@@ -93,4 +96,11 @@ export friction
 
 @inline function friction(η::T, R::T)::T where T
     return 6.0f0*π*η*R
+end
+
+export random_pos
+
+function random_pos(dim::Int64, L::T) where T
+	position = SVector{dim,T}(rand(dim)) .* L
+	return position
 end
