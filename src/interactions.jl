@@ -1,9 +1,9 @@
 export forces!
 
-function forces!(r::CuVector{SVector{N,T}}, f₀::CuVector{SVector{N,T}}, Eₚ₀::CuVector{T},periodicity::SVector{N,T}, ϵ::T, cut_off::T;nthreads=128) where {N,T}
+function forces!(r::CuVector{SVector{N,T}}, f₀::CuVector{SVector{N,T}}, Eₚ₀::CuVector{T},alpha_lst::CuVector{T},ET₀::CuVector{T},periodicity::SVector{N,T}, ϵ::T, cut_off::T;nthreads=128) where {N,T}
     Npart = length(r)
     nblocks = Npart ÷ nthreads
-    CUDA.@sync @cuda blocks=nblocks threads=nthreads forces_kernel!(r, f₀, Eₚ₀, cut_off, periodicity, ϵ)
+    CUDA.@sync @cuda blocks=nblocks threads=nthreads forces_kernel!(r, f₀, Eₚ₀, alpha_lst, ET₀, cut_off, periodicity, ϵ)
     return f₀
 end
 
@@ -32,33 +32,40 @@ end
 export forces_kernel!
 
 function forces_kernel!(r::CuDeviceVector{T}, f::CuDeviceVector{T},Eₚ₀::CuDeviceVector{Float32},
-     cut_off::Float32, periodicity::T, ϵ::Float32) where {T}
+     alpha_lst::CuDeviceVector{Float32},ET₀::CuDeviceVector{Float32},cut_off::Float32, periodicity::T, ϵ::Float32) where {T}
     Npart = length(r)
     gtid = (blockIdx().x - 1) * blockDim().x + threadIdx().x  # global thread id
     tid = threadIdx().x
-    shared = CuStaticSharedArray(T, 128)
+    shared_pos = CuStaticSharedArray(T, 128)
+    shared_α   = CuStaticSharedArray(Float32, 128)
     dim = length(periodicity)
     tile = 0
     pos = r[gtid]
+    α   = alpha_lst[gtid]
     acc = zero(T)
     epot= 0.0f0
+    et = 0.0f0
 
     if dim == 2
         for i in 1:blockDim().x:Npart
             idx = tile * blockDim().x + tid
-            shared[tid] = r[idx]
+            shared_pos[tid] = r[idx]
+            shared_α[tid] = alpha_lst[idx]
             sync_threads()
 
             @inbounds for j in 1:blockDim().x
-                dx  = pos[1] - shared[j][1]
-                dy  = pos[2] - shared[j][2]
+                dx  = pos[1] - shared_pos[j][1]
+                dy  = pos[2] - shared_pos[j][2]
                 dx = ifelse(abs(dx) > periodicity[1] / 2, dx - sign(dx) * periodicity[1] ,dx)
                 dy = ifelse(abs(dy) > periodicity[2] / 2, dy - sign(dy) * periodicity[2] ,dy)
                 dr² = dx*dx + dy*dy
                 dist  = sqrt(dr²)
+                α_mean = 0.5f0*(α + shared_α[j])
                 if 0.0f0 < dist < cut_off
                     frc, ep = harm_rep2D(dx,dy,dist, ϵ, cut_off)
                     acc = acc .+ frc
+                    ept = ep / α_mean
+                    et = et + ept
                     epot = epot + ep
                 end
             end
@@ -67,25 +74,30 @@ function forces_kernel!(r::CuDeviceVector{T}, f::CuDeviceVector{T},Eₚ₀::CuDe
         end
         f[gtid] = acc
         Eₚ₀[gtid] = epot
+        ET₀[gtid] = et
         return nothing
     elseif dim == 3
         for i in 1:blockDim().x:Npart
             idx = tile * blockDim().x + tid
-            shared[tid] = r[idx]
+            shared_pos[tid] = r[idx]
+            shared_α[tid] = alpha_lst[idx]
             sync_threads()
 
             @inbounds for j in 1:blockDim().x
-                dx  = pos[1] - shared[j][1]
-                dy  = pos[2] - shared[j][2]
-                dz  = pos[3] - shared[j][3]
+                dx  = pos[1] - shared_pos[j][1]
+                dy  = pos[2] - shared_pos[j][2]
+                dz  = pos[3] - shared_pos[j][3]
                 dx = ifelse(abs(dx) > periodicity[1] / 2, dx - sign(dx) * periodicity[1] ,dx)
                 dy = ifelse(abs(dy) > periodicity[2] / 2, dy - sign(dy) * periodicity[2] ,dy)
                 dz = ifelse(abs(dz) > periodicity[3] / 2, dz - sign(dz) * periodicity[3] ,dz)
                 dr² = dx*dx + dy*dy + dz*dz
                 dist  = sqrt(dr²)
+                α_mean = 0.5f0 *(α + shared_α[j])
                 if 0.0f0 < dist < cut_off
                     frc, ep = harm_rep3D(dx,dy,dz,dist, ϵ, cut_off)
                     acc = acc .+ frc
+                    ept = ep / α_mean
+                    et = et + ept
                     epot = epot + ep
                 end
             end
@@ -94,6 +106,7 @@ function forces_kernel!(r::CuDeviceVector{T}, f::CuDeviceVector{T},Eₚ₀::CuDe
         end
         f[gtid] = acc
         Eₚ₀[gtid] = epot
+        ET₀[gtid] = et
         return nothing
     end
     return nothing
