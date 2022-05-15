@@ -47,7 +47,7 @@ function fcc_lattice(L_box::T,lattice_const::T,M_x::Int64, M_y::Int64, M_z::Int6
     in a cubic box with the given dimensions"""
     # initialize coordinates: time 4 since there are 4 atoms in each unit cell
     positions = Array{SVector{3,Float32}, 1}()
-    #pos_num = 0
+    lattice_const * 1.02f0
     r_x = lattice_const*M_x/2
     r_y = lattice_const*M_y/2
     r_z = lattice_const*M_z/2
