@@ -95,12 +95,16 @@ function run_simulation3D!(dim::Int, Npart::Int, freq::Int, r₀::CuVector{SVect
 	Eₚ₀ = zero(Eₚ₀)
 	ET₀ = zero(ET₀)
     for _ in 1:freq
+		r_prev = r₀
 		f = f₀
         fR₀ = noise3D(Npart)
         update_positions!(r₀, v₀, f₀, fR₀, c₁₀, c₂₀, c₃₀)
 		PBC!(r₀,periodicity)
+		r_next = r₀
 		f = forces!(r₀, f, Eₚ₀, alpha_lst,ET₀, periodicity, ϵ, cut_off)
-		update_velocities!(v₀, f₀, f, fR₀, dQ₀, Eₖ₀, c₁₀, c₂₀, c₃₀)
+		dr = r_next .- r_prev
+		PBC!(dr,periodicity)
+		update_velocities!(dr, v₀, f₀, f, fR₀, dQ₀, Eₖ₀, c₁₀, c₂₀, c₃₀)
 		f₀ = f
 		dQ = dQ .+ dQ₀ ./freq
 		Eₖ = Eₖ .+ Eₖ₀ ./freq
