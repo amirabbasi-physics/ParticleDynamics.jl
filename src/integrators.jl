@@ -21,30 +21,15 @@ function update_positions!(r::CuVector{SVector{N,T}}, v::CuVector{SVector{N,T}},
     return nothing
 end
 
-function update_positions!(r::CuVector{SVector{N,T}}, v::CuVector{SVector{N,T}},c2s::CuVector{T}; nthreads=128) where {N,T}
-    Npart = UInt32(length(r))
-    nblocks = Npart ÷ nthreads
-    CUDA.@sync @cuda blocks=nblocks threads=nthreads update_positions_kernel!(r, v, c2s)
-    return nothing
-end
-
-function update_velocities!(v::CuVector{SVector{N,T}}, f₀::CuVector{SVector{N,T}},
+function update_velocities!(dr::CuVector{SVector{N,T}},v::CuVector{SVector{N,T}}, f₀::CuVector{SVector{N,T}},
     f::CuVector{SVector{N,T}},fR::CuVector{SVector{N,T}},dq::CuVector{T},eₖ::CuVector{T},c1s::CuVector{T},c2s::CuVector{T},c3s::CuVector{T};
      nthreads=128) where {N,T}
     Npart = UInt32(length(v))
     nblocks = Npart ÷ nthreads
-    CUDA.@sync @cuda blocks=nblocks threads=nthreads update_velocities_kernel!(v, f₀, f, fR, dq, eₖ, c1s, c2s, c3s)
+    CUDA.@sync @cuda blocks=nblocks threads=nthreads update_velocities_kernel!(dr, v, f₀, f, fR, dq, eₖ, c1s, c2s, c3s)
     return nothing
 end
 
-function update_velocities!(v::CuVector{SVector{N,T}}, f₀::CuVector{SVector{N,T}},
-    fR::CuVector{SVector{N,T}},dq::CuVector{T},eₖ::CuVector{T},c1s::CuVector{T},c2s::CuVector{T},c3s::CuVector{T};
-     nthreads=128) where {N,T}
-    Npart = UInt32(length(v))
-    nblocks = Npart ÷ nthreads
-    CUDA.@sync @cuda blocks=nblocks threads=nthreads update_velocities_kernel!(v, f₀, fR, dq, eₖ, c1s, c2s, c3s)
-    return nothing
-end
 
 export update_positions_kernel!
 export update_velocities_kernel!
@@ -85,7 +70,7 @@ function update_positions_kernel!(r::CuDeviceVector{SVector{N,T}}, v::CuDeviceVe
      return nothing
 end
 
-function update_velocities_kernel!(v::CuDeviceVector{SVector{N,T}},
+function update_velocities_kernel!(dr::CuDeviceVector{SVector{N,T}},v::CuDeviceVector{SVector{N,T}},
     f₀::CuDeviceVector{SVector{N,T}}, f::CuDeviceVector{SVector{N,T}}, noise::CuDeviceVector{SVector{N,T}},
     dq::CuDeviceVector{T}, eₖ::CuDeviceVector{T}, c1s::CuDeviceVector{T}, c2s::CuDeviceVector{T},
      c3s::CuDeviceVector{T}) where {N,T}
@@ -95,6 +80,7 @@ function update_velocities_kernel!(v::CuDeviceVector{SVector{N,T}},
 
      @inbounds begin
          if gtid <= Npart
+             d_pos = dr[gtid]
              vel_prev = v[gtid]
              frc_prev = f₀[gtid]
              frc = f[gtid]
@@ -111,7 +97,7 @@ function update_velocities_kernel!(v::CuDeviceVector{SVector{N,T}},
              bb = 1.0f0 / (1.0f0 + 0.50f0*a)
              vel_next = aa .* vel_prev + (0.5f0*a*aa) .* frc_prev + (0.5f0*a) .* frc + (bb*a) .* rnd_force
 
-             dQ = -dot(vel_next ,vel_next) .+ 0.5f0 * dot((vel_prev + vel_next), rnd_force)
+             dQ = -0.50f0*dot((vel_prev + vel_next) , d_pos) .+ dot(d_pos, rnd_force)
              Eₖ = 0.5f0*dot(vel_next,vel_next)/c1
          end
          sync_threads()
@@ -217,6 +203,21 @@ end
 #####################################################################################
 #               Positions and velocities update for leap-frog algorithm             #
 #####################################################################################
+function update_positions!(r::CuVector{SVector{N,T}}, v::CuVector{SVector{N,T}},c2s::CuVector{T}; nthreads=128) where {N,T}
+    Npart = UInt32(length(r))
+    nblocks = Npart ÷ nthreads
+    CUDA.@sync @cuda blocks=nblocks threads=nthreads update_positions_kernel!(r, v, c2s)
+    return nothing
+end
+
+function update_velocities!(v::CuVector{SVector{N,T}}, f₀::CuVector{SVector{N,T}},
+    fR::CuVector{SVector{N,T}},dq::CuVector{T},eₖ::CuVector{T},c1s::CuVector{T},c2s::CuVector{T},c3s::CuVector{T};
+     nthreads=128) where {N,T}
+    Npart = UInt32(length(v))
+    nblocks = Npart ÷ nthreads
+    CUDA.@sync @cuda blocks=nblocks threads=nthreads update_velocities_kernel!(v, f₀, fR, dq, eₖ, c1s, c2s, c3s)
+    return nothing
+end
 function update_positions_kernel!(r::CuDeviceVector{SVector{N,T}}, v::CuDeviceVector{SVector{N,T}},c2s::CuDeviceVector{T} ) where {N,T}
      Npart = length(r)
      tid = threadIdx().x
