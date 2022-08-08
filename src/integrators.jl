@@ -98,7 +98,7 @@ function update_velocities_kernel!(dr::CuDeviceVector{SVector{N,T}},v::CuDeviceV
              a = c1*c2
              aa = (1.0f0 - 0.50f0*a) / (1.0f0 + 0.50f0*a)
              bb = 1.0f0 / (1.0f0 + 0.50f0*a)
-             v_next = aa .* v_prev + (0.0f0*0.5f0*a*aa) .* frc_prev + (0.0f0*0.5f0*a) .* frc + (bb*a) .* rnd_force
+             v_next = aa .* v_prev + (0.5f0*a*aa) .* frc_prev + (0.5f0*a) .* frc + (bb*a) .* rnd_force
 
              injected_energy = 0.50f0 * dot((v_prev .+ v_next), rnd_force)
              dissipated_energy = -0.5f0 *dot((v_prev .+ v_next) ,v_prev) #works nicely!
