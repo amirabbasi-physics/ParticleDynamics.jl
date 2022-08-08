@@ -84,7 +84,7 @@ function update_velocities_kernel!(dr::CuDeviceVector{SVector{N,T}},v::CuDeviceV
      @inbounds begin
          if gtid <= Npart
              d_pos = dr[gtid]
-             vel_prev = v[gtid]
+             v_prev = v[gtid]
              frc_prev = f₀[gtid]
              frc = f[gtid]
              rnd = noise[gtid]
@@ -98,17 +98,17 @@ function update_velocities_kernel!(dr::CuDeviceVector{SVector{N,T}},v::CuDeviceV
              a = c1*c2
              aa = (1.0f0 - 0.50f0*a) / (1.0f0 + 0.50f0*a)
              bb = 1.0f0 / (1.0f0 + 0.50f0*a)
-             vel_next = aa .* vel_prev + (0.5f0*a*aa) .* frc_prev + (0.5f0*a) .* frc + (bb*a) .* rnd_force
+             v_next = aa .* v_prev + (0.0f0*0.5f0*a*aa) .* frc_prev + (0.0f0*0.5f0*a) .* frc + (bb*a) .* rnd_force
 
-             injected_energy = 0.5 * dot((vel_prev .+ vel_next), rnd_force)
-             dissipated_energy = -0.5*dot((vel_prev+v_next) ,vel_prev) #works nicely!
+             injected_energy = 0.50f0 * dot((v_prev .+ v_next), rnd_force)
+             dissipated_energy = -0.5f0 *dot((v_prev .+ v_next) ,v_prev) #works nicely!
 
              dQ = injected_energy + dissipated_energy
-             Eₖ = 0.5f0*dot(vel_next,vel_next)/c1
+             Eₖ = 0.5f0*dot(v_next,v_next)/c1
          end
          sync_threads()
          if gtid <= Npart
-             v[gtid]  = vel_next
+             v[gtid]  = v_next
              dq[gtid] = dQ
              eₖ[gtid] = Eₖ
          end
@@ -142,23 +142,23 @@ function Langevin_kernel!(r::CuDeviceVector{SVector{N,T}}, v::CuDeviceVector{SVe
              Eₖ   = eₖ[gtid]
 
              rnd_force = c3 .* rnd
-             vel_prev = vel
+             v_prev = vel
 
              # Euler-Maruyama method
              a = c1*c2
-             vel_next = (1.0f0-a).* vel_prev .+ a .* frc .+ a .* rnd_force
-             pos = pos .+ c2 .* vel_next
+             v_next = (1.0f0-a).* v_prev .+ (0.0f0*a) .* frc .+ a .* rnd_force
+             pos = pos .+ c2 .* v_next
 
-             injected_energy = 0.5 * dot((vel_prev .+ vel_next), rnd_force)
-             dissipated_energy = -0.5*dot((vel_prev+v_next) ,vel_prev) #works nicely!
+             injected_energy   = 0.50f0  * dot((v_prev .+ v_next), rnd_force)
+             dissipated_energy = -0.50f0 * dot((v_prev .+ v_next) ,v_prev) #works nicely!
 
              dQ = injected_energy + dissipated_energy
-             Eₖ = 0.50f0*dot(vel_next,vel_next)/c1
+             Eₖ = 0.50f0*dot(v_next,v_next)/c1
          end
          sync_threads()
          if gtid <= Npart
              r[gtid] = pos
-             v[gtid] = vel_next
+             v[gtid] = v_next
              noise[gtid] = rnd_force
              dq[gtid] = dQ
              eₖ[gtid] = Eₖ
@@ -258,7 +258,7 @@ function update_velocities_kernel!(v::CuDeviceVector{SVector{N,T}},
 
      @inbounds begin
          if gtid <= Npart
-             vel_prev = v[gtid]
+             v_prev = v[gtid]
              frc = f[gtid]
              rnd = noise[gtid]
              c1  = c1s[gtid]
@@ -270,17 +270,17 @@ function update_velocities_kernel!(v::CuDeviceVector{SVector{N,T}},
              rnd_force = c3 .* rnd
              a = c1*c2
 
-             vel_next = (1.0f0-a) .* vel_prev + a .* frc + a .* rnd_force
+             v_next = (1.0f0-a) .* v_prev + a .* frc + a .* rnd_force
 
-             injected_energy = 0.5 * dot((vel_prev .+ vel_next), rnd_force)
-             dissipated_energy = -0.5*dot((vel_prev+v_next) ,vel_prev) #works nicely!
+             injected_energy   = 0.50f0 * dot((v_prev .+ v_next), rnd_force)
+             dissipated_energy = -0.50f0*dot((v_prev .+ v_next) ,v_prev) #works nicely!
 
              dQ = injected_energy + dissipated_energy
-             Eₖ = 0.5f0*dot(vel_next,vel_next)/c1
+             Eₖ = 0.5f0*dot(v_next,v_next)/c1
          end
          sync_threads()
          if gtid <= Npart
-             v[gtid]  = vel_next
+             v[gtid]  = v_next
              dq[gtid] = dQ
              eₖ[gtid] = Eₖ
          end
