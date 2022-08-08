@@ -100,7 +100,10 @@ function update_velocities_kernel!(dr::CuDeviceVector{SVector{N,T}},v::CuDeviceV
              bb = 1.0f0 / (1.0f0 + 0.50f0*a)
              vel_next = aa .* vel_prev + (0.5f0*a*aa) .* frc_prev + (0.5f0*a) .* frc + (bb*a) .* rnd_force
 
-             dQ = -0.50 * dot((vel_prev .+ vel_next) ,vel_prev) + 0.50 * dot((vel_prev .+ vel_next), rnd_force)
+             injected_energy = 0.5 * dot((vel_prev .+ vel_next), rnd_force)
+             dissipated_energy = -0.5*dot((vel_prev+v_next) ,vel_prev) #works nicely!
+
+             dQ = injected_energy + dissipated_energy
              Eₖ = 0.5f0*dot(vel_next,vel_next)/c1
          end
          sync_threads()
@@ -146,7 +149,10 @@ function Langevin_kernel!(r::CuDeviceVector{SVector{N,T}}, v::CuDeviceVector{SVe
              vel_next = (1.0f0-a).* vel_prev .+ a .* frc .+ a .* rnd_force
              pos = pos .+ c2 .* vel_next
 
-             dQ = -0.50f0 * dot((vel_prev+vel_next) ,vel_prev) .+ 0.50f0 * dot((vel_prev .+ vel_next), rnd_force)
+             injected_energy = 0.5 * dot((vel_prev .+ vel_next), rnd_force)
+             dissipated_energy = -0.5*dot((vel_prev+v_next) ,vel_prev) #works nicely!
+
+             dQ = injected_energy + dissipated_energy
              Eₖ = 0.50f0*dot(vel_next,vel_next)/c1
          end
          sync_threads()
@@ -266,7 +272,10 @@ function update_velocities_kernel!(v::CuDeviceVector{SVector{N,T}},
 
              vel_next = (1.0f0-a) .* vel_prev + a .* frc + a .* rnd_force
 
-             dQ = -0.50f0 * dot((vel_prev+vel_next) ,vel_prev) .+ 0.5f0 * dot((vel_prev + vel_next), rnd_force)
+             injected_energy = 0.5 * dot((vel_prev .+ vel_next), rnd_force)
+             dissipated_energy = -0.5*dot((vel_prev+v_next) ,vel_prev) #works nicely!
+
+             dQ = injected_energy + dissipated_energy
              Eₖ = 0.5f0*dot(vel_next,vel_next)/c1
          end
          sync_threads()
