@@ -3,8 +3,20 @@ using DelimitedFiles
 export write_xyz
 export write_log
 
-function write_xyz(ofname::String, Npart::Int, c2::T, alpha_lst::Vector{T},σ::T, L::T, step::Int, dim::Int, part_type::Vector{String},r::Vector{SVector{N,T}},
-    v::Vector{SVector{N,T}}, dQ::Vector{T}) where {N,T}
+function write_xyz(
+    ofname::String,
+    Npart::Int,
+    c2::T,
+    alpha_lst::Vector{T},
+    σ::T,
+    L::T,
+    step::Int,
+    dim::Int,
+    part_type::Vector{String},
+    r::Vector{SVector{N,T}},
+    v::Vector{SVector{N,T}},
+    dQ::Vector{T}) where {N,T}
+
     out_file = ofname*".xyz"
     sdot = -dQ ./(c2 .* alpha_lst)
     snapshot = [vcat(part_type[i],σ/2,r[i],v[i],sdot[i]) for i = 1:Npart]
@@ -34,23 +46,29 @@ function write_xyz(ofname::String, Npart::Int, c2::T, alpha_lst::Vector{T},σ::T
 end
 
 
-function write_log(ofname::String, step::Int, c2::T, alpha_lst::Vector{T}, Eₖ::Vector{T}, Eₚ::Vector{T}, ET::Vector{T}, dQ::Vector{T}) where T
+function write_log(
+    ofname::String,
+    step::Int,
+    c2::T,
+    alpha_lst::Vector{T},
+    Eₖ::Vector{T},
+    Eₚ::Vector{T},
+    dQ::Vector{T}) where T
+
     out_file = ofname*".log"
     sdot = Float64(sum(sort(dQ ./ (c2 .* alpha_lst),by =abs)))
-    Ekin = sum(Eₖ)
-    Epot = sum(Eₚ)
-    E_T = sum(ET)/c2
-    free_ent = sdot - E_T
+    Ekin = Float64(sum(sort(Eₖ, by = abs)))
+    Epot = Float64(sum(sort(Eₚ, by = abs)))
 
-    data = hcat(step, Ekin, Epot, E_T, sdot, free_ent)
+    data = hcat(step, Ekin, Epot, sdot)
     if step == 0
        open(out_file,"w") do file
-            println(file,"Time  E_kin  E_pot  U/T EPR Free_ent")
+            println(file,"Time  E_kin  E_pot EPR")
             #writedlm(file,data)
         end
     else
         open(out_file,"a+") do file
-            println("Time = ",data[1], " | E_kin = ", data[2], " | E_pot = " ,data[3], " | ̇U/T= ", data[4], " | EPR = ", data[5], " | Free Entropy = ", data[6])
+            println("Time = ",data[1], " | E_kin = ", data[2], " | E_pot = " ,data[3], " | EPR = ", data[4])
             writedlm(file,data)
         end
     end
