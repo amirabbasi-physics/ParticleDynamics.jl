@@ -50,7 +50,7 @@ function simulation!(
 	Ekin = zero(Eₖ₀)
 	Epot = zero(Eₚ₀)
     for _ in 1:freq
-		f = zero(f₀)
+		f = f₀
 		dQ₀ = zero(dQ₀)
 		Ekin = zero(Ekin)
 		Epot = zero(Epot)
