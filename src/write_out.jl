@@ -6,7 +6,7 @@ export write_log
 function write_xyz(ofname::String, Npart::Int, c2::T, alpha_lst::Vector{T},σ::T, L::T, step::Int, dim::Int, part_type::Vector{String},r::Vector{SVector{N,T}},
     v::Vector{SVector{N,T}}, dQ::Vector{T}) where {N,T}
     out_file = ofname*".xyz"
-    sdot = -dQ ./(alpha_lst)
+    sdot = -dQ ./(c2 .* alpha_lst)
     snapshot = [vcat(part_type[i],σ/2,r[i],v[i],sdot[i]) for i = 1:Npart]
     if step == 0
        open(out_file,"w") do file
@@ -36,7 +36,7 @@ end
 
 function write_log(ofname::String, step::Int, c2::T, alpha_lst::Vector{T}, Eₖ::Vector{T}, Eₚ::Vector{T}, ET::Vector{T}, dQ::Vector{T}) where T
     out_file = ofname*".log"
-    sdot = -Float32(sum(dQ ./ alpha_lst))
+    sdot = Float64(sum(sort(dQ ./ (c2 .* alpha_lst),by =abs)))
     Ekin = sum(Eₖ)
     Epot = sum(Eₚ)
     E_T = sum(ET)/c2

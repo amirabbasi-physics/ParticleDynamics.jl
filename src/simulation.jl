@@ -51,7 +51,7 @@ function simulation!(
 	Ekin = zero(Eₖ₀)
 	Epot = zero(Eₚ₀)
     for _ in 1:freq
-		f = f₀
+		f = zero(f₀)
         fR₀ = noise3D(Npart)
         update_positions!(r₀, v₀, f₀, fR₀, c₁₀, c₂₀, c₃₀)
 		PBC!(r₀,periodicity)
