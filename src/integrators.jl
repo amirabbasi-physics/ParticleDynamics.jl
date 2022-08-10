@@ -214,7 +214,7 @@ export update_parts_BD!
 function update_parts_LD!(r::CuVector{SVector{N,T}}, v::CuVector{SVector{N,T}}, f::CuVector{SVector{N,T}},
     fR::CuVector{SVector{N,T}},dq::CuVector{T},eₖ::CuVector{T},c1s::CuVector{T},c2s::CuVector{T},c3s::CuVector{T}; nthreads=128) where {N,T}
     Npart = UInt32(length(r))
-    nblocks = Npart ÷ nthreads
+    blocks=ceil(Int, Npart/nthreads)
     CUDA.@sync @cuda blocks=nblocks threads=nthreads Langevin_kernel!(r, v, f, fR, dq, eₖ, c1s, c2s, c3s)
     return nothing
 end
