@@ -1,12 +1,3 @@
-export forces!
-
-function forces!(r::CuVector{SVector{N,T}}, f₀::CuVector{SVector{N,T}}, Eₚ₀::CuVector{T},alpha_lst::CuVector{T},ET₀::CuVector{T},periodicity::SVector{N,T}, ϵ::T, cut_off::T;nthreads=128) where {N,T}
-    Npart = length(r)
-    nblocks = Npart ÷ nthreads
-    CUDA.@sync @cuda blocks=nblocks threads=nthreads forces_kernel!(r, f₀, Eₚ₀, alpha_lst, ET₀, cut_off, periodicity, ϵ)
-    return f₀
-end
-
 export harm_rep2D
 export harm_rep3D
 
@@ -29,28 +20,204 @@ end
     return SVector{3,T}(f_x,f_y,f_z) , e_int
 end
 
+
+export forces!
+
+function forces!(
+    r::CuVector{SVector{N,T}},
+    f::CuVector{SVector{N,T}},
+    Epot::CuVector{T},
+    periodicity::SVector{N,T},
+    ϵ::T,
+    cut_off::T; nthreads=128) where {N,T}
+
+    Npart = length(r)
+    nblocks = ceil(Int, Npart/nthreads)
+    CUDA.@sync @cuda blocks=nblocks threads=nthreads forces_kernel!(r, f, Epot, cut_off, periodicity, ϵ, Val(nthreads))
+    return f, Epot
+end
+
 export forces_kernel!
 
-function forces_kernel!(r::CuDeviceVector{T}, f::CuDeviceVector{T},Eₚ₀::CuDeviceVector{Float32},
-     alpha_lst::CuDeviceVector{Float32},ET₀::CuDeviceVector{Float32},cut_off::Float32, periodicity::T, ϵ::Float32) where {T}
+function forces_kernel!(
+    r::CuDeviceVector{T},
+    f::CuDeviceVector{T},
+    Epot::CuDeviceVector{Float32},
+    cut_off::Float32,
+    periodicity::T,
+    ϵ::Float32,::Val{TH}) where {T,TH}
+
+    Npart = length(r)
+    tid = threadIdx().x
+    gtid = (blockIdx().x - 1) * blockDim().x + threadIdx().x  # global thread id
+
+    shared_pos = CuStaticSharedArray(T, TH)
+    full_blocks = Npart ÷ blockDim().x
+    rest = Npart % blockDim().x
+
+    dim = length(periodicity)
+    tile = 0
+    acc = zero(T)
+    epot= 0.0f0
+
+    if dim == 2
+        @inbounds begin
+            if gtid <= Npart
+                pos = r[gtid]
+            else
+                pos = zero(T)
+            end
+            acc = zero(T)
+            epot= 0.0f0
+            for i in 1:full_blocks
+                idx = tile * blockDim().x + tid
+                shared_pos[tid] = r[idx]
+                sync_threads()
+                @inbounds for j in 1:blockDim().x
+                    dx  = pos[1] - shared_pos[j][1]
+                    dy  = pos[2] - shared_pos[j][2]
+                    dx = ifelse(abs(dx) > periodicity[1] / 2, dx - sign(dx) * periodicity[1] ,dx)
+                    dy = ifelse(abs(dy) > periodicity[2] / 2, dy - sign(dy) * periodicity[2] ,dy)
+                    dr² = dx*dx + dy*dy
+                    dist  = sqrt(dr²)
+                    if 0.0f0 < dist < cut_off
+                        frc, ep = harm_rep2D(dx,dy,dist, ϵ, cut_off)
+                        acc = acc .+ frc
+                        epot = epot + ep
+                    end
+                end
+                sync_threads()
+                tile += 1
+            end
+            if tid <= rest
+                idx = tile * blockDim().x + tid
+                shared_pos[tid] = r[idx]
+            end
+            sync_threads()
+            @inbounds for j in 1:rest
+                dx  = pos[1] - shared_pos[j][1]
+                dy  = pos[2] - shared_pos[j][2]
+                dx = ifelse(abs(dx) > periodicity[1] / 2, dx - sign(dx) * periodicity[1] ,dx)
+                dy = ifelse(abs(dy) > periodicity[2] / 2, dy - sign(dy) * periodicity[2] ,dy)
+                dr² = dx*dx + dy*dy
+                dist  = sqrt(dr²)
+                if 0.0f0 < dist < cut_off
+                    frc, ep = harm_rep2D(dx,dy,dist, ϵ, cut_off)
+                    acc = acc .+ frc
+                    epot = epot + ep
+                end
+            end
+            sync_threads()
+            if gtid <= Npart
+                f[gtid] = acc
+                Epot[gtid] = epot
+            end
+        end
+        return nothing
+    elseif dim == 3
+        @inbounds begin
+            if gtid <= Npart
+                pos = r[gtid]
+            else
+                pos = zero(T)
+            end
+            acc = zero(T)
+            epot= 0.0f0
+            for i in 1:full_blocks
+                idx = tile * blockDim().x + tid
+                shared_pos[tid] = r[idx]
+                sync_threads()
+                @inbounds for j in 1:blockDim().x
+                    dx  = pos[1] - shared_pos[j][1]
+                    dy  = pos[2] - shared_pos[j][2]
+                    dz  = pos[3] - shared_pos[j][3]
+                    dx = ifelse(abs(dx) > periodicity[1] / 2, dx - sign(dx) * periodicity[1] ,dx)
+                    dy = ifelse(abs(dy) > periodicity[2] / 2, dy - sign(dy) * periodicity[2] ,dy)
+                    dz = ifelse(abs(dz) > periodicity[3] / 2, dz - sign(dz) * periodicity[3] ,dz)
+                    dr² = dx*dx + dy*dy + dz*dz
+                    dist  = sqrt(dr²)
+                    if 0.0f0 < dist < cut_off
+                        frc, ep = harm_rep3D(dx,dy,dz,dist, ϵ, cut_off)
+                        acc = acc .+ frc
+                        epot = epot + ep
+                    end
+                end
+                sync_threads()
+                tile += 1
+            end
+            if tid <= rest
+                idx = tile * blockDim().x + tid
+                shared_pos[tid] = r[idx]
+            end
+            sync_threads()
+            @inbounds for j in 1:rest
+                dx  = pos[1] - shared_pos[j][1]
+                dy  = pos[2] - shared_pos[j][2]
+                dz  = pos[3] - shared_pos[j][3]
+                dx = ifelse(abs(dx) > periodicity[1] / 2, dx - sign(dx) * periodicity[1] ,dx)
+                dy = ifelse(abs(dy) > periodicity[2] / 2, dy - sign(dy) * periodicity[2] ,dy)
+                dz = ifelse(abs(dz) > periodicity[3] / 2, dz - sign(dz) * periodicity[3] ,dz)
+                dr² = dx*dx + dy*dy + dz*dz
+                dist  = sqrt(dr²)
+                if 0.0f0 < dist < cut_off
+                    frc, ep = harm_rep3D(dx,dy,dz,dist, ϵ, cut_off)
+                    acc = acc .+ frc
+                    epot = epot + ep
+                end
+            end
+            sync_threads()
+            if gtid <= Npart
+                f[gtid] = acc
+                Epot[gtid] = epot
+            end
+        end
+        return nothing
+    end
+end
+
+
+
+"""
+# This is not flexible kernel. It just accepts number of particles those are multiple of 128 
+export forces!
+
+function forces!(
+    r::CuVector{SVector{N,T}},
+    f::CuVector{SVector{N,T}},
+    Epot::CuVector{T},
+    periodicity::SVector{N,T},
+    ϵ::T,
+    cut_off::T;nthreads=128) where {N,T}
+
+    Npart = length(r)
+    nblocks = Npart ÷ nthreads
+    CUDA.@sync @cuda blocks=nblocks threads=nthreads forces_kernel!(r, f, Epot, cut_off, periodicity, ϵ)
+    return f, Epot
+end
+
+export forces_kernel!
+
+function forces_kernel!(
+    r::CuDeviceVector{T},
+    f::CuDeviceVector{T},
+    Eₚ₀::CuDeviceVector{Float32},
+    cut_off::Float32,
+    periodicity::T,
+    ϵ::Float32) where {T}
+
     Npart = length(r)
     gtid = (blockIdx().x - 1) * blockDim().x + threadIdx().x  # global thread id
     tid = threadIdx().x
     shared_pos = CuStaticSharedArray(T, 128)
-    shared_α   = CuStaticSharedArray(Float32, 128)
     dim = length(periodicity)
     tile = 0
     pos = r[gtid]
-    α   = alpha_lst[gtid]
     acc = zero(T)
     epot= 0.0f0
-    et = 0.0f0
-
     if dim == 2
         for i in 1:blockDim().x:Npart
             idx = tile * blockDim().x + tid
             shared_pos[tid] = r[idx]
-            shared_α[tid] = alpha_lst[idx]
             sync_threads()
 
             @inbounds for j in 1:blockDim().x
@@ -60,12 +227,9 @@ function forces_kernel!(r::CuDeviceVector{T}, f::CuDeviceVector{T},Eₚ₀::CuDe
                 dy = ifelse(abs(dy) > periodicity[2] / 2, dy - sign(dy) * periodicity[2] ,dy)
                 dr² = dx*dx + dy*dy
                 dist  = sqrt(dr²)
-                α_mean = 0.5f0*(α + shared_α[j])
                 if 0.0f0 < dist < cut_off
                     frc, ep = harm_rep2D(dx,dy,dist, ϵ, cut_off)
                     acc = acc .+ frc
-                    ept = ep / α_mean
-                    et = et + ept
                     epot = epot + ep
                 end
             end
@@ -74,15 +238,12 @@ function forces_kernel!(r::CuDeviceVector{T}, f::CuDeviceVector{T},Eₚ₀::CuDe
         end
         f[gtid] = acc
         Eₚ₀[gtid] = epot
-        ET₀[gtid] = et
         return nothing
     elseif dim == 3
         for i in 1:blockDim().x:Npart
             idx = tile * blockDim().x + tid
             shared_pos[tid] = r[idx]
-            shared_α[tid] = alpha_lst[idx]
             sync_threads()
-
             @inbounds for j in 1:blockDim().x
                 dx  = pos[1] - shared_pos[j][1]
                 dy  = pos[2] - shared_pos[j][2]
@@ -92,12 +253,9 @@ function forces_kernel!(r::CuDeviceVector{T}, f::CuDeviceVector{T},Eₚ₀::CuDe
                 dz = ifelse(abs(dz) > periodicity[3] / 2, dz - sign(dz) * periodicity[3] ,dz)
                 dr² = dx*dx + dy*dy + dz*dz
                 dist  = sqrt(dr²)
-                α_mean = 0.5f0 *(α + shared_α[j])
                 if 0.0f0 < dist < cut_off
                     frc, ep = harm_rep3D(dx,dy,dz,dist, ϵ, cut_off)
                     acc = acc .+ frc
-                    ept = ep / α_mean
-                    et = et + ept
                     epot = epot + ep
                 end
             end
@@ -106,8 +264,7 @@ function forces_kernel!(r::CuDeviceVector{T}, f::CuDeviceVector{T},Eₚ₀::CuDe
         end
         f[gtid] = acc
         Eₚ₀[gtid] = epot
-        ET₀[gtid] = et
         return nothing
     end
-    return nothing
 end
+"""
