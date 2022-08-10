@@ -57,7 +57,7 @@ function simulation!(
         fR₀ = noise3D(Npart)
         update_positions!(r₀, v₀, f₀, fR₀, c₁₀, c₂₀, c₃₀)
 		PBC!(r₀,periodicity)
-		f, Epot = forces!(r₀, f, Epot, periodicity, ϵ, cut_off)
+		#f, Epot = forces!(r₀, f, Epot, periodicity, ϵ, cut_off)
 		update_velocities!(v₀, f₀, f, fR₀, dQ₀, Ekin, c₁₀, c₂₀, c₃₀)
 		f₀ = f
 		dQ = dQ .+ dQ₀ ./freq
