@@ -43,7 +43,6 @@ function update_positions_kernel!(
 
      @inbounds begin
          if gtid <= Npart
-             d_pos = dr[gtid]
              pos = r[gtid]
              vel = v[gtid]
              frc = f[gtid]
@@ -62,7 +61,6 @@ function update_positions_kernel!(
          sync_threads()
          if gtid <= Npart
              r[gtid] = pos
-             dr[gtid] = d_pos
          end
         sync_threads()
      end
