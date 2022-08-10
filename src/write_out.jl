@@ -56,7 +56,7 @@ function write_log(
     dQ::Vector{T}) where T
 
     out_file = ofname*".log"
-    sdot = Float64(sum(sort(dQ ./ (c2 .* alpha_lst),by =abs)))
+    sdot = Float64(sum(sort(dQ ./ alpha_lst , by =abs)))
     Ekin = Float64(sum(sort(Eₖ, by = abs)))
     Epot = Float64(sum(sort(Eₚ, by = abs)))
 
