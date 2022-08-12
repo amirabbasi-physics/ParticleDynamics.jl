@@ -19,6 +19,7 @@ function run_sim(;
     num_runs::Int,
     nsteps::Int,
     Npart::Int,
+    ptypes::Vector{String},
     dim::Int,
     ρ::Float32,
     fraction::Float32,
@@ -46,7 +47,7 @@ function run_sim(;
     γ		= friction(R,η)
 
     α       = [α₁, α₂]
-    ptypes  = ["H","He"]
+
     #interaction parameters
     cut_off = σ
     # Time-scales
@@ -85,9 +86,13 @@ function run_sim(;
         part_type = Vector{String}(undef,Npart)
         alpha_lst = Vector{Float32}(undef,Npart)
 
-
-        NN = ceil(Int,Npart^(1/3))
-        r0 = simplecubic_lattice(s_x,s_y,s_z,NN,NN,NN)
+        if dim == 2
+            NN = ceil(Int,Npart^(1/2))
+            r0 = rectangular_lattice(s_x,s_y,NN,NN)
+        elseif dim == 3
+            NN = ceil(Int,Npart^(1/3))
+            r0 = simplecubic_lattice(s_x,s_y,s_z,NN,NN,NN)
+        end
         v0 = Array{SVector{dim,Float32}, 1}()
         f0 = Array{SVector{dim,Float32}, 1}()
         fR0 = Array{SVector{dim,Float32}, 1}()
