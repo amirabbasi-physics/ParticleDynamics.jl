@@ -18,7 +18,7 @@ function write_xyz(
     dQ::Vector{T}) where {N,T}
 
     out_file = ofname*".xyz"
-    sdot = -dQ ./(c2 .* alpha_lst)
+    sdot = dQ ./alpha_lst
     snapshot = [vcat(part_type[i],σ/2,r[i],v[i],sdot[i]) for i = 1:Npart]
     if step == 0
        open(out_file,"w") do file
@@ -56,7 +56,7 @@ function write_log(
     dQ::Vector{T}) where T
 
     out_file = ofname*".log"
-    sdot = Float64(sum(sort(dQ ./ alpha_lst , by =abs)))
+    sdot = Float64(sum(sort(dQ ./ alpha_lst , by = abs)))
     Ekin = Float64(sum(sort(Eₖ, by = abs)))
     Epot = Float64(sum(sort(Eₚ, by = abs)))
 
@@ -69,7 +69,7 @@ function write_log(
     else
         open(out_file,"a+") do file
             println("Time = ",data[1], " | E_kin = ", data[2], " | E_pot = " ,data[3], " | EPR = ", data[4])
-            writedlm(file,data)
+            writedlm(file,data, '\t')
         end
     end
 end
