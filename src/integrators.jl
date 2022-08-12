@@ -55,7 +55,7 @@ function update_positions_kernel!(
              a = c1*c2
              bb = 1.0f0 / (1.0f0 + 0.50f0*a)
              bbdt = bb*c2
-             d_pos = bbdt .* vel + (0.0f0*0.50f0*bbdt*a) .* frc + (0.50f0*bbdt*a) .* rnd_force
+             d_pos = bbdt .* vel + (0.50f0*bbdt*a) .* frc + (0.50f0*bbdt*a) .* rnd_force
              pos = pos + d_pos
          end
          sync_threads()
@@ -99,7 +99,7 @@ function update_velocities_kernel!(
              a = c1*c2
              aa = (1.f0 - 0.5f0*a) / (1.f0 + 0.5f0*a)
              bb = 1.f0 / (1.f0 + 0.5f0*a)
-             v_next = aa .* v_prev + (0.0f0*0.5f0*a*aa) .* frc_prev + (0.0f0*0.5f0*a) .* frc + (bb*a) .* rnd_force
+             v_next = aa .* v_prev + (0.5f0*a*aa) .* frc_prev + (0.5f0*a) .* frc + (bb*a) .* rnd_force
 
              injected_energy = 0.5f0 * dot((v_prev .+ v_next), rnd_force)
              dissipated_energy = -0.5f0 *dot((v_prev .+ v_next) ,v_prev) #works nicely!
@@ -119,27 +119,31 @@ function update_velocities_kernel!(
 end
 
 
-"""
 
+
+#####################################################################################
 #####################################################################################
 #               Positions and velocities update for leap-frog algorithm             #
 #####################################################################################
-function update_positions!(r::CuVector{SVector{N,T}}, v::CuVector{SVector{N,T}},c2s::CuVector{T}; nthreads=128) where {N,T}
+#####################################################################################
+
+function update_positions!(
+    r  ::CuVector{SVector{N,T}},
+    v  ::CuVector{SVector{N,T}},
+    c₂ ::CuVector{T};
+    nthreads=128) where {N,T}
+
     Npart = UInt32(length(r))
-    blocks=ceil(Int, Npart/nthreads)
-    CUDA.@sync @cuda blocks=nblocks threads=nthreads update_positions_kernel!(r, v, c2s)
+    nblocks=ceil(Int, Npart/nthreads)
+    CUDA.@sync @cuda blocks=nblocks threads=nthreads update_positions_kernel!(r, v, c₂)
     return nothing
 end
 
-function update_velocities!(v::CuVector{SVector{N,T}}, f₀::CuVector{SVector{N,T}},
-    fR::CuVector{SVector{N,T}},dq::CuVector{T},eₖ::CuVector{T},c1s::CuVector{T},c2s::CuVector{T},c3s::CuVector{T};
-     nthreads=128) where {N,T}
-    Npart = UInt32(length(v))
-    blocks=ceil(Int, Npart/nthreads)
-    CUDA.@sync @cuda blocks=nblocks threads=nthreads update_velocities_kernel!(v, f₀, fR, dq, eₖ, c1s, c2s, c3s)
-    return nothing
-end
-function update_positions_kernel!(r::CuDeviceVector{SVector{N,T}}, v::CuDeviceVector{SVector{N,T}},c2s::CuDeviceVector{T} ) where {N,T}
+function update_positions_kernel!(
+    r::CuDeviceVector{SVector{N,T}},
+    v::CuDeviceVector{SVector{N,T}},
+    c₂::CuDeviceVector{T} ) where {N,T}
+
      Npart = length(r)
      tid = threadIdx().x
      gtid = (blockIdx().x - 1) * blockDim().x + tid  # global thread id
@@ -148,11 +152,12 @@ function update_positions_kernel!(r::CuDeviceVector{SVector{N,T}}, v::CuDeviceVe
          if gtid <= Npart
              pos = r[gtid]
              vel = v[gtid]
-             c2  = c2s[gtid]
+             c2  = c₂[gtid]
 
              pos = pos + (0.50f0*c2) .* vel
          end
          sync_threads()
+
          if gtid <= Npart
              r[gtid] = pos
          end
@@ -161,21 +166,47 @@ function update_positions_kernel!(r::CuDeviceVector{SVector{N,T}}, v::CuDeviceVe
      return nothing
 end
 
-function update_velocities_kernel!(v::CuDeviceVector{SVector{N,T}},
-    f::CuDeviceVector{SVector{N,T}}, noise::CuDeviceVector{SVector{N,T}},dq::CuDeviceVector{T},
-    eₖ::CuDeviceVector{T}, c1s::CuDeviceVector{T}, c2s::CuDeviceVector{T}, c3s::CuDeviceVector{T}) where {N,T}
-     Npart = length(v)
-     tid = threadIdx().x
-     gtid = (blockIdx().x - 1) * blockDim().x + tid  # global thread id
+
+function update_velocities!(
+    v::CuVector{SVector{N,T}},
+    f₀::CuVector{SVector{N,T}},
+    fR::CuVector{SVector{N,T}},
+    dq::CuVector{T},
+    eₖ::CuVector{T},
+    c₁::CuVector{T},
+    c₂::CuVector{T},
+    c₃::CuVector{T};
+     nthreads=128) where {N,T}
+
+    Npart = UInt32(length(v))
+    nblocks=ceil(Int, Npart/nthreads)
+    CUDA.@sync @cuda blocks= nblocks threads=nthreads update_velocities_kernel!(v, f₀, fR, dq, eₖ, c₁, c₂, c₃)
+    return nothing
+end
+
+
+function update_velocities_kernel!(
+    v::CuDeviceVector{SVector{N,T}},
+    f::CuDeviceVector{SVector{N,T}},
+    noise::CuDeviceVector{SVector{N,T}},
+    dq::CuDeviceVector{T},
+    eₖ::CuDeviceVector{T},
+    c₁::CuDeviceVector{T},
+    c₂::CuDeviceVector{T},
+    c₃::CuDeviceVector{T}) where {N,T}
+
+    Npart = length(v)
+    tid = threadIdx().x
+    gtid = (blockIdx().x - 1) * blockDim().x + tid  # global thread id
 
      @inbounds begin
          if gtid <= Npart
              v_prev = v[gtid]
              frc = f[gtid]
              rnd = noise[gtid]
-             c1  = c1s[gtid]
-             c2  = c2s[gtid]
-             c3  = c3s[gtid]
+             c1  = c₁[gtid]
+             c2  = c₂[gtid]
+             c3  = c₃[gtid]
              dQ  = dq[gtid]
              Eₖ   = eₖ[gtid]
 
@@ -200,6 +231,8 @@ function update_velocities_kernel!(v::CuDeviceVector{SVector{N,T}},
      end
      return nothing
 end
+
+
 
 """
 
@@ -267,19 +300,29 @@ function Langevin_kernel!(r::CuDeviceVector{SVector{N,T}}, v::CuDeviceVector{SVe
      return nothing
 end
 
-"""
-function update_parts_BD!(r::CuVector{SVector{N,T}}, v::CuVector{SVector{N,T}},
-     f::CuVector{SVector{N,T}},noises::CuVector{SVector{N,T}},c1s::CuVector{T},
-     c2s::CuVector{T}; nthreads=128) where {N,T}
+
+function update_parts_BD!(
+    r::CuVector{SVector{N,T}},
+    f::CuVector{SVector{N,T}},
+    noise::CuVector{SVector{N,T}},
+    c1s::CuVector{T},
+    c2s::CuVector{T};
+    nthreads=128) where {N,T}
+
     Npart = UInt32(length(r))
-    CUDA.@sync @cuda blocks=ceil(Int, Npart/nthreads) threads=nthreads Brownian!(r, v, f, noises, sdot, c1s, c2s, αs)
+    CUDA.@sync @cuda blocks=ceil(Int, Npart/nthreads) threads=nthreads Brownian!(r, f, noises, sdot, c1s, c2s, αs)
     return nothing
 end
 
 export Brownian!
 
-function Brownian!(r::CuDeviceVector{SVector{N,T}}, v::CuDeviceVector{SVector{N,T}}, f::CuDeviceVector{SVector{N,T}},
-     noise::CuDeviceVector{SVector{N,T}},c1s::CuDeviceVector{T}, c2s::CuDeviceVector{T}) where {N,T}
+function Brownian!(
+    r::CuDeviceVector{SVector{N,T}},
+    f::CuDeviceVector{SVector{N,T}},
+    noise::CuDeviceVector{SVector{N,T}},
+    c1s::CuDeviceVector{T},
+    c2s::CuDeviceVector{T}) where {N,T}
+
      Npart = length(r)
      tid = threadIdx().x
      gtid = (blockIdx().x - 1) * blockDim().x + tid  # global thread id
