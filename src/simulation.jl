@@ -55,10 +55,6 @@ function run_sim(;
     τm      = m/γ
     a²      = (τD/τm)
 
-
-
-    # Its square root must be an Integer
-
     if dim == 2
         L = Float32(sqrt(π*σ^2.0f0*Npart/(4.0f0*ρ)))
         s_x, s_y = Float32(L/sqrt(Npart)), Float32(L/sqrt(Npart))
@@ -103,7 +99,6 @@ function run_sim(;
 
         dQ   = zeros(Float32,Npart)
         Eₖ   = zeros(Float32,Npart)
-        ET   = zeros(Float32,Npart)
         Eₚ   = zeros(Float32,Npart)
 
         num_pl = floor(Int32, Npart * fraction)
