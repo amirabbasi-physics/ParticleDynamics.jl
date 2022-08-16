@@ -96,7 +96,7 @@ function run_sim(;
         c₂   = zeros(Float32,Npart)
         c₃   = zeros(Float32,Npart)
 
-        Δt      = Float32(1.0e-7*Δt₂)
+        Δt      = Float32(1.0e-9*Δt₁)
 
         if integ == "vv"
             c1      = a²
@@ -232,7 +232,7 @@ function run_sim(;
         c₂   = zeros(Float32,Npart)
         c₃   = zeros(Float32,Npart)
 
-        Δt      = Float32(1.0e-7*Δt₂)
+        Δt      = Float32(1.0e-9*Δt₂)
 
         if integ == "vv"
             c1      = a²
@@ -433,10 +433,10 @@ function simulation_vv!(
 		Ekin = zero(Ekin)
 		Epot = zero(Epot)
         fR = noisefun(Npart)
-        update_positions!(r, v, f₀, fR, c₁, c₂, c₃)
+        update_positions!(r, v, f₀, fR, dQ₀, c₁, c₂, c₃)
 		PBC!(r,periodicity)
 		#f, Epot = forces!(r, f, Epot, periodicity, ϵ, cut_off)
-		update_velocities!(v, f₀, f, fR, dQ₀, Ekin, c₁, c₂, c₃)
+		update_velocities!(v, f₀, f, fR, Ekin, c₁, c₂, c₃)
 		f₀ = f
 		dQ .+= dQ₀ ./freq
 		Eₖ .+= Ekin ./freq
