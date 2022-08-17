@@ -560,27 +560,26 @@ end
 
 
 
-"""
-
+#####################################################################################
 #####################################################################################
 ##              Positions and velocities update for Euler-Maruyama algorithm       ##
 #####################################################################################
+#####################################################################################
 
-export update_parts_LD!
-export update_parts_BD!
+export update_parts_EM!
 
 
-function update_parts_LD!(r::CuVector{SVector{N,T}}, v::CuVector{SVector{N,T}}, f::CuVector{SVector{N,T}},
+function update_parts_EM!(r::CuVector{SVector{N,T}}, v::CuVector{SVector{N,T}}, f::CuVector{SVector{N,T}},
     fR::CuVector{SVector{N,T}},dq::CuVector{T},eₖ::CuVector{T},c1s::CuVector{T},c2s::CuVector{T},c3s::CuVector{T}; nthreads=128) where {N,T}
     Npart = UInt32(length(r))
     blocks=ceil(Int, Npart/nthreads)
-    CUDA.@sync @cuda blocks=nblocks threads=nthreads Langevin_kernel!(r, v, f, fR, dq, eₖ, c1s, c2s, c3s)
+    CUDA.@sync @cuda blocks=nblocks threads=nthreads update_parts_EM_kernel!(r, v, f, fR, dq, eₖ, c1s, c2s, c3s)
     return nothing
 end
 
-export Langevin_kernel!
+export update_parts_EM_kernel!
 
-function Langevin_kernel!(r::CuDeviceVector{SVector{N,T}}, v::CuDeviceVector{SVector{N,T}}, f::CuDeviceVector{SVector{N,T}},
+function update_parts_EM_kernel!(r::CuDeviceVector{SVector{N,T}}, v::CuDeviceVector{SVector{N,T}}, f::CuDeviceVector{SVector{N,T}},
      noise::CuDeviceVector{SVector{N,T}},dq::CuDeviceVector{T},eₖ::CuDeviceVector{T}, c1s::CuDeviceVector{T},
      c2s::CuDeviceVector{T}, c3s::CuDeviceVector{T}) where {N,T}
      Npart = length(r)
@@ -602,7 +601,7 @@ function Langevin_kernel!(r::CuDeviceVector{SVector{N,T}}, v::CuDeviceVector{SVe
              rnd_force = c3 .* rnd
              v_prev = vel
 
-             # Euler-Maruyama method
+
              a = c1*c2
              v_next = (1.0f0-a).* v_prev .+ a .* frc .+ a .* rnd_force
              pos = pos .+ c2 .* v_next
@@ -626,7 +625,7 @@ function Langevin_kernel!(r::CuDeviceVector{SVector{N,T}}, v::CuDeviceVector{SVe
      return nothing
 end
 
-
+"""
 function update_parts_BD!(
     r::CuVector{SVector{N,T}},
     f::CuVector{SVector{N,T}},
