@@ -50,17 +50,17 @@ function write_log(
     ofname::String,
     step::Int,
     c2::T,
-    alpha_lst::Vector{T},
+    α::Vector{T},
     Eₖ::Vector{T},
     Eₚ::Vector{T},
     dQ::Vector{T}) where T
 
     out_file = ofname*".log"
-    sdot = Float64(sum(sort(dQ ./ alpha_lst , by = abs)))
-    Ekin = Float64(sum(sort(Eₖ, by = abs)))
-    Epot = Float64(sum(sort(Eₚ, by = abs)))
+    sdot = sum(sort(dQ ./ α, by = abs))
+    sdotpp = sdot/length(α)
+    Ekin = sum(sort(Eₖ,by=abs))
 
-    data = hcat(step, Ekin, Epot, sdot)
+    data = hcat(step, Ekin, sdot, sdotpp)
     if step == 0
        open(out_file,"w") do file
             println(file,"Time  E_kin  E_pot EPR")
@@ -68,7 +68,7 @@ function write_log(
         end
     else
         open(out_file,"a+") do file
-            println("Time = ",data[1], " | E_kin = ", data[2], " | E_pot = " ,data[3], " | EPR = ", data[4])
+            println("Time = ",data[1], " | E_kin = ", data[2], " | EPR = " ,data[3], " | EPR per particle = " ,data[4] )
             writedlm(file,data, '\t')
         end
     end
