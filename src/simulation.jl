@@ -96,7 +96,7 @@ function run_sim(;
         c₂   = zeros(Float32,Npart)
         c₃   = zeros(Float32,Npart)
 
-        Δt      = Float32(1.0e-9*Δt₁)
+        Δt      = Float32(Δt₁*τm)
 
         if integ == "em"
             c1      = a²
@@ -255,7 +255,7 @@ function run_sim(;
         c₂   = zeros(Float32,Npart)
         c₃   = zeros(Float32,Npart)
 
-        Δt      = Float32(1.0e-9*Δt₂)
+        Δt      = Float32(Δt₂*τm)
         if integ == "em"
             c1      = a²
             c2      = Δt
@@ -483,14 +483,13 @@ function simulation_em!(
 	Ekin = zero(Eₖ₀)
 	Epot = zero(Eₚ₀)
     for _ in 1:freq
-		f = f₀
 		dQ₀ = zero(dQ₀)
 		Ekin = zero(Ekin)
 		Epot = zero(Epot)
         fR = noisefun(Npart)
-        update_parts_em!(r, v, f₀, fR, dQ₀,Ekin, c₁, c₂, c₃)
+        f, Epot = forces!(r, f, Epot, periodicity, ϵ, cut_off)
+        update_parts_em!(r, v, f, fR, dQ₀,Ekin, c₁, c₂, c₃)
 		PBC!(r,periodicity)
-		f₀ = f
 		dQ .+= dQ₀ ./freq
 		Eₖ .+= Ekin ./freq
 		Eₚ .+= Epot ./freq
@@ -541,7 +540,7 @@ function simulation_vv!(
         fR = noisefun(Npart)
         update_positions_vv!(r, v, f₀, fR, c₁, c₂, c₃)
 		PBC!(r,periodicity)
-		#f, Epot = forces!(r, f, Epot, periodicity, ϵ, cut_off)
+		f, Epot = forces!(r, f, Epot, periodicity, ϵ, cut_off)
 		update_velocities_vv!(v, f₀, f, fR, dQ₀, Ekin, c₁, c₂, c₃)
 		f₀ = f
 		dQ .+= dQ₀ ./freq
@@ -593,7 +592,7 @@ function simulation_lf!(
         fR = noisefun(Npart)
         update_positions_lf!(r, v, c₂)
 		PBC!(r,periodicity)
-		#f, Epot = forces!(r, f, Epot, periodicity, ϵ, cut_off)
+		f, Epot = forces!(r, f, Epot, periodicity, ϵ, cut_off)
 		update_velocities_lf!(v, f, fR, dQ₀, Ekin, c₁, c₂, c₃)
         update_positions_lf!(r, v, c₂)
 		PBC!(r,periodicity)
@@ -605,7 +604,7 @@ function simulation_lf!(
 end
 
 
-
+"""
 #####################################################################################
 #####################################################################################
 #                    Simulation step for Melchionna algorithm                       #
@@ -723,3 +722,4 @@ function simulation_bp!(
     end
     return r, v, f, dQ, Eₖ, Eₚ
 end
+"""
