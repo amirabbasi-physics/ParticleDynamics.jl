@@ -175,7 +175,7 @@ function run_sim(;
         v0  = v0[idx]
         part_type = part_type[idx]
         alpha_lst = alpha_lst[idx]
-        output_file = "GPU_$Npart,dim_$dim,rho_$ρ,alpha1_$α₁,alpha2_$α₂,dt$Δt₂,ns,$run,$integ"
+        output_file = "GPU_$Npart,dim_$dim,rho_$ρ,alpha1_$α₁,alpha2_$α₂,epsilon$ϵ,dt$Δt₂,ns,$run,$integ"
 
 
         c₁_d     = CuVector(c₁)
