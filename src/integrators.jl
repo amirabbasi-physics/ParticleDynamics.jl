@@ -48,7 +48,7 @@ function update_parts_em_kernel!(r::CuDeviceVector{SVector{N,T}}, v::CuDeviceVec
              injected_energy   = 0.50f0  * dot((v_prev .+ v_next), rnd_force)
              dissipated_energy = -dot(v_prev ,v_prev)
 
-             dQ = injected_energy + dissipated_energy
+             dQ = -(injected_energy + dissipated_energy)
              Eₖ = 0.50f0*dot(v_next,v_next)/c1
          end
          sync_threads()
@@ -187,7 +187,7 @@ function update_velocities_kernel_vv!(
              injected_energy = 0.5f0 * dot((v_prev .+ v_next), rnd_force)
              dissipated_energy = -dot(v_prev ,v_prev) #works nicely!
 
-             dQ = injected_energy + dissipated_energy
+             dQ = -(injected_energy + dissipated_energy)
              Eₖ = 0.5f0*dot(v_next,v_next)/c1
          end
          sync_threads()
@@ -431,7 +431,7 @@ function update_velocities_kernel_lf!(
              injected_energy   = 0.50f0 * dot((v_prev .+ v_next), rnd_force)
              dissipated_energy = -dot(v_prev ,v_prev) #works nicely!
 
-             dQ = injected_energy + dissipated_energy
+             dQ = -(injected_energy + dissipated_energy)
              Eₖ = 0.5f0*dot(v_next,v_next)/c1
          end
          sync_threads()
