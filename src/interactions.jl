@@ -33,7 +33,7 @@ function forces!(
 
     Npart = length(r)
     nblocks = ceil(Int, Npart/nthreads)
-    CUDA.@sync @cuda blocks=nblocks threads=nthreads forces_kernel!(r, f, Epot, cut_off, periodicity, ϵ, Val(nthreads))
+    CUDA.@sync @cuda blocks=nblocks threads=nthreads forces_kernel!(r, f, Epot, periodicity, ϵ, cut_off, Val(nthreads))
     return f, Epot
 end
 
@@ -43,9 +43,9 @@ function forces_kernel!(
     r::CuDeviceVector{T},
     f::CuDeviceVector{T},
     Epot::CuDeviceVector{Float32},
-    cut_off::Float32,
     periodicity::T,
-    ϵ::Float32,::Val{TH}) where {T,TH}
+    ϵ::Float32,
+    cut_off::Float32,::Val{TH}) where {T,TH}
 
     Npart = length(r)
     tid = threadIdx().x
@@ -177,94 +177,9 @@ end
 
 
 
-"""
-# This is not flexible kernel. It just accepts number of particles those are multiple of 128 
-export forces!
 
-function forces!(
-    r::CuVector{SVector{N,T}},
-    f::CuVector{SVector{N,T}},
-    Epot::CuVector{T},
-    periodicity::SVector{N,T},
-    ϵ::T,
-    cut_off::T;nthreads=128) where {N,T}
-
-    Npart = length(r)
-    nblocks = Npart ÷ nthreads
-    CUDA.@sync @cuda blocks=nblocks threads=nthreads forces_kernel!(r, f, Epot, cut_off, periodicity, ϵ)
-    return f, Epot
-end
-
-export forces_kernel!
-
-function forces_kernel!(
-    r::CuDeviceVector{T},
-    f::CuDeviceVector{T},
-    Eₚ₀::CuDeviceVector{Float32},
-    cut_off::Float32,
-    periodicity::T,
-    ϵ::Float32) where {T}
-
-    Npart = length(r)
-    gtid = (blockIdx().x - 1) * blockDim().x + threadIdx().x  # global thread id
-    tid = threadIdx().x
-    shared_pos = CuStaticSharedArray(T, 128)
-    dim = length(periodicity)
-    tile = 0
-    pos = r[gtid]
-    acc = zero(T)
-    epot= 0.0f0
-    if dim == 2
-        for i in 1:blockDim().x:Npart
-            idx = tile * blockDim().x + tid
-            shared_pos[tid] = r[idx]
-            sync_threads()
-
-            @inbounds for j in 1:blockDim().x
-                dx  = pos[1] - shared_pos[j][1]
-                dy  = pos[2] - shared_pos[j][2]
-                dx = ifelse(abs(dx) > periodicity[1] / 2, dx - sign(dx) * periodicity[1] ,dx)
-                dy = ifelse(abs(dy) > periodicity[2] / 2, dy - sign(dy) * periodicity[2] ,dy)
-                dr² = dx*dx + dy*dy
-                dist  = sqrt(dr²)
-                if 0.0f0 < dist < cut_off
-                    frc, ep = harm_rep2D(dx,dy,dist, ϵ, cut_off)
-                    acc = acc .+ frc
-                    epot = epot + ep
-                end
-            end
-            sync_threads()
-            tile += 1
-        end
-        f[gtid] = acc
-        Eₚ₀[gtid] = epot
-        return nothing
-    elseif dim == 3
-        for i in 1:blockDim().x:Npart
-            idx = tile * blockDim().x + tid
-            shared_pos[tid] = r[idx]
-            sync_threads()
-            @inbounds for j in 1:blockDim().x
-                dx  = pos[1] - shared_pos[j][1]
-                dy  = pos[2] - shared_pos[j][2]
-                dz  = pos[3] - shared_pos[j][3]
-                dx = ifelse(abs(dx) > periodicity[1] / 2, dx - sign(dx) * periodicity[1] ,dx)
-                dy = ifelse(abs(dy) > periodicity[2] / 2, dy - sign(dy) * periodicity[2] ,dy)
-                dz = ifelse(abs(dz) > periodicity[3] / 2, dz - sign(dz) * periodicity[3] ,dz)
-                dr² = dx*dx + dy*dy + dz*dz
-                dist  = sqrt(dr²)
-                if 0.0f0 < dist < cut_off
-                    frc, ep = harm_rep3D(dx,dy,dz,dist, ϵ, cut_off)
-                    acc = acc .+ frc
-                    epot = epot + ep
-                end
-            end
-            sync_threads()
-            tile += 1
-        end
-        f[gtid] = acc
-        Eₚ₀[gtid] = epot
-        return nothing
-    end
-end
-"""
+################################################################################
+#                                                                              #
+#               Calculating forces and collision events                        #
+#                                                                              #
+################################################################################
