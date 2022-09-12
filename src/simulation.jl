@@ -185,7 +185,7 @@ function run_sim_init(;
             c₁_d     = CuVector(c₁)
             c₂_d     = CuVector(c₂)
             c₃_d     = CuVector(c₃)
-            alpha_d  = CuVector(alpha_lst)
+            α_d  = CuVector(alpha_lst)
             r0_d     = CuVector(r0)
             v0_d     = CuVector(v0)
             f0_d     = CuVector(f0)
@@ -197,24 +197,24 @@ function run_sim_init(;
 
             if (integ == "ml" || integ == "bp")
               a_d     = CuVector(a)
-              r₀, v₀, f₀, fR₀, dQ₀, Eₖ₀, Eₚ₀, c₁₀, c₂₀, c₃₀, α₀,a₀ = r0_d, v0_d, f0_d, fR_d, dQ_d, Eₖ_d, Eₚ_d, c₁_d, c₂_d, c₃_d ,alpha_d, a_d
+              r₀, v₀, f₀, fR₀, dQ₀, Eₖ₀, Eₚ₀, c₁₀, c₂₀, c₃₀, α₀,a₀ = r0_d, v0_d, f0_d, fR_d, dQ_d, Eₖ_d, Eₚ_d, c₁_d, c₂_d, c₃_d ,α_d, a_d
             else
-              r₀, v₀, f₀, fR₀, dQ₀, Eₖ₀, Eₚ₀, c₁₀, c₂₀, c₃₀, α₀ = r0_d, v0_d, f0_d, fR_d, dQ_d, Eₖ_d, Eₚ_d, c₁_d, c₂_d, c₃_d ,alpha_d
+              r₀, v₀, f₀, fR₀, dQ₀, Eₖ₀, Eₚ₀, c₁₀, c₂₀, c₃₀, α₀ = r0_d, v0_d, f0_d, fR_d, dQ_d, Eₖ_d, Eₚ_d, c₁_d, c₂_d, c₃_d ,α_d
             end
 
 
 
             if integ == "em"
               if dim == 2
-                  r₀, v₀, f₀, dQ₀, Eₖ₀, Eₚ₀ = simulation_em!(dim, Npart, freq_relax, r₀,v₀,f₀,fR₀, dQ₀, Eₖ₀,Eₚ₀,c₁₀, c₂₀, c₃₀, ϵ, cut_off,periodicity,forces!,update_parts_em!, noise2D)
+                  r₀, v₀, f₀, dQ₀, Eₖ₀, Eₚ₀ = simulation_em!(dim, Npart, freq_relax, r₀,v₀,f₀,fR₀, dQ₀, Eₖ₀,Eₚ₀,c₁₀, c₂₀, c₃₀, ϵ, cut_off,periodicity,forces!, collisions!,update_parts_em!, noise2D)
               elseif dim == 3
                   r₀, v₀, f₀, dQ₀, Eₖ₀, Eₚ₀ = simulation_em!(dim, Npart, freq_relax, r₀,v₀,f₀,fR₀, dQ₀, Eₖ₀,Eₚ₀,c₁₀, c₂₀, c₃₀, ϵ, cut_off,periodicity,forces!,update_parts_em!, noise3D)
               end
             elseif integ == "vv"
               if dim == 2
-                  r₀, v₀, f₀, dQ₀, Eₖ₀, Eₚ₀ = simulation_vv!(dim, Npart, freq_relax, r₀,v₀,f₀,fR₀, dQ₀, Eₖ₀,Eₚ₀,c₁₀, c₂₀, c₃₀, ϵ, cut_off,periodicity,forces!,update_positions_vv!,update_velocities_vv!, noise2D)
+                  r₀, v₀, f₀, dQ₀, Eₖ₀, Eₚ₀, coll₀ = simulation_vv!(dim, Npart, freq_relax, r₀,v₀,f₀,fR₀, dQ₀, Eₖ₀,Eₚ₀,c₁₀, c₂₀, c₃₀, ϵ, cut_off,periodicity,forces!, collisions!,update_positions_vv!,update_velocities_vv!, noise2D)
               elseif dim == 3
-                  r₀, v₀, f₀, dQ₀, Eₖ₀, Eₚ₀ = simulation_vv!(dim, Npart, freq_relax, r₀,v₀,f₀,fR₀, dQ₀, Eₖ₀,Eₚ₀,c₁₀, c₂₀, c₃₀, ϵ, cut_off,periodicity,forces!,update_positions_vv!,update_velocities_vv!, noise3D)
+                  r₀, v₀, f₀, dQ₀, Eₖ₀, Eₚ₀, coll₀ = simulation_vv!(dim, Npart, freq_relax, r₀,v₀,f₀,fR₀, dQ₀, Eₖ₀,Eₚ₀,c₁₀, c₂₀, c₃₀, ϵ, cut_off,periodicity,forces!, collisions!, update_positions_vv!,update_velocities_vv!, noise3D)
               end
             elseif integ == "lf"
               if dim == 2
@@ -339,23 +339,25 @@ function run_sim_init(;
         part_type = part_type[idx]
         alpha_lst = alpha_lst[idx]
 
-        c₁_d     = CuVector(c₁)
-        c₂_d     = CuVector(c₂)
-        c₃_d     = CuVector(c₃)
-        alpha_d  = CuVector(alpha_lst)
-        r0_d     = CuVector(r)
-        v0_d     = CuVector(v0)
-        f0_d     = CuVector(f0)
-        fR_d     = CuVector(fR0)
-        dQ_d     = CuVector(dQ)
-        Eₖ_d     = CuVector(Eₖ)
-        Eₚ_d     = CuVector(Eₚ)
+        α_d      = CuVector(alpha_lst)
+        p        = sortperm(α_d)
+        α_d      = α_d[p]
+        c₁_d     = CuVector(c₁)[p]
+        c₂_d     = CuVector(c₂)[p]
+        c₃_d     = CuVector(c₃)[p]
+        r0_d     = CuVector(r)[p]
+        v0_d     = CuVector(v0)[p]
+        f0_d     = CuVector(f0)[p]
+        fR_d     = CuVector(fR0)[p]
+        dQ_d     = CuVector(dQ)[p]
+        Eₖ_d     = CuVector(Eₖ)[p]
+        Eₚ_d     = CuVector(Eₚ)[p]
 
         if (integ == "ml" || integ == "bp")
             a_d     = CuVector(a)
-            r₀, v₀, f₀, fR₀, dQ₀, Eₖ₀, Eₚ₀, c₁₀, c₂₀, c₃₀, α₀,a₀ = r0_d, v0_d, f0_d, fR_d, dQ_d, Eₖ_d, Eₚ_d, c₁_d, c₂_d, c₃_d ,alpha_d, a_d
+            r₀, v₀, f₀, fR₀, dQ₀, Eₖ₀, Eₚ₀, c₁₀, c₂₀, c₃₀, α₀,a₀ = r0_d, v0_d, f0_d, fR_d, dQ_d, Eₖ_d, Eₚ_d, c₁_d, c₂_d, c₃_d ,α_d, a_d
         else
-            r₀, v₀, f₀, fR₀, dQ₀, Eₖ₀, Eₚ₀, c₁₀, c₂₀, c₃₀, α₀ = r0_d, v0_d, f0_d, fR_d, dQ_d, Eₖ_d, Eₚ_d, c₁_d, c₂_d, c₃_d ,alpha_d
+            r₀, v₀, f₀, fR₀, dQ₀, Eₖ₀, Eₚ₀, c₁₀, c₂₀, c₃₀, α₀ = r0_d, v0_d, f0_d, fR_d, dQ_d, Eₖ_d, Eₚ_d, c₁_d, c₂_d, c₃_d ,α_d
         end
 
         freq = dump_freq
@@ -381,16 +383,16 @@ function run_sim_init(;
         elseif integ == "vv"
             if dim == 2
                 for t = 0:steps
-                    r₀, v₀, f₀, dQ₀, Eₖ₀, Eₚ₀ = simulation_vv!(dim, Npart, freq, r₀,v₀,f₀,fR₀, dQ₀, Eₖ₀,Eₚ₀,c₁₀, c₂₀, c₃₀, ϵ, cut_off,periodicity,forces!,update_positions_vv!,update_velocities_vv!, noise2D)
-                    r , v, f, dQ, Eₖ, Eₚ = Vector(r₀), Vector(v₀), Vector(f₀), Vector(dQ₀), Vector(Eₖ₀), Vector(Eₚ₀)
+                    r₀, v₀, f₀, dQ₀, Eₖ₀, Eₚ₀, coll₀ = simulation_vv!(dim, Npart, freq, r₀,v₀,f₀,fR₀, dQ₀, Eₖ₀,Eₚ₀,c₁₀, c₂₀, c₃₀, ϵ, cut_off,periodicity,forces!, collisions!,update_positions_vv!,update_velocities_vv!, noise2D)
+                    r , v, f, dQ, Eₖ, Eₚ, coll = Vector(r₀), Vector(v₀), Vector(f₀), Vector(dQ₀), Vector(Eₖ₀), Vector(Eₚ₀), Array(coll₀)
                     write_xyz(output_file, Npart, c2, alpha_lst, σ,L, t, dim, part_type, r, v, dQ)
                     write_log(output_file, t,c2,alpha_lst, Eₖ, Eₚ, dQ)
                     yield()
                 end
             elseif dim == 3
                 for t = 0:steps
-                    r₀, v₀, f₀, dQ₀, Eₖ₀, Eₚ₀ = simulation_vv!(dim, Npart, freq, r₀,v₀,f₀,fR₀, dQ₀, Eₖ₀,Eₚ₀,c₁₀, c₂₀, c₃₀, ϵ, cut_off,periodicity,forces!,update_positions_vv!,update_velocities_vv!, noise3D)
-                    r , v, f, dQ, Eₖ, Eₚ = Vector(r₀), Vector(v₀), Vector(f₀), Vector(dQ₀), Vector(Eₖ₀), Vector(Eₚ₀)
+                    r₀, v₀, f₀, dQ₀, Eₖ₀, Eₚ₀, coll₀ = simulation_vv!(dim, Npart, freq, r₀,v₀,f₀,fR₀, dQ₀, Eₖ₀,Eₚ₀,c₁₀, c₂₀, c₃₀, ϵ, cut_off,periodicity,forces!, collisions!,update_positions_vv!,update_velocities_vv!, noise3D)
+                    r , v, f, dQ, Eₖ, Eₚ, coll = Vector(r₀), Vector(v₀), Vector(f₀), Vector(dQ₀), Vector(Eₖ₀), Vector(Eₚ₀), Array(coll₀)
                     write_xyz(output_file, Npart, c2, alpha_lst, σ,L, t, dim, part_type, r, v, dQ)
                     write_log(output_file, t,c2,alpha_lst, Eₖ, Eₚ, dQ)
                     yield()
@@ -637,7 +639,7 @@ function run_sim_final(;
               c₁_d     = CuVector(c₁)
               c₂_d     = CuVector(c₂)
               c₃_d     = CuVector(c₃)
-              alpha_d  = CuVector(alpha_lst)
+              α_d  = CuVector(alpha_lst)
               r0_d     = CuVector(r0)
               v0_d     = CuVector(v0)
               f0_d     = CuVector(f0)
@@ -649,9 +651,9 @@ function run_sim_final(;
 
               if (integ == "ml" || integ == "bp")
                   a_d     = CuVector(a)
-                  r₀, v₀, f₀, fR₀, dQ₀, Eₖ₀, Eₚ₀, c₁₀, c₂₀, c₃₀, α₀,a₀ = r0_d, v0_d, f0_d, fR_d, dQ_d, Eₖ_d, Eₚ_d, c₁_d, c₂_d, c₃_d ,alpha_d, a_d
+                  r₀, v₀, f₀, fR₀, dQ₀, Eₖ₀, Eₚ₀, c₁₀, c₂₀, c₃₀, α₀,a₀ = r0_d, v0_d, f0_d, fR_d, dQ_d, Eₖ_d, Eₚ_d, c₁_d, c₂_d, c₃_d ,α_d, a_d
               else
-                  r₀, v₀, f₀, fR₀, dQ₀, Eₖ₀, Eₚ₀, c₁₀, c₂₀, c₃₀, α₀ = r0_d, v0_d, f0_d, fR_d, dQ_d, Eₖ_d, Eₚ_d, c₁_d, c₂_d, c₃_d ,alpha_d
+                  r₀, v₀, f₀, fR₀, dQ₀, Eₖ₀, Eₚ₀, c₁₀, c₂₀, c₃₀, α₀ = r0_d, v0_d, f0_d, fR_d, dQ_d, Eₖ_d, Eₚ_d, c₁_d, c₂_d, c₃_d ,α_d
               end
 
 
@@ -789,7 +791,7 @@ function run_sim_final(;
         c₁_d     = CuVector(c₁)
         c₂_d     = CuVector(c₂)
         c₃_d     = CuVector(c₃)
-        alpha_d  = CuVector(alpha_lst)
+        α_d  = CuVector(alpha_lst)
         r0_d     = CuVector(r)
         v0_d     = CuVector(v0)
         f0_d     = CuVector(f0)
@@ -800,9 +802,9 @@ function run_sim_final(;
 
         if (integ == "ml" || integ == "bp")
             a_d     = CuVector(a)
-            r₀, v₀, f₀, fR₀, dQ₀, Eₖ₀, Eₚ₀, c₁₀, c₂₀, c₃₀, α₀,a₀ = r0_d, v0_d, f0_d, fR_d, dQ_d, Eₖ_d, Eₚ_d, c₁_d, c₂_d, c₃_d ,alpha_d, a_d
+            r₀, v₀, f₀, fR₀, dQ₀, Eₖ₀, Eₚ₀, c₁₀, c₂₀, c₃₀, α₀,a₀ = r0_d, v0_d, f0_d, fR_d, dQ_d, Eₖ_d, Eₚ_d, c₁_d, c₂_d, c₃_d ,α_d, a_d
         else
-            r₀, v₀, f₀, fR₀, dQ₀, Eₖ₀, Eₚ₀, c₁₀, c₂₀, c₃₀, α₀ = r0_d, v0_d, f0_d, fR_d, dQ_d, Eₖ_d, Eₚ_d, c₁_d, c₂_d, c₃_d ,alpha_d
+            r₀, v₀, f₀, fR₀, dQ₀, Eₖ₀, Eₚ₀, c₁₀, c₂₀, c₃₀, α₀ = r0_d, v0_d, f0_d, fR_d, dQ_d, Eₖ_d, Eₚ_d, c₁_d, c₂_d, c₃_d ,α_d
         end
 
         freq = dump_freq
@@ -954,6 +956,8 @@ end
 #                    Simulation scheme for Verlet-type algorithm                    #
 #####################################################################################
 #####################################################################################
+export simulation_vv!
+"""
 function simulation_vv!(
 	dim::Int,
 	Npart::Int,
@@ -999,7 +1003,61 @@ function simulation_vv!(
     end
     return r, v, f, dQ, Eₖ, Eₚ
 end
+"""
 
+
+function simulation_vv!(
+	dim::Int,
+	Npart::Int,
+	freq::Int,
+	r::CuVector{SVector{N,T}},
+	v::CuVector{SVector{N,T}},
+	f₀::CuVector{SVector{N,T}},
+	fR::CuVector{SVector{N,T}},
+	dQ₀::CuVector{T},
+	Eₖ₀::CuVector{T},
+	Eₚ₀::CuVector{T},
+	c₁::CuVector{T},
+	c₂::CuVector{T},
+	c₃::CuVector{T},
+	ϵ::T,
+	cut_off::T,
+	periodicity::SVector{N,T},
+	forces!::Function,
+    collisions!::Function,
+	update_positions_vv!::Function,
+	update_velocities_vv!::Function,
+	noisefun::Function) where {N,T}
+
+    coll = zeros(Npart,Npart)
+	dQ = zero(dQ₀)
+	Eₖ = zero(Eₖ₀)
+	Eₚ = zero(Eₚ₀)
+	f = zero(f₀)
+    coll₀ = zeros(Int32,Npart,Npart)
+    coll_switch₀ = zeros(Int32,Npart,Npart)
+	dQ₀ = zero(dQ₀)
+	Ekin = zero(Eₖ₀)
+	Epot = zero(Eₚ₀)
+    for _ in 1:freq
+		f = f₀
+		dQ₀ = zero(dQ₀)
+		Ekin = zero(Ekin)
+		Epot = zero(Epot)
+        fR = noisefun(Npart)
+        update_positions_vv!(r, v, f₀, fR, c₁, c₂, c₃)
+		PBC!(r,periodicity)
+		f, Epot = forces!(r, f, Epot, periodicity, ϵ, cut_off)
+        coll₀, coll_switch₀ = collisions!(r, coll₀, coll_switch₀, cut_off, periodicity)
+		update_velocities_vv!(v, f₀, f, fR, dQ₀, Ekin, c₁, c₂, c₃)
+		f₀ = f
+        coll .+= coll₀ ./freq
+		dQ .+= dQ₀ ./freq
+		Eₖ .+= Ekin ./freq
+		Eₚ .+= Epot ./freq
+    end
+    return r, v, f, dQ, Eₖ, Eₚ, coll
+end
 
 #####################################################################################
 #####################################################################################
