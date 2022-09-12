@@ -177,9 +177,99 @@ end
 
 
 
-
 ################################################################################
 #                                                                              #
 #               Calculating forces and collision events                        #
 #                                                                              #
 ################################################################################
+
+export collisions!
+
+function collision!(
+    r::CuVector{SVector{N,T}},
+    coll::CuMatrix{I},
+    coll_switch::CuMatrix{I},
+    cut_off::Float32,
+    periodicity::SVector{N,T}) where {N,I,T}
+
+    kernel = @cuda launch=false collision_kernel!(r, coll, coll_switch, cut_off, periodicity)
+    Npart = size(r,1)
+    config = launch_configuration(kernel.fun)
+
+    nthreads = Base.min(Npart, ceil(Int,sqrt(config.threads)))
+    nblocks = cld(Npart, nthreads)
+    CUDA.@sync kernel(r, coll, coll_switch, cut_off, periodicity; threads=(nthreads,nthreads), blocks=(nblocks,nblocks))
+    return coll, coll_switch
+end
+
+export collisions_kernel!
+
+function collision_kernel!(
+    r::CuDeviceVector{T},
+    coll::CuDeviceMatrix{I},
+    coll_switch::CuDeviceMatrix{I},
+    cut_off::Float32,
+    periodicity::T) where {T,I}
+
+    Npart = length(r)
+    dim   = length(periodicity)
+    coll_event = 1
+    coll_event_switch = 1
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    j = (blockIdx().y - 1) * blockDim().y + threadIdx().y
+
+    if dim == 2
+        @inbounds begin
+            if i <= Npart && j <= Npart
+                pos₁  = r[i]
+                pos₂  = r[j]
+                dx  = pos₁[1] - pos₂[1]
+                dy  = pos₁[2] - pos₂[2]
+
+                dx = ifelse(abs(dx) > periodicity[1] / 2, dx - sign(dx) * periodicity[1] ,dx)
+                dy = ifelse(abs(dy) > periodicity[2] / 2, dy - sign(dy) * periodicity[2] ,dy)
+                dr² = dx*dx + dy*dy
+
+                dist  = sqrt(dr²)
+                if 0.0f0 < dist < cut_off
+                    if coll_switch[i,j] == 0
+                        coll[i,j] = 1
+                        coll_switch[i,j] = 1
+                    else
+                        coll[i,j] = 0
+                    end
+                elseif dist > cut_off
+                    coll_switch[i,j] = 0
+                end
+            end
+        end
+    elseif dim == 3
+        @inbounds begin
+            if i <= Npart && j <= Npart
+                pos₁  = r[i]
+                pos₂  = r[j]
+                dx  = pos₁[1] - pos₂[1]
+                dy  = pos₁[2] - pos₂[2]
+                dz  = pos₁[3] - pos₂[3]
+
+                dx = ifelse(abs(dx) > periodicity[1] / 2, dx - sign(dx) * periodicity[1] ,dx)
+                dy = ifelse(abs(dy) > periodicity[2] / 2, dy - sign(dy) * periodicity[2] ,dy)
+                dz = ifelse(abs(dz) > periodicity[3] / 2, dz - sign(dz) * periodicity[3] ,dz)
+                dr² = dx*dx + dy*dy + dz*dz
+
+                dist  = sqrt(dr²)
+                if 0.0f0 < dist < cut_off
+                    if coll_switch[i,j] == 0
+                        coll[i,j] = 1
+                        coll_switch[i,j] = 1
+                    else
+                        coll[i,j] = 0
+                    end
+                elseif dist > cut_off
+                    coll_switch[i,j] = 0
+                end
+            end
+        end
+    end
+    return nothing
+end
