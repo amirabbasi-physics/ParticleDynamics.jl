@@ -372,7 +372,7 @@ function run_sim_init(;
 
         α_d      = α_d[p]
         part_type = part_type[p]
-        
+
         c₁_d     = CuVector(c₁)[p]
         c₂_d     = CuVector(c₂)[p]
         c₃_d     = CuVector(c₃)[p]
