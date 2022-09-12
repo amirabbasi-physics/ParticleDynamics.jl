@@ -14,9 +14,9 @@ end
 
 
 
-export run_sim
+export run_sim_init
 
-function run_sim(;
+function run_sim_init(;
     num_runs::Int,
     nsteps::Int,
     Npart::Int,
@@ -454,8 +454,9 @@ function run_sim(;
     end
 end
 
+export run_sim_final
 
-function run_sim(;
+function run_sim_final(;
     num_runs::Int,
     nsteps::Int,
     Npart::Int,
