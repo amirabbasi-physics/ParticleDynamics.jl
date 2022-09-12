@@ -10,6 +10,7 @@ export harm_rep3D
     return SVector{2,T}(f_x,f_y) , e_int
 end
 
+
 @inline function harm_rep3D(dx::T, dy::T, dz::T, dist::T, ϵ::T, σ::T) where {T}
     inv_dist = 1.0f0/dist
     f_int = ϵ*(inv_dist - 1.0f0/σ)
