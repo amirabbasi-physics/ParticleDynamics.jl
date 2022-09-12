@@ -183,17 +183,16 @@ end
 #               Calculating forces and collision events                        #
 #                                                                              #
 ################################################################################
-
 export collisions!
 
-function collision!(
+function collisions!(
     r::CuVector{SVector{N,T}},
-    coll::CuMatrix{I},
+    coll::CuMatrix{T},
     coll_switch::CuMatrix{I},
     cut_off::Float32,
     periodicity::SVector{N,T}) where {N,I,T}
 
-    kernel = @cuda launch=false collision_kernel!(r, coll, coll_switch, cut_off, periodicity)
+    kernel = @cuda launch=false collisions_kernel!(r, coll, coll_switch, cut_off, periodicity)
     Npart = size(r,1)
     config = launch_configuration(kernel.fun)
 
@@ -203,11 +202,12 @@ function collision!(
     return coll, coll_switch
 end
 
+
 export collisions_kernel!
 
-function collision_kernel!(
+function collisions_kernel!(
     r::CuDeviceVector{T},
-    coll::CuDeviceMatrix{I},
+    coll::CuDeviceMatrix{Float32},
     coll_switch::CuDeviceMatrix{I},
     cut_off::Float32,
     periodicity::T) where {T,I}
