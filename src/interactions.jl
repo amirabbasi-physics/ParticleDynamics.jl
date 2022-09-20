@@ -214,8 +214,7 @@ function collisions_kernel!(
 
     Npart = length(r)
     dim   = length(periodicity)
-    coll_event = 1
-    coll_event_switch = 1
+
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     j = (blockIdx().y - 1) * blockDim().y + threadIdx().y
 
