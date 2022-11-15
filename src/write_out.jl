@@ -113,7 +113,7 @@ function write_log(
     else
         open(out_file,"a+") do file
             println("Time = ",data[1], " | E_kin = ", data[2], " | EPR = " ,data[3], " | EPR per particle = " ,data[4], "  |  cold/cold coll rate = " ,data[5],"  |  cold/hot coll rate = " ,data[6],"  |  hot/hot coll rate = " ,data[7], "  |  total coll rate = " ,data[8])
-            println(coll_tot - coll_hot_hot -coll_cold_hot - coll_cold_cold)
+            #println(coll_tot - coll_hot_hot -coll_cold_hot - coll_cold_cold)
             writedlm(file,data, '\t')
         end
     end
