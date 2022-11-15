@@ -93,10 +93,10 @@ function write_log(
 
 
     Npart = size(coll,1)
-    coll_cold_cold  = 0.5*sum(cold_cold)
-    coll_cold_hot   = sum(cold_hot)
-    coll_hot_hot    = 0.5*sum(hot_hot)
-    coll_tot        = 0.5*sum(coll)
+    coll_cold_cold  = 0.5*sum(cold_cold)./c2
+    coll_cold_hot   = sum(cold_hot)./c2
+    coll_hot_hot    = 0.5*sum(hot_hot)./c2
+    coll_tot        = 0.5*sum(coll)./c2
 
 
     out_file = ofname*".log"
