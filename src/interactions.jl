@@ -82,7 +82,7 @@ function forces_kernel!(
                     dr² = dx*dx + dy*dy
                     dist  = sqrt(dr²)
                     if 0.0f0 < dist < cut_off
-                        frc, ep = harm_rep2D(dx,dy,dist, ϵ, cut_off)
+                        frc, ep = harm_rep3D(dx,dy,dist, ϵ, cut_off)
                         acc = acc .+ frc
                         epot = epot + ep
                     end
@@ -100,10 +100,10 @@ function forces_kernel!(
                 dy  = pos[2] - shared_pos[j][2]
                 dx = ifelse(abs(dx) > periodicity[1] / 2, dx - sign(dx) * periodicity[1] ,dx)
                 dy = ifelse(abs(dy) > periodicity[2] / 2, dy - sign(dy) * periodicity[2] ,dy)
-                dr² = dx*dx + dy*dy
+                dr² = dx*dx + dy*dy 
                 dist  = sqrt(dr²)
                 if 0.0f0 < dist < cut_off
-                    frc, ep = harm_rep2D(dx,dy,dist, ϵ, cut_off)
+                    frc, ep = harm_rep3D(dx,dy,dist, ϵ, cut_off)
                     acc = acc .+ frc
                     epot = epot + ep
                 end
@@ -228,6 +228,7 @@ function collisions_kernel!(
 
                 dx = ifelse(abs(dx) > periodicity[1] / 2, dx - sign(dx) * periodicity[1] ,dx)
                 dy = ifelse(abs(dy) > periodicity[2] / 2, dy - sign(dy) * periodicity[2] ,dy)
+                
                 dr² = dx*dx + dy*dy
 
                 dist  = sqrt(dr²)

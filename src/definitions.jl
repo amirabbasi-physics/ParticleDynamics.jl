@@ -19,6 +19,42 @@ function rectangular_lattice(s_x::Float32, s_y::Float32, M_x::Int64, M_y::Int64)
     return positions
 end
 
+
+export triangular_lattice
+
+function triangular_lattice(L_box::T,lattice_const::T,M_x::Int64, M_y::Int64) where T
+    """Calculates the positions of an hexagonal lattice with the lattice constant a
+    in a square box with the given dimensions"""
+    # initialize coordinates: time 4 since there are 4 atoms in each unit cell
+    positions = Array{SVector{2,Float32}, 1}()
+    r_x = lattice_const*M_x/2
+    r_y = lattice_const*M_y/2
+    for i = 0:M_x-1
+        for j = 0:M_y-1
+            pos = [pos_triangulr(lattice_const)[n] .+ @SVector [i * lattice_const - r_x, j * lattice_const - r_y] for n = 1:4]
+            for nn = 1:4
+                #if pos_num < Npart
+                    push!(positions, pos[nn])
+                    #pos_num += 1
+                #end
+            end
+        end
+    end
+    return positions
+end
+
+
+export pos_triangular
+function pos_triangular(a::T) where T
+    """returns the positions (x,y) of the 4 atoms in a hexagonal unit cell with the lattice constant a."""
+    p₁ = @SVector [0.f0, 0.f0]
+    p₂ = @SVector [0.f0, a]
+    p₃ = @SVector [-0.5f0*a, 0.5f0 *sqrt(3)*a]
+    p₄ = @SVector [0.5f0*a, 0.5f0 *sqrt(3)*a]
+    return p₁, p₂, p₃, p₄
+end
+
+
 export simplecubic_lattice
 
 function simplecubic_lattice(s_x::Float32, s_y::Float32, s_z::Float32, M_x::Int64, M_y::Int64, M_z::Int64)
@@ -47,7 +83,6 @@ function fcc_lattice(L_box::T,lattice_const::T,M_x::Int64, M_y::Int64, M_z::Int6
     in a cubic box with the given dimensions"""
     # initialize coordinates: time 4 since there are 4 atoms in each unit cell
     positions = Array{SVector{3,Float32}, 1}()
-    lattice_const
     r_x = lattice_const*M_x/2
     r_y = lattice_const*M_y/2
     r_z = lattice_const*M_z/2
@@ -67,12 +102,12 @@ function fcc_lattice(L_box::T,lattice_const::T,M_x::Int64, M_y::Int64, M_z::Int6
     return positions
 end
 export pos_fcc
-function pos_fcc(σ::T) where T
+function pos_fcc(a::T) where T
     """returns the positions (x,y,z) of the 4 atoms in a fcc unit cell with the lattice constant a."""
     p₁ = @SVector [0.f0, 0.f0, 0.f0]
-    p₂ = @SVector [0.f0, 0.5f0*σ, 0.5f0*σ]
-    p₃ = @SVector [0.5f0*σ, 0.f0, 0.5f0*σ]
-    p₄ = @SVector [0.5f0*σ, 0.5f0*σ, 0.f0]
+    p₂ = @SVector [0.f0, 0.5f0*a, 0.5f0*a]
+    p₃ = @SVector [0.5f0*a, 0.f0, 0.5f0*a]
+    p₄ = @SVector [0.5f0*a, 0.5f0*a, 0.f0]
     return p₁, p₂, p₃, p₄
 end
 
