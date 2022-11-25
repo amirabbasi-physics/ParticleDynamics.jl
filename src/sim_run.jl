@@ -138,25 +138,6 @@ function run_sim_init(;
                     part_type[i] = ptypes[2]
                     alpha_lst[i] = Float32(α_relax)
                 end
-            elseif (integ == "ml" || integ == "bp")
-                a   = zeros(Float32,Npart)
-                c1      = exp(-0.5f0*a²*Δt)
-                c2      = Δt
-                [c₁[i]  = c1 for i in 1:Npart]
-                [c₂[i]  = c2 for i in 1:Npart]
-                [a[i]   = a² for i in 1:Npart]
-                for i = 1:num_pl
-                    c₃[i] = Float32(sqrt(a²*α_relax*(1-c1^2)))
-                    v0[i] = c₃[i] .* v0[i]
-                    part_type[i] = ptypes[1]
-                    alpha_lst[i] = Float32(α_relax)
-                end
-                for i = num_pl+1:Npart
-                    c₃[i] = Float32(sqrt(a²*α_relax*(1-c1^2)))
-                    v0[i] = c₃[i] .* v0[i]
-                    part_type[i] = ptypes[2]
-                    alpha_lst[i] = Float32(α_relax)
-                end
             end
 
             idx = randperm(Npart)
@@ -179,12 +160,8 @@ function run_sim_init(;
             Eₖ_d     = CuVector(Eₖ)
             Eₚ_d     = CuVector(Eₚ)
 
-            if (integ == "ml" || integ == "bp")
-              a_d     = CuVector(a)
-              r₀, v₀, f₀, fR₀, dQ₀, Eₖ₀, Eₚ₀, c₁₀, c₂₀, c₃₀, α₀,a₀ = r0_d, v0_d, f0_d, fR_d, dQ_d, Eₖ_d, Eₚ_d, c₁_d, c₂_d, c₃_d ,α_d, a_d
-            else
-              r₀, v₀, f₀, fR₀, dQ₀, Eₖ₀, Eₚ₀, c₁₀, c₂₀, c₃₀, α₀ = r0_d, v0_d, f0_d, fR_d, dQ_d, Eₖ_d, Eₚ_d, c₁_d, c₂_d, c₃_d ,α_d
-            end
+            r₀, v₀, f₀, fR₀, dQ₀, Eₖ₀, Eₚ₀, c₁₀, c₂₀, c₃₀, α₀ = r0_d, v0_d, f0_d, fR_d, dQ_d, Eₖ_d, Eₚ_d, c₁_d, c₂_d, c₃_d ,α_d
+
 
 
 
@@ -221,30 +198,6 @@ function run_sim_init(;
               elseif dim == 3
                   r₀, v₀, f₀, dQ₀, Eₖ₀, Eₚ₀ = simulation_lf!(dim, Npart, freq_relax, r₀,v₀,f₀,fR₀, dQ₀, Eₖ₀,Eₚ₀,c₁₀, c₂₀, c₃₀, ϵ, cut_off,periodicity,forces!,update_positions_lf!,update_velocities_lf!, noise3D)
                   r0 , v0, f0, dQ, Eₖ, Eₚ = Vector(r₀), Vector(v₀), Vector(f₀), Vector(dQ₀), Vector(Eₖ₀), Vector(Eₚ₀)
-                  write_xyz(output_file, Npart, c2, alpha_lst, σ,L, 0, dim, part_type, r, v, dQ)
-                  write_log(output_file, 0,c2,alpha_lst, Eₖ, Eₚ, dQ)
-              end
-            elseif integ == "ml"
-              if dim == 2
-                  r₀, v₀, f₀, dQ₀, Eₖ₀, Eₚ₀ = simulation_ml!(dim, Npart, freq_relax, r₀,v₀,f₀,fR₀, dQ₀, Eₖ₀,Eₚ₀,c₁₀, c₂₀, c₃₀,a₀, ϵ, cut_off,periodicity,forces!,update_positions_ml!,update_velocities_ml₁!,update_velocities_ml₂!, noise2D)
-                  r , v, f, dQ, Eₖ, Eₚ = Vector(r₀), Vector(v₀), Vector(f₀), Vector(dQ₀), Vector(Eₖ₀), Vector(Eₚ₀)
-                  write_xyz(output_file, Npart, c2, alpha_lst, σ,L, 0, dim, part_type, r, v, dQ)
-                  write_log(output_file, 0,c2,alpha_lst, Eₖ, Eₚ, dQ)
-              elseif dim == 3
-                  r₀, v₀, f₀, dQ₀, Eₖ₀, Eₚ₀ = simulation_ml!(dim, Npart, freq_relax, r₀,v₀,f₀,fR₀, dQ₀, Eₖ₀,Eₚ₀,c₁₀, c₂₀, c₃₀,a₀, ϵ, cut_off,periodicity,forces!,update_positions_ml!,update_velocities_ml₁!,update_velocities_ml₂!, noise3D)
-                  r , v, f, dQ, Eₖ, Eₚ = Vector(r₀), Vector(v₀), Vector(f₀), Vector(dQ₀), Vector(Eₖ₀), Vector(Eₚ₀)
-                  write_xyz(output_file, Npart, c2, alpha_lst, σ,L, 0, dim, part_type, r, v, dQ)
-                  write_log(output_file, 0,c2,alpha_lst, Eₖ, Eₚ, dQ)
-              end
-            elseif integ == "bp"
-              if dim == 2
-                  r₀, v₀, f₀, dQ₀, Eₖ₀, Eₚ₀ = simulation_bp!(dim, Npart, freq_relax, r₀,v₀,f₀,fR₀, dQ₀, Eₖ₀,Eₚ₀,c₁₀, c₂₀, c₃₀,a₀, ϵ, cut_off,periodicity,forces!,update_positions_bp!,update_velocities_bp₁!,update_velocities_bp₂!, noise2D)
-                  r , v, f, dQ, Eₖ, Eₚ = Vector(r₀), Vector(v₀), Vector(f₀), Vector(dQ₀), Vector(Eₖ₀), Vector(Eₚ₀)
-                  write_xyz(output_file, Npart, c2, alpha_lst, σ,L, 0, dim, part_type, r, v, dQ)
-                  write_log(output_file, 0,c2,alpha_lst, Eₖ, Eₚ, dQ)
-              elseif dim == 3
-                  r₀, v₀, f₀, dQ₀, Eₖ₀, Eₚ₀ = simulation_bp!(dim, Npart, freq_relax, r₀,v₀,f₀,fR₀, dQ₀, Eₖ₀,Eₚ₀,c₁₀, c₂₀, c₃₀,a₀, ϵ, cut_off,periodicity,forces!,update_positions_bp!,update_velocities_bp₁!,update_velocities_bp₂!, noise3D)
-                  r , v, f, dQ, Eₖ, Eₚ = Vector(r₀), Vector(v₀), Vector(f₀), Vector(dQ₀), Vector(Eₖ₀), Vector(Eₚ₀)
                   write_xyz(output_file, Npart, c2, alpha_lst, σ,L, 0, dim, part_type, r, v, dQ)
                   write_log(output_file, 0,c2,alpha_lst, Eₖ, Eₚ, dQ)
               end
@@ -324,25 +277,6 @@ function run_sim_init(;
                 part_type[i] = ptypes[2]
                 alpha_lst[i] = Float32(α[2])
             end
-        elseif (integ == "ml" || integ == "bp")
-            a   = zeros(Float32,Npart)
-            c1      = Float32(exp(-0.5f0*a²*Δt))
-            c2      = Δt
-            [c₁[i]  = c1 for i in 1:Npart]
-            [c₂[i]  = c2 for i in 1:Npart]
-            [a[i]   = a² for i in 1:Npart]
-            for i = 1:num_pl
-                c₃[i] = Float32(sqrt(a²*α[1]*(1-c1^2)))
-                v0[i] = c₃[i] .* v0[i]
-                part_type[i] = ptypes[1]
-                alpha_lst[i] = Float32(α[1])
-            end
-            for i = num_pl+1:Npart
-                c₃[i] = Float32(sqrt(a²*α[2]*(1-c1^2)))
-                v0[i] = c₃[i] .* v0[i]
-                part_type[i] = ptypes[2]
-                alpha_lst[i] = Float32(α[2])
-            end
         end
         CUDA.allowscalar(true)
         idx = randperm(Npart)
@@ -368,12 +302,9 @@ function run_sim_init(;
         Eₖ_d     = CuVector(Eₖ[p])
         Eₚ_d     = CuVector(Eₚ[p])
         CUDA.allowscalar(false)
-        if (integ == "ml" || integ == "bp")
-            a_d     = CuVector(a)
-            r₀, v₀, f₀, fR₀, dQ₀, Eₖ₀, Eₚ₀, c₁₀, c₂₀, c₃₀, α₀,a₀ = r0_d, v0_d, f0_d, fR_d, dQ_d, Eₖ_d, Eₚ_d, c₁_d, c₂_d, c₃_d ,α_d, a_d
-        else
-            r₀, v₀, f₀, fR₀, dQ₀, Eₖ₀, Eₚ₀, c₁₀, c₂₀, c₃₀, α₀ = r0_d, v0_d, f0_d, fR_d, dQ_d, Eₖ_d, Eₚ_d, c₁_d, c₂_d, c₃_d ,α_d
-        end
+
+        r₀, v₀, f₀, fR₀, dQ₀, Eₖ₀, Eₚ₀, c₁₀, c₂₀, c₃₀, α₀ = r0_d, v0_d, f0_d, fR_d, dQ_d, Eₖ_d, Eₚ_d, c₁_d, c₂_d, c₃_d ,α_d
+    
 
         freq = dump_freq
         steps = nsteps ÷ dump_freq
@@ -427,42 +358,6 @@ function run_sim_init(;
                     r₀, v₀, f₀, dQ₀, Eₖ₀, Eₚ₀ = simulation_lf!(dim, Npart, freq, r₀,v₀,f₀,fR₀, dQ₀, Eₖ₀,Eₚ₀,c₁₀, c₂₀, c₃₀, ϵ, cut_off,periodicity,forces!,update_positions_lf!,update_velocities_lf!, noise3D)
                     r0 , v0, f0, dQ, Eₖ, Eₚ = Vector(r₀), Vector(v₀), Vector(f₀), Vector(dQ₀), Vector(Eₖ₀), Vector(Eₚ₀)
                     write_xyz(output_file, Npart, c2, alpha_lst, σ,L, t, dim, part_type, r0, v0, dQ)
-                    write_log(output_file, t,c2,alpha_lst, Eₖ, Eₚ, dQ)
-                    yield()
-                end
-            end
-        elseif integ == "ml"
-            if dim == 2
-                for t = 0:steps
-                    r₀, v₀, f₀, dQ₀, Eₖ₀, Eₚ₀ = simulation_ml!(dim, Npart, freq, r₀,v₀,f₀,fR₀, dQ₀, Eₖ₀,Eₚ₀,c₁₀, c₂₀, c₃₀,a₀, ϵ, cut_off,periodicity,forces!,update_positions_ml!,update_velocities_ml₁!,update_velocities_ml₂!, noise2D)
-                    r , v, f, dQ, Eₖ, Eₚ = Vector(r₀), Vector(v₀), Vector(f₀), Vector(dQ₀), Vector(Eₖ₀), Vector(Eₚ₀)
-                    write_xyz(output_file, Npart, c2, alpha_lst, σ,L, t, dim, part_type, r, v, dQ)
-                    write_log(output_file, t,c2,alpha_lst, Eₖ, Eₚ, dQ)
-                    yield()
-                end
-            elseif dim == 3
-                for t = 0:steps
-                    r₀, v₀, f₀, dQ₀, Eₖ₀, Eₚ₀ = simulation_ml!(dim, Npart, freq, r₀,v₀,f₀,fR₀, dQ₀, Eₖ₀,Eₚ₀,c₁₀, c₂₀, c₃₀,a₀, ϵ, cut_off,periodicity,forces!,update_positions_ml!,update_velocities_ml₁!,update_velocities_ml₂!, noise3D)
-                    r , v, f, dQ, Eₖ, Eₚ = Vector(r₀), Vector(v₀), Vector(f₀), Vector(dQ₀), Vector(Eₖ₀), Vector(Eₚ₀)
-                    write_xyz(output_file, Npart, c2, alpha_lst, σ,L, t, dim, part_type, r, v, dQ)
-                    write_log(output_file, t,c2,alpha_lst, Eₖ, Eₚ, dQ)
-                    yield()
-                end
-            end
-        elseif integ == "bp"
-            if dim == 2
-                for t = 0:steps
-                    r₀, v₀, f₀, dQ₀, Eₖ₀, Eₚ₀ = simulation_bp!(dim, Npart, freq, r₀,v₀,f₀,fR₀, dQ₀, Eₖ₀,Eₚ₀,c₁₀, c₂₀, c₃₀,a₀, ϵ, cut_off,periodicity,forces!,update_positions_bp!,update_velocities_bp₁!,update_velocities_bp₂!, noise2D)
-                    r , v, f, dQ, Eₖ, Eₚ = Vector(r₀), Vector(v₀), Vector(f₀), Vector(dQ₀), Vector(Eₖ₀), Vector(Eₚ₀)
-                    write_xyz(output_file, Npart, c2, alpha_lst, σ,L, t, dim, part_type, r, v, dQ)
-                    write_log(output_file, t,c2,alpha_lst, Eₖ, Eₚ, dQ)
-                    yield()
-                end
-            elseif dim == 3
-                for t = 0:steps
-                    r₀, v₀, f₀, dQ₀, Eₖ₀, Eₚ₀ = simulation_bp!(dim, Npart, freq, r₀,v₀,f₀,fR₀, dQ₀, Eₖ₀,Eₚ₀,c₁₀, c₂₀, c₃₀,a₀, ϵ, cut_off,periodicity,forces!,update_positions_bp!,update_velocities_bp₁!,update_velocities_bp₂!, noise3D)
-                    r , v, f, dQ, Eₖ, Eₚ = Vector(r₀), Vector(v₀), Vector(f₀), Vector(dQ₀), Vector(Eₖ₀), Vector(Eₚ₀)
-                    write_xyz(output_file, Npart, c2, alpha_lst, σ,L, t, dim, part_type, r, v, dQ)
                     write_log(output_file, t,c2,alpha_lst, Eₖ, Eₚ, dQ)
                     yield()
                 end
@@ -629,25 +524,6 @@ function run_sim_final(;
                       part_type[i] = ptypes[2]
                       alpha_lst[i] = Float32(α_relax)
                   end
-              elseif (integ == "ml" || integ == "bp")
-                  a   = zeros(Float32,Npart)
-                  c1      = exp(-0.5f0*a²*Δt)
-                  c2      = Δt
-                  [c₁[i]  = c1 for i in 1:Npart]
-                  [c₂[i]  = c2 for i in 1:Npart]
-                  [a[i]   = a² for i in 1:Npart]
-                  for i = 1:num_pl
-                      c₃[i] = Float32(sqrt(a²*α_relax*(1-c1^2)))
-                      v0[i] = c₃[i] .* v0[i]
-                      part_type[i] = ptypes[1]
-                      alpha_lst[i] = Float32(α_relax)
-                  end
-                  for i = num_pl+1:Npart
-                      c₃[i] = Float32(sqrt(a²*α_relax*(1-c1^2)))
-                      v0[i] = c₃[i] .* v0[i]
-                      part_type[i] = ptypes[2]
-                      alpha_lst[i] = Float32(α_relax)
-                  end
               end
 
 
@@ -664,12 +540,9 @@ function run_sim_final(;
               Eₖ_d     = CuVector(Eₖ)
               Eₚ_d     = CuVector(Eₚ)
 
-              if (integ == "ml" || integ == "bp")
-                  a_d     = CuVector(a)
-                  r₀, v₀, f₀, fR₀, dQ₀, Eₖ₀, Eₚ₀, c₁₀, c₂₀, c₃₀, α₀,a₀ = r0_d, v0_d, f0_d, fR_d, dQ_d, Eₖ_d, Eₚ_d, c₁_d, c₂_d, c₃_d ,α_d, a_d
-              else
-                  r₀, v₀, f₀, fR₀, dQ₀, Eₖ₀, Eₚ₀, c₁₀, c₂₀, c₃₀, α₀ = r0_d, v0_d, f0_d, fR_d, dQ_d, Eₖ_d, Eₚ_d, c₁_d, c₂_d, c₃_d ,α_d
-              end
+
+            r₀, v₀, f₀, fR₀, dQ₀, Eₖ₀, Eₚ₀, c₁₀, c₂₀, c₃₀, α₀ = r0_d, v0_d, f0_d, fR_d, dQ_d, Eₖ_d, Eₚ_d, c₁_d, c₂_d, c₃_d ,α_d
+
 
 
 
@@ -690,18 +563,6 @@ function run_sim_final(;
                       r₀, v₀, f₀, dQ₀, Eₖ₀, Eₚ₀ = simulation_lf!(dim, Npart, freq_relax, r₀,v₀,f₀,fR₀, dQ₀, Eₖ₀,Eₚ₀,c₁₀, c₂₀, c₃₀, ϵ, cut_off,periodicity,forces!,update_positions_lf!,update_velocities_lf!, noise2D)
                   elseif dim == 3
                       r₀, v₀, f₀, dQ₀, Eₖ₀, Eₚ₀ = simulation_lf!(dim, Npart, freq_relax, r₀,v₀,f₀,fR₀, dQ₀, Eₖ₀,Eₚ₀,c₁₀, c₂₀, c₃₀, ϵ, cut_off,periodicity,forces!,update_positions_lf!,update_velocities_lf!, noise3D)
-                  end
-              elseif integ == "ml"
-                  if dim == 2
-                      r₀, v₀, f₀, dQ₀, Eₖ₀, Eₚ₀ = simulation_ml!(dim, Npart, freq_relax, r₀,v₀,f₀,fR₀, dQ₀, Eₖ₀,Eₚ₀,c₁₀, c₂₀, c₃₀,a₀, ϵ, cut_off,periodicity,forces!,update_positions_ml!,update_velocities_ml₁!,update_velocities_ml₂!, noise2D)
-                  elseif dim == 3
-                      r₀, v₀, f₀, dQ₀, Eₖ₀, Eₚ₀ = simulation_ml!(dim, Npart, freq_relax, r₀,v₀,f₀,fR₀, dQ₀, Eₖ₀,Eₚ₀,c₁₀, c₂₀, c₃₀,a₀, ϵ, cut_off,periodicity,forces!,update_positions_ml!,update_velocities_ml₁!,update_velocities_ml₂!, noise3D)
-                  end
-              elseif integ == "bp"
-                  if dim == 2
-                      r₀, v₀, f₀, dQ₀, Eₖ₀, Eₚ₀ = simulation_bp!(dim, Npart, freq_relax, r₀,v₀,f₀,fR₀, dQ₀, Eₖ₀,Eₚ₀,c₁₀, c₂₀, c₃₀,a₀, ϵ, cut_off,periodicity,forces!,update_positions_bp!,update_velocities_bp₁!,update_velocities_bp₂!, noise2D)
-                  elseif dim == 3
-                      r₀, v₀, f₀, dQ₀, Eₖ₀, Eₚ₀ = simulation_bp!(dim, Npart, freq_relax, r₀,v₀,f₀,fR₀, dQ₀, Eₖ₀,Eₚ₀,c₁₀, c₂₀, c₃₀,a₀, ϵ, cut_off,periodicity,forces!,update_positions_bp!,update_velocities_bp₁!,update_velocities_bp₂!, noise3D)
                   end
               end
         end
