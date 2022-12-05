@@ -31,7 +31,7 @@ function triangular_lattice(L_box::T,lattice_const::T,M_x::Int64, M_y::Int64) wh
     r_y = lattice_const*M_y/2
     for i = 0:M_x-1
         for j = 0:M_y-1
-            pos = [pos_triangulr(lattice_const)[n] .+ @SVector [i * lattice_const - r_x, j * lattice_const - r_y] for n = 1:4]
+            pos = [pos_triangular(lattice_const)[n] .+ @SVector [i * lattice_const - r_x, j * lattice_const - r_y] for n = 1:4]
             for nn = 1:4
                 #if pos_num < Npart
                     push!(positions, pos[nn])
