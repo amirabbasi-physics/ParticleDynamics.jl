@@ -34,9 +34,9 @@ function run_sim_init(;
 
     α       = [α₁, α₂]
 
-    #interaction parameters
+    #Interaction parameters
     cut_off = σ
-    # Time-scales
+    #Time-scales
     τD      = γ*R^2/(kB*T)
     τm      = m/γ
     a²      = (τD/τm)
@@ -162,46 +162,8 @@ function run_sim_init(;
 
             r₀, v₀, f₀, fR₀, dQ₀, Eₖ₀, Eₚ₀, c₁₀, c₂₀, c₃₀, α₀ = r0_d, v0_d, f0_d, fR_d, dQ_d, Eₖ_d, Eₚ_d, c₁_d, c₂_d, c₃_d ,α_d
 
-
-
-
-            if integ == "em"
-              if dim == 2
-                  r₀, v₀, f₀, dQ₀, Eₖ₀, Eₚ₀ = simulation_em!(dim, Npart, freq_relax, r₀,v₀,f₀,fR₀, dQ₀, Eₖ₀,Eₚ₀,c₁₀, c₂₀, c₃₀, ϵ, cut_off,periodicity,forces!, collisions!,update_parts_em!, noise2D)
-                  r0 , v0, f0, dQ, Eₖ, Eₚ = Vector(r₀), Vector(v₀), Vector(f₀), Vector(dQ₀), Vector(Eₖ₀), Vector(Eₚ₀)
-                  write_xyz(output_file, Npart, c2, alpha_lst, σ,L, 0, dim, part_type, r, v, dQ)
-                  write_log(output_file, 0,c2,alpha_lst, Eₖ, Eₚ, dQ)
-              elseif dim == 3
-                  r₀, v₀, f₀, dQ₀, Eₖ₀, Eₚ₀ = simulation_em!(dim, Npart, freq_relax, r₀,v₀,f₀,fR₀, dQ₀, Eₖ₀,Eₚ₀,c₁₀, c₂₀, c₃₀, ϵ, cut_off,periodicity,forces!,update_parts_em!, noise3D)
-                  r0 , v0, f0, dQ, Eₖ, Eₚ = Vector(r₀), Vector(v₀), Vector(f₀), Vector(dQ₀), Vector(Eₖ₀), Vector(Eₚ₀)
-                  write_xyz(output_file, Npart, c2, alpha_lst, σ,L, 0, dim, part_type, r, v, dQ)
-                  write_log(output_file, 0,c2,alpha_lst, Eₖ, Eₚ, dQ)
-              end
-            elseif integ == "vv"
-              if dim == 2
-                  r₀, v₀, f₀, dQ₀, Eₖ₀, Eₚ₀, coll₀ = simulation_vv!(dim, Npart, freq_relax, r₀,v₀,f₀,fR₀, dQ₀, Eₖ₀,Eₚ₀,c₁₀, c₂₀, c₃₀, ϵ, cut_off,periodicity,forces!, collisions!,update_positions_vv!,update_velocities_vv!, noise2D)
-                  r0 , v0, f0, dQ, Eₖ, Eₚ, coll = Vector(r₀), Vector(v₀), Vector(f₀), Vector(dQ₀), Vector(Eₖ₀), Vector(Eₚ₀), Array(coll₀)
-                  write_xyz(output_file, Npart, c2, alpha_lst, σ,L, 0, dim, part_type, r0, v0, dQ)
-                  write_log(output_file, 0,c2,alpha_lst, num_pl, Eₖ, Eₚ, dQ, coll)
-              elseif dim == 3
-                  r₀, v₀, f₀, dQ₀, Eₖ₀, Eₚ₀, coll₀ = simulation_vv!(dim, Npart, freq_relax, r₀,v₀,f₀,fR₀, dQ₀, Eₖ₀,Eₚ₀,c₁₀, c₂₀, c₃₀, ϵ, cut_off,periodicity,forces!, collisions!, update_positions_vv!,update_velocities_vv!, noise3D)
-                  r0 , v0, f0, dQ, Eₖ, Eₚ, coll = Vector(r₀), Vector(v₀), Vector(f₀), Vector(dQ₀), Vector(Eₖ₀), Vector(Eₚ₀), Array(coll₀)
-                  write_xyz(output_file, Npart, c2, alpha_lst, σ,L, 0, dim, part_type, r0, v0, dQ)
-                  write_log(output_file, 0,c2,alpha_lst, num_pl, Eₖ, Eₚ, dQ, coll)
-              end
-            elseif integ == "lf"
-              if dim == 2
-                  r₀, v₀, f₀, dQ₀, Eₖ₀, Eₚ₀ = simulation_lf!(dim, Npart, freq_relax, r₀,v₀,f₀,fR₀, dQ₀, Eₖ₀,Eₚ₀,c₁₀, c₂₀, c₃₀, ϵ, cut_off,periodicity,forces!,update_positions_lf!,update_velocities_lf!, noise2D)
-                  r0 , v0, f0, dQ, Eₖ, Eₚ = Vector(r₀), Vector(v₀), Vector(f₀), Vector(dQ₀), Vector(Eₖ₀), Vector(Eₚ₀)
-                  write_xyz(output_file, Npart, c2, alpha_lst, σ,L, 0, dim, part_type, r, v, dQ)
-                  write_log(output_file, 0,c2,alpha_lst, Eₖ, Eₚ, dQ)
-              elseif dim == 3
-                  r₀, v₀, f₀, dQ₀, Eₖ₀, Eₚ₀ = simulation_lf!(dim, Npart, freq_relax, r₀,v₀,f₀,fR₀, dQ₀, Eₖ₀,Eₚ₀,c₁₀, c₂₀, c₃₀, ϵ, cut_off,periodicity,forces!,update_positions_lf!,update_velocities_lf!, noise3D)
-                  r0 , v0, f0, dQ, Eₖ, Eₚ = Vector(r₀), Vector(v₀), Vector(f₀), Vector(dQ₀), Vector(Eₖ₀), Vector(Eₚ₀)
-                  write_xyz(output_file, Npart, c2, alpha_lst, σ,L, 0, dim, part_type, r, v, dQ)
-                  write_log(output_file, 0,c2,alpha_lst, Eₖ, Eₚ, dQ)
-              end
-            end
+            steps = 1
+            r0 , v0, f0, dQ, Eₖ, Eₚ = simul!(integ, dim, Npart, steps, freq_relax, r₀,v₀,f₀,fR₀, dQ₀, Eₖ₀,Eₚ₀,c₁₀, c₂₀, c₃₀, ϵ, cut_off,periodicity)
         end
 
 
@@ -210,17 +172,19 @@ function run_sim_init(;
     ###############################################################################
         part_type = Vector{String}(undef,Npart)
         alpha_lst = Vector{Float32}(undef,Npart)
-        v0 = Array{SVector{dim,Float32}, 1}()
-        f0 = Array{SVector{dim,Float32}, 1}()
-        fR0 = Array{SVector{dim,Float32}, 1}()
+        v0 = zero(v0)
+        f0 = f0
+        fR0 = zero(f0)
 
-        [push!(v0, @SVector ones(Float32,dim)) for _ in 1:Npart]
-        [push!(f0, @SVector zeros(Float32,dim)) for _ in 1:Npart]
-        [push!(fR0, @SVector zeros(Float32,dim)) for _ in 1:Npart]
+        #[push!(v0, @SVector ones(Float32,dim)) for _ in 1:Npart]
+        #[push!(f0, @SVector zeros(Float32,dim)) for _ in 1:Npart]
+        #[push!(fR0, @SVector zeros(Float32,dim)) for _ in 1:Npart]
 
-        dQ   = zeros(Float32,Npart)
-        Eₖ   = zeros(Float32,Npart)
-        Eₚ   = zeros(Float32,Npart)
+        #dQ   = zeros(Float32,Npart)
+        #Eₖ   = zeros(Float32,Npart)
+        #Eₚ   = zeros(Float32,Npart)
+
+
         c₁   = zeros(Float32,Npart)
         c₂   = zeros(Float32,Npart)
         c₃   = zeros(Float32,Npart)
@@ -308,62 +272,10 @@ function run_sim_init(;
 
         freq = dump_freq
         steps = nsteps ÷ dump_freq
-        if integ =="em"
-            if dim == 2
-                for t = 0:steps
-                    r₀, v₀, f₀, dQ₀, Eₖ₀, Eₚ₀ = simulation_em!(dim, Npart, freq, r₀,v₀,f₀,fR₀, dQ₀, Eₖ₀,Eₚ₀,c₁₀, c₂₀, c₃₀, ϵ, cut_off,periodicity,forces!,update_parts_em!, noise2D)
-                    r0 , v0, f0, dQ, Eₖ, Eₚ = Vector(r₀), Vector(v₀), Vector(f₀), Vector(dQ₀), Vector(Eₖ₀), Vector(Eₚ₀)
-                    write_xyz(output_file, Npart, c2, alpha_lst, σ,L, t, dim, part_type, r0, v0, dQ)
-                    write_log(output_file, t,c2,alpha_lst, Eₖ, Eₚ, dQ)
-                    yield()
-                end
-            elseif dim == 3
-                for t = 0:steps
-                    r₀, v₀, f₀, dQ₀, Eₖ₀, Eₚ₀ = simulation_em!(dim, Npart, freq, r₀,v₀,f₀,fR₀, dQ₀, Eₖ₀,Eₚ₀,c₁₀, c₂₀, c₃₀, ϵ, cut_off,periodicity,forces!,update_parts_em!, noise3D)
-                    r0 , v0, f0, dQ, Eₖ, Eₚ = Vector(r₀), Vector(v₀), Vector(f₀), Vector(dQ₀), Vector(Eₖ₀), Vector(Eₚ₀)
-                    write_xyz(output_file, Npart, c2, alpha_lst, σ,L, t, dim, part_type, r0, v0, dQ)
-                    write_log(output_file, t,c2,alpha_lst, Eₖ, Eₚ, dQ)
-                    yield()
-                end
-            end
-        elseif integ == "vv"
-            if dim == 2
-                for t = 0:steps
-                    r₀, v₀, f₀, dQ₀, Eₖ₀, Eₚ₀, coll₀ = simulation_vv!(dim, Npart, freq, r₀,v₀,f₀,fR₀, dQ₀, Eₖ₀,Eₚ₀,c₁₀, c₂₀, c₃₀, ϵ, cut_off,periodicity,forces!, collisions!,update_positions_vv!,update_velocities_vv!, noise2D)
-                    r0, v0, f0, dQ, Eₖ, Eₚ, coll = Vector(r₀), Vector(v₀), Vector(f₀), Vector(dQ₀), Vector(Eₖ₀), Vector(Eₚ₀), Array(coll₀)
-                    write_xyz(output_file, Npart, c2, alpha_lst, σ,L, t, dim, part_type, r0, v0, dQ)
-                    write_log(output_file, t,c2,alpha_lst, num_pl, Eₖ, Eₚ, dQ, coll)
-                    yield()
-                end
-            elseif dim == 3
-                for t = 0:steps
-                    r₀, v₀, f₀, dQ₀, Eₖ₀, Eₚ₀, coll₀ = simulation_vv!(dim, Npart, freq, r₀,v₀,f₀,fR₀, dQ₀, Eₖ₀,Eₚ₀,c₁₀, c₂₀, c₃₀, ϵ, cut_off,periodicity,forces!, collisions!,update_positions_vv!,update_velocities_vv!, noise3D)
-                    r0, v0, f0, dQ, Eₖ, Eₚ, coll = Vector(r₀), Vector(v₀), Vector(f₀), Vector(dQ₀), Vector(Eₖ₀), Vector(Eₚ₀), Array(coll₀)
-                    write_xyz(output_file, Npart, c2, alpha_lst, σ,L, t, dim, part_type, r0, v0, dQ)
-                    write_log(output_file, t,c2,alpha_lst, num_pl, Eₖ, Eₚ, dQ, coll)
-                    yield()
-                end
-            end
-        elseif integ == "lf"
-            if dim == 2
-                for t = 0:steps
-                    r₀, v₀, f₀, dQ₀, Eₖ₀, Eₚ₀ = simulation_lf!(dim, Npart, freq, r₀,v₀,f₀,fR₀, dQ₀, Eₖ₀,Eₚ₀,c₁₀, c₂₀, c₃₀, ϵ, cut_off,periodicity,forces!,update_positions_lf!,update_velocities_lf!, noise2D)
-                    r0 , v0, f0, dQ, Eₖ, Eₚ = Vector(r₀), Vector(v₀), Vector(f₀), Vector(dQ₀), Vector(Eₖ₀), Vector(Eₚ₀)
-                    write_xyz(output_file, Npart, c2, alpha_lst, σ,L, t, dim, part_type, r0, v0, dQ)
-                    write_log(output_file, t,c2,alpha_lst, Eₖ, Eₚ, dQ)
-                    yield()
-                end
-            elseif dim == 3
-                for t = 0:steps
-                    r₀, v₀, f₀, dQ₀, Eₖ₀, Eₚ₀ = simulation_lf!(dim, Npart, freq, r₀,v₀,f₀,fR₀, dQ₀, Eₖ₀,Eₚ₀,c₁₀, c₂₀, c₃₀, ϵ, cut_off,periodicity,forces!,update_positions_lf!,update_velocities_lf!, noise3D)
-                    r0 , v0, f0, dQ, Eₖ, Eₚ = Vector(r₀), Vector(v₀), Vector(f₀), Vector(dQ₀), Vector(Eₖ₀), Vector(Eₚ₀)
-                    write_xyz(output_file, Npart, c2, alpha_lst, σ,L, t, dim, part_type, r0, v0, dQ)
-                    write_log(output_file, t,c2,alpha_lst, Eₖ, Eₚ, dQ)
-                    yield()
-                end
-            end
-        end
+
+        r0 , v0, f0, dQ, Eₖ, Eₚ = simul!(integ, dim, Npart, steps, freq, r₀,v₀,f₀,fR₀, dQ₀, Eₖ₀,Eₚ₀,c₁₀, c₂₀, c₃₀, ϵ, cut_off,periodicity)
     end
+    return nothing
 end
 
 export run_sim_final
@@ -734,4 +646,82 @@ function run_sim_final(;
             end
         end
     end
+end
+
+function simul!(
+    integ::String, 
+    dim::Int,
+    Npart::Int,
+    steps::Int,
+    freq::Int,
+    r₀::CuVector{SVector{N,T}},
+    v₀::CuVector{SVector{N,T}},
+    f₀::CuVector{SVector{N,T}},
+    fR₀::CuVector{SVector{N,T}},
+    dQ₀::CuVector{T},
+    Eₖ₀::CuVector{T},
+    Eₚ₀::CuVector{T},
+    c₁₀::CuVector{T},
+    c₂₀::CuVector{T},
+    c₃₀::CuVector{T},
+    ϵ::T,
+    cut_off::T,
+    periodicity::SVector{N,T}) where {N,T}
+
+    if integ == "em"
+        if dim == 2
+            for t = 0:steps
+                r₀, v₀, f₀, dQ₀, Eₖ₀, Eₚ₀, coll₀ = simulation_em!(dim, Npart, freq, r₀,v₀,f₀,fR₀, dQ₀, Eₖ₀,Eₚ₀,c₁₀, c₂₀, c₃₀, ϵ, cut_off,periodicity,forces!, collisions!,update_parts_em!, noise2D)
+                r0, v0, dQ, Eₖ, Eₚ, coll = Vector(r₀), Vector(v₀), Vector(dQ₀), Vector(Eₖ₀), Vector(Eₚ₀), Array(coll₀)
+                write_xyz(output_file, Npart, c2, alpha_lst, σ,L, t, dim, part_type, r0, v0, dQ)
+                write_log(output_file, t,c2,alpha_lst, num_pl, Eₖ, Eₚ, dQ, coll)
+                yield()
+            end
+        elseif dim == 3
+            for t = 0:steps
+                r₀, v₀, f₀, dQ₀, Eₖ₀, Eₚ₀, coll₀ = simulation_em!(dim, Npart, freq, r₀,v₀,f₀,fR₀, dQ₀, Eₖ₀,Eₚ₀,c₁₀, c₂₀, c₃₀, ϵ, cut_off,periodicity,forces!, collisions!,update_parts_em!, noise3D)
+                r0, v0, dQ, Eₖ, Eₚ, coll = Vector(r₀), Vector(v₀), Vector(dQ₀), Vector(Eₖ₀), Vector(Eₚ₀), Array(coll₀)
+                write_xyz(output_file, Npart, c2, alpha_lst, σ,L, t, dim, part_type, r0, v0, dQ)
+                write_log(output_file, t,c2,alpha_lst, num_pl, Eₖ, Eₚ, dQ, coll)
+                yield()
+            end
+        end
+      elseif integ == "vv"
+        if dim == 2
+            for t = 0:steps
+                r₀, v₀, f₀, dQ₀, Eₖ₀, Eₚ₀, coll₀ = simulation_vv!(dim, Npart, freq, r₀,v₀,f₀,fR₀, dQ₀, Eₖ₀,Eₚ₀,c₁₀, c₂₀, c₃₀, ϵ, cut_off,periodicity,forces!, collisions!,update_positions_vv!,update_velocities_vv!, noise2D)
+                r0, v0, f0, dQ, Eₖ, Eₚ, coll = Vector(r₀), Vector(v₀), Vector(f₀), Vector(dQ₀), Vector(Eₖ₀), Vector(Eₚ₀), Array(coll₀)
+                write_xyz(output_file, Npart, c2, alpha_lst, σ,L, t, dim, part_type, r0, v0, dQ)
+                write_log(output_file, t,c2,alpha_lst, num_pl, Eₖ, Eₚ, dQ, coll)
+                yield()
+            end
+        elseif dim == 3
+            for t = 0:steps
+                r₀, v₀, f₀, dQ₀, Eₖ₀, Eₚ₀, coll₀ = simulation_vv!(dim, Npart, freq, r₀,v₀,f₀,fR₀, dQ₀, Eₖ₀,Eₚ₀,c₁₀, c₂₀, c₃₀, ϵ, cut_off,periodicity,forces!, collisions!,update_positions_vv!,update_velocities_vv!, noise3D)
+                r0, v0, f0, dQ, Eₖ, Eₚ, coll = Vector(r₀), Vector(v₀), Vector(f₀), Vector(dQ₀), Vector(Eₖ₀), Vector(Eₚ₀), Array(coll₀)
+                write_xyz(output_file, Npart, c2, alpha_lst, σ,L, t, dim, part_type, r0, v0, dQ)
+                write_log(output_file, t,c2,alpha_lst, num_pl, Eₖ, Eₚ, dQ, coll)
+                yield()
+            end
+        end
+      elseif integ == "lf"
+        if dim == 2
+            for t = 0:steps
+                r₀, v₀, f₀, dQ₀, Eₖ₀, Eₚ₀, coll₀ = simulation_lf!(dim, Npart, freq, r₀,v₀,f₀,fR₀, dQ₀, Eₖ₀,Eₚ₀,c₁₀, c₂₀, c₃₀, ϵ, cut_off,periodicity,forces!, collisions!,update_positions_lf!,update_velocities_lf!, noise2D)
+                r0, v0, dQ, Eₖ, Eₚ, coll = Vector(r₀), Vector(v₀), Vector(dQ₀), Vector(Eₖ₀), Vector(Eₚ₀), Array(coll₀)
+                write_xyz(output_file, Npart, c2, alpha_lst, σ,L, t, dim, part_type, r0, v0, dQ)
+                write_log(output_file, t,c2,alpha_lst, num_pl, Eₖ, Eₚ, dQ, coll)
+                yield()
+            end
+        elseif dim == 3
+            for t = 0:steps
+                r₀, v₀, f₀, dQ₀, Eₖ₀, Eₚ₀, coll₀ = simulation_lf!(dim, Npart, freq, r₀,v₀,f₀,fR₀, dQ₀, Eₖ₀,Eₚ₀,c₁₀, c₂₀, c₃₀, ϵ, cut_off,periodicity,forces!, collisions!,update_positions_lf!,update_velocities_lf!, noise3D)
+                r0, v0, dQ, Eₖ, Eₚ, coll = Vector(r₀), Vector(v₀), Vector(dQ₀), Vector(Eₖ₀), Vector(Eₚ₀), Array(coll₀)
+                write_xyz(output_file, Npart, c2, alpha_lst, σ,L, t, dim, part_type, r0, v0, dQ)
+                write_log(output_file, t,c2,alpha_lst, num_pl, Eₖ, Eₚ, dQ, coll)
+                yield()
+            end
+        end
+      end
+      return r0 , v0, f0, dQ, Eₖ, Eₚ
 end
