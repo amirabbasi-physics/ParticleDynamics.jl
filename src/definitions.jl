@@ -55,18 +55,34 @@ function pos_triangular(a::T) where T
 end
 
 
+export triangular_circle
+function triangular_circle(L_box::T, r0::Array{SVector{N,T}}, rad::T) where {N,T}
+    new_pos = Array{SVector{2,T}, 1}()
+    r_center = SVector{2,T}([0.5f0*L_box,0.5f0*L_box])
+    for i = 1:length(r0)
+        dist = r0[i] .- r_center
+        if norm(dist)/rad <= 1
+            push!(new_pos , r0[i])
+        end
+    end
+    return new_pos
+end
+
+
 export simplecubic_lattice
 
-function simplecubic_lattice(s_x::Float32, s_y::Float32, s_z::Float32, M_x::Int64, M_y::Int64, M_z::Int64)
-    positions = Array{SVector{3,Float32}, 1}()
+function simplecubic_lattice(s_x::T, s_y::T, s_z::T, M_x::Int64, M_y::Int64, M_z::Int64) where T
+    positions = Array{SVector{3,T}, 1}()
     for i = 0 : M_x - 1, j = 0 : M_y - 1, k = 0 : M_z - 1
         push!(positions, SVector{3,Float32}([(i + 0.5f0) * s_x, (j + 0.5f0) * s_y, (k + 0.5f0) * s_z]))
     end
     return positions
 end
+
+
 export fcc_sphere
 function fcc_sphere(L_box::T, r0::Array{SVector{N,T}}, rad::T) where {N,T}
-    new_pos = Array{SVector{3,Float32}, 1}()
+    new_pos = Array{SVector{3,T}, 1}()
     r_center = SVector{3,Float32}([0.5f0*L_box,0.5f0*L_box,0.5f0*L_box])
     for i = 1:length(r0)
         dist = r0[i] .- r_center

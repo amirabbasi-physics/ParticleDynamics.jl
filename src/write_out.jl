@@ -92,7 +92,6 @@ function write_log(
     hot_hot = coll[(num_pl+1):end , num_pl+1:end]
 
 
-    Npart = size(coll,1)
     coll_cold_cold  = 0.5*sum(cold_cold)./c2
     coll_cold_hot   = sum(cold_hot)./c2
     coll_hot_hot    = 0.5*sum(hot_hot)./c2
@@ -107,7 +106,7 @@ function write_log(
     data = hcat(step, Ekin, sdot, sdotpp, Float32(coll_cold_cold), Float32(coll_cold_hot), Float32(coll_hot_hot), Float32(coll_tot))
     if step == 0
        open(out_file,"w") do file
-            println(file,"Time      |   E_kin  |    E_pot  |    EPR     |   cold/cold coll rate    |   cold/hot coll rate     |   hot/hot coll rate  |   total coll rate")
+            println(file,"Time      |   E_kin  |    EPR  |    EPR per part    |   cold/cold coll rate    |   cold/hot coll rate     |   hot/hot coll rate  |   total coll rate")
             #writedlm(file,data)
         end
     else
