@@ -344,7 +344,7 @@ function run_sim_final(;
             lattice_const = σ
             r = triangular_lattice(L,lattice_const, nn, nn)
             r = [r[i] .+ r_mean for i in 1:length(r)]
-            rad = 0.3*nn*lattice_const
+            rad = 0.3f0*nn*lattice_const
             r  = triangular_circle(L, r, rad)
             [push!(r0,r[i]) for i = 1:length(r)]
             n_remain = Npart - length(r)
