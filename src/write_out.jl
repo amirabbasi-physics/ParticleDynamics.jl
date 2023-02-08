@@ -6,7 +6,6 @@ export write_log
 function write_xyz(
     ofname::String,
     Npart::Int,
-    c2::T,
     alpha_lst::Vector{T},
     σ::T,
     L::T,
@@ -49,7 +48,6 @@ end
 function write_log(
     ofname::String,
     step::Int,
-    c2::T,
     α::Vector{T},
     Eₖ::Vector{T},
     Eₚ::Vector{T},
@@ -117,3 +115,4 @@ function write_log(
         end
     end
 end
+
