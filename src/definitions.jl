@@ -155,3 +155,137 @@ function random_pos(dim::Int64, L::T) where T
 	position = SVector{dim,T}(rand(dim)) .* L
 	return position
 end
+
+
+################################################################################
+#
+#           			APMs / Passive Brownian Particles
+#
+################################################################################
+export PassiveP
+mutable struct PassiveP{T<:AbstractFloat, N<:Int}
+	part_type::String
+	rad::T
+	α::T
+	τm::T
+	τD::T
+
+
+    r::SVector{N,T}
+	v::SVector{N,T}
+	f::SVector{N,T}
+
+
+    function Particle(; part_type::String = "Cold",r::SVector{N,T}, v::SVector{N,T}, f::SVector{N,T},
+		density::T, η::T, Radii::T, α::T, Temp::T) where {T<:AbstractFloat, N<:Int}
+        kB = T(1.380649*10^(-23))
+		rad = Radii/1.0e-6
+		m = density*volume(Radii)
+		γ = friction(η,Radii)
+		τm = m/γ
+		τD = γ*(Radii)^2/(kB*Temp)
+
+        new{T,N}(part_type,rad,α,τm, τD,r,v,f)
+    end
+end
+
+
+
+export APM
+mutable struct APM{T<:AbstractFloat,N<:Int}
+	part_type::String
+	rad::T
+	α::T
+	τm::T
+	τD::T
+
+
+    r::SVector{N,T}
+	v::SVector{N,T}
+	f::SVector{N,T}
+
+	τΓ::T
+	r_pseu::SVector{N,T}
+	v_pseu::SVector{N,T}
+
+
+    function Particle(; part_type::String = "APM",r::SVector{N,T}, v::SVector{N,T}, f::SVector{N,T},
+		density::T, η::T, Radii::T, α::T, Temp::T, k::T, r_pseu::SVector{N,T}, v_pseu::SVector{N,T}) where {T<:AbstractFloat, N<:Int}
+        kB = T(1.380649*10^(-23))
+		rad = Radii/1.0e-6
+		m = density*volume(Radii)
+		γ = friction(η,Radii)
+		τm = m/γ
+		τD = γ*(Radii)^2/(kB*Temp)
+        τΓ = γ/k
+        new{T,N}(part_type,rad,α,τm, τD,r,v,f, τΓ,r_pseu,v_pseu)
+    end
+end
+
+
+
+
+export WCA
+export Harmonic_Repulsive
+export AbstractInteraction
+abstract type AbstractInteraction end
+
+
+
+struct WCA{T <: AbstractFloat} <: AbstractInteraction
+    ϵ::T
+    σ::T
+    r_cut::T
+
+    particles::Array{Particle, 1}
+
+    function WCA(; particles::Array{Particle, 1}, ϵ::T, σ::T, r_cut::T) where T
+        new(ϵ, σ, r_cut, particles)
+    end
+end
+
+struct Harmonic_Repulsive{T <: AbstractFloat} <: AbstractInteraction
+	k::T
+	r_cut::T
+    particles::Array{Particle, 1}
+
+    function Harmonic_Repulsive(; k::T, r_cut::T, particles::Array{Particle, 1})
+        new(k, r_cut, particles)
+    end
+end
+
+
+
+
+
+
+export Simulation
+
+mutable struct Simulation{T<:AbstractFloat,N<:Int}
+    descriptor::String
+
+    periodicity::SVector{N,T}
+
+    particles::Array{Particle, 1}
+    interactions::Array{AbstractInteraction, 1}
+
+    dt::T
+    integrators::Array{AbstractIntegrator, 1}
+    num_steps::N
+
+    save_interval::N
+    particles_to_save::Array{Particle, 1}
+	output_file::String
+    function Simulation(; descriptor::String = "No description given...",
+                          periodicity::SVector{N,T},
+                          particles::Array{Particle, 1} = Particle[],
+                          interactions::Array{AbstractInteraction, 1} = AbstractInteraction[],
+                          dt::T,
+                          integrators::Array{AbstractIntegrator, 1} = AbstractIntegrator[],
+                          num_steps::N = 0,
+                          save_interval::N = 0,
+                          particles_to_save::Array{Particle, 1}=  Particle[],
+						  output_file::String = "output") where {T,N}
+        new(descriptor, periodicity, particles, interactions, dt,integrators, num_steps, save_interval, particles_to_save,output_file)
+    end
+end
