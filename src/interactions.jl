@@ -180,7 +180,7 @@ end
 
 ################################################################################
 #                                                                              #
-#               Calculating forces and collision events                        #
+#                   Calculating forces and collision events                    #
 #                                                                              #
 ################################################################################
 export collisions!
