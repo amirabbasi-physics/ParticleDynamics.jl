@@ -9,20 +9,70 @@ function noise3D(Npart::Int)
     return SVector{3,Float32}.(CUDA.randn(Float32,Npart) ,CUDA.randn(Float32,Npart),CUDA.randn(Float32,Npart))
 end
 
+
+
+export Box
+
+@inline function Box(; dim::Int, Npart::Int, ϕ::T, σ::T) where T <: AbstractFloat    # This should be changed for polydisperse particles!
+    if dim == 2
+        L = T(sqrt(π*σ^2.0*Npart/(4.0*ϕ)))
+        return SVector{2,T}([L,L])
+    elseif dim == 3
+        L = T((π*σ^3.0*Npart/(6.0*ϕ))^(1.0/3.0))
+        return SVector{3,T}([L,L,L])
+    end
+end
+
+
 export rectangular_lattice
 
-function rectangular_lattice(s_x::T, s_y::T, M_x::Int, M_y::Int) where T
+function rectangular_lattice(Npart::Int, box::SVector{2,T}) where T
     positions = Array{SVector{2,T}, 1}()
+    L_x = box[1]
+    L_y = L_x
+    s_x, s_y = T(L_x/sqrt(Npart)), T(L_y/sqrt(Npart))
+    M_x = ceil(Int,Npart^(1/2))
+    M_y = M_x
     for i = 0 : M_x - 1, j = 0 : M_y - 1
         push!(positions, SVector{2,T}([(i + 0.50) * s_x, (j + 0.50) * s_y]))
     end
     return positions
 end
 
+export simplecubic_lattice
+
+function simplecubic_lattice(Npart::Int, box::SVector{3,T}) where T
+    positions = Array{SVector{3,T}, 1}()
+    L_x = box[1]
+    L_y = L_x
+    L_z = L_x
+
+    M_x = ceil(Int,Npart^(1/3))
+    M_y = M_x
+    M_z = M_y
+
+    s_x, s_y, s_z = T(L_x/(Npart)^(1.0/3.0)), T(L_y/(Npart)^(1.0/3.0)), T(L_z/(Npart)^(1.0/3.0))
+
+    for i = 0 : M_x - 1, j = 0 : M_y - 1, k = 0 : M_z - 1
+        push!(positions, @SVector T[(i + 0.50) * s_x, (j + 0.50) * s_y, (k + 0.50) * s_z])
+    end
+    return positions
+end
+
+
+if dim == 2
+    NN = ceil(Int,Npart^(1/2))
+    r0 = rectangular_lattice(s_x,s_y,NN,NN)
+elseif dim == 3
+    NN = ceil(Int,Npart^(1/3))
+    r0 = simplecubic_lattice(s_x,s_y,s_z,NN,NN,NN)
+end
+
+
 
 export triangular_lattice
 
-function triangular_lattice(L_box::T,lattice_const::T,M_x::Int64, M_y::Int64) where T
+function triangular_lattice(box::T,lattice_const::T,M_x::Int64, M_y::Int64) where T
     """Calculates the positions of an hexagonal lattice with the lattice constant a
     in a square box with the given dimensions"""
     # initialize coordinates: time 4 since there are 4 atoms in each unit cell
@@ -60,23 +110,12 @@ function triangular_circle(L_box::T, r0::Array{SVector{N,T}}, rad::T) where {N,T
     new_pos = Array{SVector{2,T}, 1}()
     r_center = @SVector T[0.5*L_box,0.5*L_box]
     for i = 1:length(r0)
-        dist = r0[i] .- r_center
-        if norm(dist)/rad <= 1
+        dist = 
+        if norm(r0[i] .- r_center)/rad <= 1
             push!(new_pos , r0[i])
         end
     end
     return new_pos
-end
-
-
-export simplecubic_lattice
-
-function simplecubic_lattice(s_x::T, s_y::T, s_z::T, M_x::Int64, M_y::Int64, M_z::Int64) where T
-    positions = Array{SVector{3,T}, 1}()
-    for i = 0 : M_x - 1, j = 0 : M_y - 1, k = 0 : M_z - 1
-        push!(positions, @SVector T[(i + 0.50) * s_x, (j + 0.50) * s_y, (k + 0.50) * s_z])
-    end
-    return positions
 end
 
 
@@ -128,7 +167,7 @@ function pos_fcc(a::T) where T
 end
 
 export isinsphere
-function isinsphere(L::T, N::Int32, σ::T, pos::SVector{3,T}) where T
+function isinsphere(L::T, N::Int, σ::T, pos::SVector{3,T}) where T
     mid_point = @SVector T[0.50*L, 0.50*L, 0.50*L]
     sphere_rad = T((N/8)^(1/3)*σ)
     if norm(pos-mid_point) < sphere_rad
@@ -139,7 +178,7 @@ function isinsphere(L::T, N::Int32, σ::T, pos::SVector{3,T}) where T
 end
 
 export isincircle
-function isincircle(L::T, N::Int32, σ::T, pos::SVector{2,T}) where T
+function isincircle(L::T, N::Int, σ::T, pos::SVector{2,T}) where T
     mid_point = @SVector T[0.50*L, 0.50*L]
     circle_rad = T((N/8)^(1/3)*σ)                   # Correct the formula!!!!!!!!!!!!
     if norm(pos-mid_point) < circle_rad
@@ -150,6 +189,52 @@ function isincircle(L::T, N::Int32, σ::T, pos::SVector{2,T}) where T
 end
 
 
+function (box::Array{N,T}) where {N,T}
+    dim = length(box)
+    if dim == 2
+        L_x, L_y = box[1], box[2]
+        a_x = 0.5f0*L_x
+        a_y = 0.5f0*L_y
+        r_mean = @SVector [a_x, a_y]
+        lattice_const = σ
+        r = triangular_lattice(L,lattice_const, nn, nn)
+        r = [r[i] .+ r_mean for i in 1:length(r)]
+        rad = 0.3f0*nn*lattice_const
+        r  = triangular_circle(L, r, rad)
+        [push!(r0,r[i]) for i = 1:length(r)]
+        n_remain = Npart - length(r)
+        ii = 0
+        while ii < n_remain
+            pos = random_pos(dim,L)
+            if (pos[1] > L_x - rad + 2.0f0*σ || pos[1] < rad - 2.0f0*σ) || (pos[2] > L_y - rad + 2.0f0*σ || pos[2] < rad - 2.0f0*σ)
+                push!(r0,pos)
+                ii += 1
+            end
+        end
+    elseif dim == 3
+        L_x, L_y, L_z = box[1], box[2], box[3]
+        a_x = 0.5f0*L_x
+        a_y = 0.5f0*L_y
+        a_z = 0.5f0*L_z
+        r_mean = @SVector [a_x, a_y, a_z]
+
+        lattice_const = sqrt(2.0f0)*σ
+        r = fcc_lattice(L,lattice_const, nn, nn, nn)
+        r = [r[i] .+ r_mean for i in 1:length(r)]
+        rad = 0.412f0*nn*lattice_const
+        r  = fcc_sphere(L, r, rad)
+        [push!(r0,r[i]) for i = 1:length(r)]
+        n_remain = Npart - length(r)
+        ii = 0
+        while ii < n_remain
+            pos = random_pos(dim,L)
+            if (pos[1] > L_x - rad + 2.0f0*σ || pos[1] < rad - 2.0f0*σ) || (pos[2] > L_y - rad + 2.0f0*σ || pos[2] < rad - 2.0f0*σ) || (pos[3] > L_z - rad + 2.0f0*σ || pos[3] < rad - 2.0f0*σ)
+                push!(r0,pos)
+                ii += 1
+            end
+        end
+    end
+end
 
 export volume
 @inline function volume(R::T)::T where T
@@ -164,16 +249,15 @@ end
 
 export random_pos
 
-function random_pos(dim::Int64, L::T) where T
-	position = SVector{dim,T}(rand(dim)) .* L
-	return position
+function random_pos(dim::Int, L::T) where T
+	return SVector{dim,T}(rand(dim)) .* L
 end
 
 
 ################################################################################
-#
+################################################################################
 #           			APMs / Passive Brownian Particles
-#
+################################################################################
 ################################################################################
 
 export Particle
@@ -207,7 +291,7 @@ function PassiveP(; part_type::String = "Cold",r::SVector{N,T}, v::SVector{N,T},
 end
 
 
-
+"""
 export APM
 mutable struct APM{T <: AbstractFloat, N <: Int} <: Particle
 	part_type::String
@@ -234,11 +318,14 @@ function APM(; part_type::String = "APM",r::SVector{N,T}, v::SVector{N,T}, f::SV
     τΓ = γ/k
     APM{T,N}(part_type, rad, α, τm, τD, τΓ, r, v, f, r_pseu, v_pseu)
 end
+"""
 ################################################################################
 #
 #           			Interactions definition
 #
 ################################################################################
+
+
 export WCA
 export Harmonic_Repulsive
 export AbstractInteraction
@@ -256,6 +343,7 @@ function WCA(ϵ::T, σ::T, r_cut::T, particles::Array{T, 1}) where T<:AbstractFl
     WCA{T}(ϵ, σ, r_cut, particles)
 end
 
+
 struct Harmonic_Repulsive{T<:AbstractFloat} <: AbstractInteraction
     k::T
     r_cut::T
@@ -267,13 +355,11 @@ function Harmonic_Repulsive(k::T, r_cut::T, particles::Array{T, 1}) where T<:Abs
 end
 
 
-
 ################################################################################
-#
-#           			Simulation definition                                   
-#                                                                              
 ################################################################################
-
+#           			Simulation definition                                  #
+################################################################################                                                                              
+################################################################################
 
 export Simulation
 
