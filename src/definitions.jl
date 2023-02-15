@@ -60,15 +60,6 @@ function simplecubic_lattice(Npart::Int, box::SVector{3,T}) where T
 end
 
 
-if dim == 2
-    NN = ceil(Int,Npart^(1/2))
-    r0 = rectangular_lattice(s_x,s_y,NN,NN)
-elseif dim == 3
-    NN = ceil(Int,Npart^(1/3))
-    r0 = simplecubic_lattice(s_x,s_y,s_z,NN,NN,NN)
-end
-
-
 
 export triangular_lattice
 
@@ -189,51 +180,58 @@ function isincircle(L::T, N::Int, σ::T, pos::SVector{2,T}) where T
 end
 
 
-function (box::Array{N,T}) where {N,T}
+function cut_circle_sphere!(box::Array{N,T}, R::T, Npart::N, fraction::T) where {N,T}
     dim = length(box)
     if dim == 2
+        r_init = Array{SVector{2,T}}(undef, Npart)
+        N_shape = ceil(Npart .* fraction)
+        nn = ceil(0.5*sqrt(N_shape))
         L_x, L_y = box[1], box[2]
         a_x = 0.5f0*L_x
         a_y = 0.5f0*L_y
         r_mean = @SVector [a_x, a_y]
-        lattice_const = σ
+        lattice_const = 2R
         r = triangular_lattice(L,lattice_const, nn, nn)
         r = [r[i] .+ r_mean for i in 1:length(r)]
-        rad = 0.3f0*nn*lattice_const
+        rad = sqrt(N_shape*3*sqrt(3)*r^2 /2π)
         r  = triangular_circle(L, r, rad)
-        [push!(r0,r[i]) for i = 1:length(r)]
+        [r_init[i]=r[i] for i = 1:length(r)]
         n_remain = Npart - length(r)
         ii = 0
         while ii < n_remain
             pos = random_pos(dim,L)
-            if (pos[1] > L_x - rad + 2.0f0*σ || pos[1] < rad - 2.0f0*σ) || (pos[2] > L_y - rad + 2.0f0*σ || pos[2] < rad - 2.0f0*σ)
-                push!(r0,pos)
+            if (pos[1] > L_x - rad + 4R || pos[1] < rad - 4R) || (pos[2] > L_y - rad + 4R || pos[2] < rad - 4R)
                 ii += 1
+                r_init[length(r)+ ii] = pos                
             end
         end
     elseif dim == 3
+        r_init = Array{SVector{3,T}}(undef, Npart)
+        N_shape = ceil(Npart .* fraction)
+        nn = ceil(cbrt(N_shape))
         L_x, L_y, L_z = box[1], box[2], box[3]
         a_x = 0.5f0*L_x
         a_y = 0.5f0*L_y
         a_z = 0.5f0*L_z
         r_mean = @SVector [a_x, a_y, a_z]
 
-        lattice_const = sqrt(2.0f0)*σ
+        lattice_const = sqrt(2.0f0)*2R
         r = fcc_lattice(L,lattice_const, nn, nn, nn)
         r = [r[i] .+ r_mean for i in 1:length(r)]
-        rad = 0.412f0*nn*lattice_const
+        rad = (N_shape*4*sqrt(2)*r^3 / 3π)^(1/3)
         r  = fcc_sphere(L, r, rad)
-        [push!(r0,r[i]) for i = 1:length(r)]
+        [r_init[i]=r[i] for i = 1:length(r)]
         n_remain = Npart - length(r)
         ii = 0
         while ii < n_remain
             pos = random_pos(dim,L)
-            if (pos[1] > L_x - rad + 2.0f0*σ || pos[1] < rad - 2.0f0*σ) || (pos[2] > L_y - rad + 2.0f0*σ || pos[2] < rad - 2.0f0*σ) || (pos[3] > L_z - rad + 2.0f0*σ || pos[3] < rad - 2.0f0*σ)
-                push!(r0,pos)
+            if (pos[1] > L_x - rad + 4R || pos[1] < rad - 4R) || (pos[2] > L_y - rad + 4R || pos[2] < rad - 4R) || (pos[3] > L_z - rad + 4R || pos[3] < rad - 4R)
                 ii += 1
+                r_init[length(r)+ ii] = pos 
             end
         end
     end
+    return r_init, length(r)
 end
 
 export volume
@@ -328,32 +326,30 @@ end
 
 export WCA
 export Harmonic_Repulsive
-export AbstractInteraction
-abstract type AbstractInteraction end
+
+abstract type Interaction end
 
 
 
-struct WCA{T <: AbstractFloat} <: AbstractInteraction
+struct WCA{T <: AbstractFloat} <: Interaction
     ϵ::T
     σ::T
     r_cut::T
-    particles::Array{Particle, 1}
 end
-function WCA(ϵ::T, σ::T, r_cut::T, particles::Array{T, 1}) where T<:AbstractFloat
+
+function WCA(; ϵ::T, σ::T, r_cut::T) where T<:AbstractFloat
     WCA{T}(ϵ, σ, r_cut, particles)
 end
 
 
-struct Harmonic_Repulsive{T<:AbstractFloat} <: AbstractInteraction
+struct Harmonic_Repulsive{T <: AbstractFloat} <: Interaction
     k::T
     r_cut::T
-    particles::Array{T, 1}
 end
 
-function Harmonic_Repulsive(k::T, r_cut::T, particles::Array{T, 1}) where T<:AbstractFloat
+function Harmonic_Repulsive(;k::T, r_cut::T) where T<:AbstractFloat
     Harmonic_Repulsive{T}(k, r_cut, particles)
 end
-
 
 ################################################################################
 ################################################################################
@@ -366,13 +362,13 @@ export Simulation
 mutable struct Simulation{T <: AbstractFloat, N<: Int}
     descriptor::String
 
-    periodicity::SVector{N,T}
+    box::SVector{N,T}
 
     particles::Array{Particle, 1}
-    interactions::Array{AbstractInteraction, 1}
+    interactions::Interaction
 
     dt::T
-    integrators::Array{AbstractIntegrator, 1}
+    #integrators::Array{AbstractIntegrator, 1}
     num_steps::N
 
     save_interval::N
@@ -381,14 +377,14 @@ mutable struct Simulation{T <: AbstractFloat, N<: Int}
 end
 
 function Simulation(; descriptor::String = "No description given...",
-    periodicity::SVector{N,T},
+    box::SVector{N,T},
     particles::Array{Particle, 1} = Particle[],
-    interactions::Array{AbstractInteraction, 1} = AbstractInteraction[],
+    interactions::Union{Harmonic_Repulsive, WCA} = AbstractInteraction[],
     dt::T,
-    integrators::Array{AbstractIntegrator, 1} = AbstractIntegrator[],
+    #integrators::Array{AbstractIntegrator, 1} = AbstractIntegrator[],
     num_steps::N = 0,
     save_interval::N = 0,
-    particles_to_save::Array{Particle, 1}=  Particle[],
+    particles_to_save::Array{Particle, 1} =  Particle[],
     output_file::String = "output") where {T <: AbstractFloat, N<: Int}
-new(descriptor, periodicity, particles, interactions, dt,integrators, num_steps, save_interval, particles_to_save,output_file)
+new(descriptor, box, particles, interactions, dt,integrators, num_steps, save_interval, particles_to_save,output_file)
 end

@@ -34,7 +34,7 @@ function simulation_em!(
 	c₃::CuVector{T},
 	ϵ::T,
 	cut_off::T,
-	periodicity::SVector{N,T},
+	box::SVector{N,T},
 	forces!::Function,
 	update_parts_em!::Function,
 	noisefun::Function) where {N,T}
@@ -50,9 +50,9 @@ function simulation_em!(
 		Ekin = zero(Ekin)
 		Epot = zero(Epot)
         fR = noisefun(Npart)
-        f, Epot = forces!(r, f, Epot, periodicity, ϵ, cut_off)
+        f, Epot = forces!(r, f, Epot, box, ϵ, cut_off)
         update_parts_em!(r, v, f, fR, dQ₀,Ekin, c₁, c₂, c₃)
-		PBC!(r,periodicity)
+		PBC!(r,box)
 		dQ .+= dQ₀ ./freq
 		Eₖ .+= Ekin ./freq
 		Eₚ .+= Epot ./freq
@@ -86,7 +86,7 @@ function simulation_vv!(
 	c₃::CuVector{T},
 	ϵ::T,
 	cut_off::T,
-	periodicity::SVector{N,T},
+	box::SVector{N,T},
 	forces!::Function,
     collisions!::Function,
 	update_positions_vv!::Function,
@@ -110,9 +110,9 @@ function simulation_vv!(
 		Epot = zero(Epot)
         fR = noisefun(Npart)
         update_positions_vv!(r, v, f₀, fR, c₁, c₂, c₃)
-		PBC!(r,periodicity)
-		f, Epot = forces!(r, f, Epot, periodicity, ϵ, cut_off)
-        coll₀, coll_switch₀ = collisions!(r, coll₀, coll_switch₀, cut_off, periodicity)
+		PBC!(r,box)
+		f, Epot = forces!(r, f, Epot, box, ϵ, cut_off)
+        coll₀, coll_switch₀ = collisions!(r, coll₀, coll_switch₀, cut_off, box)
 		update_velocities_vv!(v, f₀, f, fR, dQ₀, Ekin, c₁, c₂, c₃)
 		f₀ = f
         coll .+= coll₀
@@ -149,7 +149,7 @@ function simulation_lf!(
 	c₃::CuVector{T},
 	ϵ::T,
 	cut_off::T,
-	periodicity::SVector{N,T},
+	box::SVector{N,T},
 	forces!::Function,
 	update_positions_lf!::Function,
 	update_velocities_lf!::Function,
@@ -168,11 +168,11 @@ function simulation_lf!(
 		Epot = zero(Epot)
         fR = noisefun(Npart)
         update_positions_lf!(r, v, c₂)
-		PBC!(r,periodicity)
-		f, Epot = forces!(r, f, Epot, periodicity, ϵ, cut_off)
+		PBC!(r,box)
+		f, Epot = forces!(r, f, Epot, box, ϵ, cut_off)
 		update_velocities_lf!(v, f, fR, dQ₀, Ekin, c₁, c₂, c₃)
         update_positions_lf!(r, v, c₂)
-		PBC!(r,periodicity)
+		PBC!(r,box)
 		dQ .+= dQ₀ ./freq
 		Eₖ .+= Ekin ./freq
 		Eₚ .+= Epot ./freq

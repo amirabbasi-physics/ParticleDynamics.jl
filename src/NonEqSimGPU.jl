@@ -19,6 +19,7 @@ using Test
 using CSV
 using DataFrames
 using LinearAlgebra
+using PyCall
 import Random: randperm
 
 include("definitions.jl")
