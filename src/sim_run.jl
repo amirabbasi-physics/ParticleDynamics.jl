@@ -101,9 +101,9 @@ function simulate!(
     box::SVector{N,T}) where {N,T}
 
     if dim == 2
-        noise_fun = noise2D
+        noise_fun = noise2D(args...)
     elseif dim == 3
-        noise_fun = noise3D
+        noise_fun = noise3D(args...)
     end
     
     if integ == "em"
