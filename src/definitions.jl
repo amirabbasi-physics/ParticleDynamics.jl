@@ -365,10 +365,10 @@ mutable struct Simulation{T <: AbstractFloat, N<: Int}
     box::SVector{N,T}
 
     particles::Array{Particle, 1}
-    interactions::Interaction
+    interaction_type::Interaction
 
     dt::T
-    #integrators::Array{AbstractIntegrator, 1}
+    integrators::Array{AbstractIntegrator, 1}
     num_steps::N
 
     save_interval::N
@@ -379,12 +379,12 @@ end
 function Simulation(; descriptor::String = "No description given...",
     box::SVector{N,T},
     particles::Array{Particle, 1} = Particle[],
-    interactions::Union{Harmonic_Repulsive, WCA} = AbstractInteraction[],
+    interaction_type::Interaction,
     dt::T,
-    #integrators::Array{AbstractIntegrator, 1} = AbstractIntegrator[],
+    integrators::Array{AbstractIntegrator, 1} = AbstractIntegrator[],
     num_steps::N = 0,
     save_interval::N = 0,
     particles_to_save::Array{Particle, 1} =  Particle[],
     output_file::String = "output") where {T <: AbstractFloat, N<: Int}
-new(descriptor, box, particles, interactions, dt,integrators, num_steps, save_interval, particles_to_save,output_file)
+    Simulation(descriptor, box, particles, interactions, dt,integrators, num_steps, save_interval, particles_to_save,output_file)
 end
