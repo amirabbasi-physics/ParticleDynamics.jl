@@ -29,9 +29,15 @@ function forces!(
     ϵ::T,
     cut_off::T; nthreads=128) where {N,T}
 
+    kernel = @cuda launch=false forces_kernel!(r, f, Epot, box, ϵ, cut_off, Val(nthreads))
+    Npart = size(r,1)
+    config = launch_configuration(kernel.fun)
+
+    nthreads = Base.min(Npart, ceil(Int,sqrt(config.threads)))
+    nblocks = cld(Npart, nthreads)
     Npart = length(r)
     nblocks = ceil(Int, Npart/nthreads)
-    CUDA.@sync @cuda blocks=nblocks threads=nthreads forces_kernel!(r, f, Epot, box, ϵ, cut_off, Val(nthreads))
+    CUDA.@sync kernel(r, f, Epot, box, ϵ, cut_off; threads= nthreads, blocks=nblocks)
     return f, Epot
 end
 
