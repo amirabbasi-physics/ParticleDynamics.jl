@@ -21,7 +21,7 @@ function write_xyz(
     snapshot = [vcat(part_type[i],σ/2,r[i],v[i],sdot[i]) for i = 1:Npart]
     if step == 0
        open(out_file,"w") do file
-            println(file,Npart)
+            println(file, Npart)
             if dim == 2
                 println(file,"""Lattice="$L $L 0.0 0.0 0.0 0.0 0.0 0.0 0.0" Properties="Particle Type:S:1:Radius:R:1:Position:R:2:Velocity:R:2:Entropy:R:1" """)
                 writedlm(file,snapshot)
