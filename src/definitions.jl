@@ -362,7 +362,7 @@ mutable struct Simulation{T <: AbstractFloat, N<: Int}
     σ::T,
 
     dt::T
-    integrators::Array{AbstractIntegrator, 1}
+    integrators::String
     num_steps::N
 
     save_interval::N
@@ -379,7 +379,7 @@ function Simulation(; descriptor::String = "No description given...",
 
     #interaction_type::Interaction,
     dt::T,
-    integrators::Array{AbstractIntegrator, 1} = AbstractIntegrator[],
+    integrators::String = "vv",
     num_steps::N = 0,
     save_interval::N = 0,
     particles_to_save::Array{Particle, 1} =  Particle[],
