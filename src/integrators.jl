@@ -312,6 +312,8 @@ function update_velocities_kernel_lf!(
      return nothing
 end
 
+abstract type AbstractIntegrator end
+
 """
 
 export update_positions!

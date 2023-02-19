@@ -19,13 +19,13 @@ using Test
 using CSV
 using DataFrames
 using LinearAlgebra
+using PyCall
 import Random: randperm
 
 include("definitions.jl")
 include("simulation.jl")
 include("integrators.jl")
 include("analysis.jl")
-include("sim_run.jl")
 include("boundary_conditions.jl")
 include("interactions.jl")
 include("write_out.jl")
