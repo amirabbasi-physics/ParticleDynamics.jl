@@ -1,11 +1,10 @@
-export harm_rep
 export harm_rep2D
 export harm_rep3D
 
 @inline function harm_rep2D(dx::T, dy::T, dist::T, ϵ::T, σ::T) where {T}
     inv_dist = T(1.0f0/dist)
     f_int = T(ϵ*(inv_dist - 1.0/σ))
-    e_int = T(0.25*ϵ*(1.0-dist/σ)^2.0)
+    e_int = T(0.25*f_int*dist*f_int*dist/ϵ)
     f_x = f_int*dx
     f_y = f_int*dy
     return SVector{2,T}(f_x,f_y) , e_int
@@ -15,19 +14,14 @@ end
 @inline function harm_rep3D(dx::T, dy::T, dz::T, dist::T, ϵ::T, σ::T) where {T}
     inv_dist = T(1.0/dist)
     f_int = T(ϵ*(inv_dist - 1.0/σ))
-    e_int = T(0.25*ϵ*(1.0-dist/σ)^2.0)
+    e_int = e_int = T(0.25*f_int*dist*f_int*dist/ϵ)
     f_x = f_int*dx
     f_y = f_int*dy
     f_z = f_int*dz
     return SVector{3,T}(f_x,f_y,f_z) , e_int
 end
 
-@inline function harm_rep(dr::SVector{N,T}, dist::T, ϵ::T, σ::T) where {N,T}
-    inv_dist = T(1.0/dist)
-    f_int = T(ϵ*(inv_dist - 1.0/σ))
-    e_int = T(0.25*ϵ*(1.0-dist/σ)^2.0)
-    return SVector(f_int .* dr) , e_int
-end
+"""
 @inline function wca(dr::SVector{N,T}, dist::T, ϵ::T, σ::T) where {N,T}
     inv_dist = T(1.0/dist)
     r_div_sig = dist/σ
@@ -37,7 +31,7 @@ end
     f_int = -24 * ϵ * r_div_sig * (2 * r_div_sig12 - r_div_sig6) * inv_dist
     return f_int .* dr, e_int
 end
-
+"""
 
 export forces!
 
@@ -200,7 +194,7 @@ end
 ################################################################################
 export collisions!
 
-function collisions!(
+function collisions_backup!(
     r::CuVector{SVector{N,T}},
     coll::CuMatrix{T},
     coll_switch::CuMatrix{I},
@@ -217,16 +211,28 @@ function collisions!(
     return coll, coll_switch
 end
 
+function collisions!(
+    r::CuVector{SVector{N,T}},
+    coll::CuMatrix{T},
+    coll_switch::CuMatrix{I},
+    cut_off::Float32,
+    box::SVector{N,T}) where {N,I,T}
+
+    Npart = size(r,1)
+    block_dim = (16, 16, 1)
+    grid_dim = (div(Npart + block_dim[1] - 1, block_dim[1]), div(Npart + block_dim[2] - 1, block_dim[2]), 1)
+    CUDA.@sync threads=block_dim blocks=grid_dim collisions_kernel!(r, coll, coll_switch, cut_off, box)
+    return coll, coll_switch
+end
 
 export collisions_kernel!
 
 function collisions_kernel!(
     r::CuDeviceVector{T},
-    coll::CuDeviceMatrix{Float32},
+    coll::CuDeviceMatrix{T1},
     coll_switch::CuDeviceMatrix{I},
-    cut_off::Float32,
+    cut_off::T1,
     box::T) where {T,I}
-
     Npart = length(r)
     dim   = length(box)
 
@@ -240,21 +246,20 @@ function collisions_kernel!(
                 pos₂  = r[j]
                 dx  = pos₁[1] - pos₂[1]
                 dy  = pos₁[2] - pos₂[2]
-
+    
                 dx = ifelse(abs(dx) > box[1] / 2, dx - sign(dx) * box[1] ,dx)
                 dy = ifelse(abs(dy) > box[2] / 2, dy - sign(dy) * box[2] ,dy)
                 
                 dr² = dx*dx + dy*dy
-
-                dist  = sqrt(dr²)
-                if T(0.0) < dist < cut_off
+    
+                if zero(T1) < dr² < cut_off²
                     if coll_switch[i,j] == 0
                         coll[i,j] = 1
                         coll_switch[i,j] = 1
                     else
                         coll[i,j] = 0
                     end
-                elseif dist > cut_off
+                elseif dr² > cut_off²
                     coll_switch[i,j] = 0
                 end
             end
@@ -273,15 +278,14 @@ function collisions_kernel!(
                 dz = ifelse(abs(dz) > box[3] / 2, dz - sign(dz) * box[3] ,dz)
                 dr² = dx*dx + dy*dy + dz*dz
 
-                dist  = sqrt(dr²)
-                if T(0.0) < dist < cut_off
+                if zero(T1) < dr² < cut_off²
                     if coll_switch[i,j] == 0
                         coll[i,j] = 1
                         coll_switch[i,j] = 1
                     else
                         coll[i,j] = 0
                     end
-                elseif dist > cut_off
+                elseif dr² > cut_off²
                     coll_switch[i,j] = 0
                 end
             end

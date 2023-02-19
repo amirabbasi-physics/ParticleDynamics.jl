@@ -9,8 +9,6 @@ function noise3D(Npart::Int)
     return SVector{3,Float32}.(CUDA.randn(Float32,Npart) ,CUDA.randn(Float32,Npart),CUDA.randn(Float32,Npart))
 end
 
-
-
 export Box
 
 @inline function Box(; dim::Int, Npart::Int, ϕ::T, σ::T) where T <: AbstractFloat    # This should be changed for polydisperse particles!
@@ -59,8 +57,6 @@ function simplecubic_lattice(Npart::Int, box::SVector{3,T}) where T
     return positions
 end
 
-
-
 export triangular_lattice
 
 function triangular_lattice(box::T,lattice_const::T,M_x::Int64, M_y::Int64) where T
@@ -84,7 +80,6 @@ function triangular_lattice(box::T,lattice_const::T,M_x::Int64, M_y::Int64) wher
     return positions
 end
 
-
 export pos_triangular
 function pos_triangular(a::T) where T
     """returns the positions (x,y) of the 4 atoms in a hexagonal unit cell with the lattice constant a."""
@@ -94,7 +89,6 @@ function pos_triangular(a::T) where T
     p₄ = @SVector T[0.50*a, 0.50 *sqrt(3)*a]
     return p₁, p₂, p₃, p₄
 end
-
 
 export triangular_circle
 function triangular_circle(L_box::T, r0::Array{SVector{N,T}}, rad::T) where {N,T}
@@ -108,7 +102,6 @@ function triangular_circle(L_box::T, r0::Array{SVector{N,T}}, rad::T) where {N,T
     end
     return new_pos
 end
-
 
 export fcc_sphere
 function fcc_sphere(L_box::T, r0::Array{SVector{N,T}}, rad::T) where {N,T}
@@ -147,6 +140,7 @@ function fcc_lattice(L_box::T,lattice_const::T,M_x::Int, M_y::Int, M_z::Int) whe
     end
     return positions
 end
+
 export pos_fcc
 function pos_fcc(a::T) where T
     """returns the positions (x,y,z) of the 4 atoms in a fcc unit cell with the lattice constant a."""
@@ -178,7 +172,6 @@ function isincircle(L::T, N::Int, σ::T, pos::SVector{2,T}) where T
         return false
     end
 end
-
 
 function cut_circle_sphere!(box::Array{N,T}, R::T, Npart::N, fraction::T) where {N,T}
     dim = length(box)
@@ -323,13 +316,11 @@ end
 #
 ################################################################################
 
-
+"""
 export WCA
 export Harmonic_Repulsive
 
 abstract type Interaction end
-
-
 
 struct WCA{T <: AbstractFloat} <: Interaction
     ϵ::T
@@ -350,6 +341,7 @@ end
 function Harmonic_Repulsive(;k::T, r_cut::T) where T<:AbstractFloat
     Harmonic_Repulsive{T}(k, r_cut, particles)
 end
+"""
 
 ################################################################################
 ################################################################################
@@ -365,7 +357,9 @@ mutable struct Simulation{T <: AbstractFloat, N<: Int}
     box::SVector{N,T}
 
     particles::Array{Particle, 1}
-    interaction_type::Interaction
+    #interaction_type::Interaction
+    ϵ::T,
+    σ::T,
 
     dt::T
     integrators::Array{AbstractIntegrator, 1}
@@ -379,12 +373,16 @@ end
 function Simulation(; descriptor::String = "No description given...",
     box::SVector{N,T},
     particles::Array{Particle, 1} = Particle[],
-    interaction_type::Interaction,
+
+    ϵ::T,
+    σ::T,
+
+    #interaction_type::Interaction,
     dt::T,
     integrators::Array{AbstractIntegrator, 1} = AbstractIntegrator[],
     num_steps::N = 0,
     save_interval::N = 0,
     particles_to_save::Array{Particle, 1} =  Particle[],
     output_file::String = "output") where {T <: AbstractFloat, N<: Int}
-    Simulation(descriptor, box, particles, interactions, dt,integrators, num_steps, save_interval, particles_to_save,output_file)
+    Simulation(descriptor, box, particles, ϵ, σ, dt,integrators, num_steps, save_interval, particles_to_save,output_file)
 end

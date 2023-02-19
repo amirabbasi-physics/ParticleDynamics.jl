@@ -17,12 +17,12 @@ function sim_run(;
     num_steps::N,
     Npart::N,
     ptypes::Vector{String},
-    interaction_pot::Interaction,
     dim::N,
     ϕ::T,
     fraction::T,
     Temp::T,
     R::T,
+	ϵ::T,
     α₁::T,
     α₂::T,
     Δt_prod::T,
@@ -31,8 +31,8 @@ function sim_run(;
 
     η		= T(8.9e-4)
     density = T(1.0e3) # mass density of particles (kg/m³)
-
-    box = Box(dim = dim, Npart = Npart, ϕ = ϕ, σ = (2R/10^(-6)))
+	σ = (2R/10^(-6))
+    box = Box(dim = dim, Npart = Npart, ϕ = ϕ, σ = σ )
     num_pl = ceil(Int, Npart*fraction)
     ###############################################################################
     #   Initializing the system to get randomly distributed positions
@@ -57,7 +57,9 @@ function sim_run(;
         simulation.num_steps = num_steps
         simulation.save_interval = dump_freq
 
-        simulation.interaction_type = interaction_pot
+        #simulation.interaction_type = interaction_pot
+		simulation.ϵ = ϵ 
+		simulation.σ = σ 
         simulation.box = box
         r0 = r_init
         for i = 1:num_pl
