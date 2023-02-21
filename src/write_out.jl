@@ -1,7 +1,9 @@
 using DelimitedFiles
-
+using PyCall
+using FileIO
 export write_xyz
 export write_log
+export write_gsd
 
 function write_xyz(
     ofname::String,
@@ -44,6 +46,100 @@ function write_xyz(
     end
 end
 
+
+#ENV["PYTHON"]="/local_scratch/abbaa90/miniconda3/envs/hoomd3-venv/bin/python"
+#Pkg.build("PyCall")
+
+# Append snapshot to GSD file
+function write_gsd(step::Int,simulation, part_id::Vector{Int},pos::CuVector{SVector{N,T}}, vel::CuVector{SVector{N,T}}) where {N,T}
+
+    gsd = pyimport("gsd.fl")
+    gsdhoomd = pyimport("gsd.hoomd")
+
+    if isfile(simulation.output_file) && step != 0
+        mode = "ab"
+    else
+        mode = "wb"
+    end
+
+    positions = Vector(pos)
+    velocities = Vector(vel)
+    box = simulation.box
+    
+    s = gsdhoomd.Snapshot()
+   
+    s.configuration.step = step
+    
+    s.particles.N = length(positions)
+    s.particles.types = simulation.part_types
+    s.particles.typeid = part_id
+    s.particles.position = positions
+    s.particles.velocity = velocities
+    if length(box) == 2
+        s.configuration.box = vcat(box, zeros(eltype(box), 4))
+    elseif length(box) == 3
+        s.configuration.box = vcat(box, zeros(eltype(box), 3))
+    end
+    if length(box) == 2
+        positions = [vcat(positions[i],zero(T)) for i = 1:length(positions)]
+        velocities = [vcat(velocities[i],zero(T)) for i = 1:length(velocities)]       
+    end
+
+    py"""
+    def writeout(s,output_file)
+    with gsd.open(name = output_file, mode=mode, application = "NonEqSimGPU")
+        f.append(s)
+        f.end_frame()
+        f.close()
+    """
+    py"writeout"(s,simulation.output_file)
+end
+
+
+"""
+# Append snapshot to GSD file
+function write_gsd(step::Int,simulation, part_id::Vector{Int},pos::CuVector{SVector{N,T}}, vel::CuVector{SVector{N,T}}) where {N,T}
+
+    gsd = pyimport("gsd.fl")
+    gsdhoomd = pyimport("gsd.hoomd")
+
+    if isfile(simulation.output_file) && step != 0
+        mode = "ab"
+    else
+        mode = "wb"
+    end
+    file = gsdhoomd.open(name = simulation.output_file, mode=mode)
+
+    positions = Vector(pos)
+    velocities = Vector(vel)
+    box = simulation.box
+    
+    if length(box) == 2
+        positions = [vcat(positions[i],zero(T)) for i = 1:length(positions)]
+        velocities = [vcat(velocities[i],zero(T)) for i = 1:length(velocities)]       
+    end
+
+    
+    s = gsdhoomd.Snapshot()
+   
+    s.configuration.step = step
+    
+    s.particles.N = length(positions)
+    s.particles.types = simulation.part_types
+    s.particles.typeid = part_id
+    s.particles.position = positions
+    s.particles.velocity = velocities
+    if length(box) == 2
+        s.configuration.box = vcat(box, zeros(eltype(box), 4))
+    elseif length(box) == 3
+        s.configuration.box = vcat(box, zeros(eltype(box), 3))
+    end
+
+    file.append(s)
+    file[:end_frame]()
+    file.close()
+end
+"""
 
 function write_log(
     ofname::String,

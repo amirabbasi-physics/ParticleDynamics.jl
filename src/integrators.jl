@@ -9,10 +9,10 @@ export update_parts_em!
 
 
 function update_parts_em!(r::CuVector{SVector{N,T}}, v::CuVector{SVector{N,T}}, f::CuVector{SVector{N,T}},
-    fR::CuVector{SVector{N,T}},dq::CuVector{T},eₖ::CuVector{T},c1s::CuVector{T},c2s::CuVector{T},c3s::CuVector{T}; nthreads=128) where {N,T}
+    fR::CuVector{SVector{N,T}},dq::CuVector{T},eₖ::CuVector{T},c1s::CuVector{T},c2::T,c3s::CuVector{T}; nthreads=128) where {N,T}
     Npart = UInt32(length(r))
     nblocks=ceil(Int, Npart/nthreads)
-    CUDA.@sync @cuda blocks=nblocks threads=nthreads update_parts_em_kernel!(r, v, f, fR, dq, eₖ, c1s, c2s, c3s)
+    CUDA.@sync @cuda blocks=nblocks threads=nthreads update_parts_em_kernel!(r, v, f, fR, dq, eₖ, c1s, c2, c3s)
     return nothing
 end
 
@@ -20,7 +20,7 @@ export update_parts_em_kernel!
 
 function update_parts_em_kernel!(r::CuDeviceVector{SVector{N,T}}, v::CuDeviceVector{SVector{N,T}}, f::CuDeviceVector{SVector{N,T}},
      noise::CuDeviceVector{SVector{N,T}},dq::CuDeviceVector{T},eₖ::CuDeviceVector{T}, c1s::CuDeviceVector{T},
-     c2s::CuDeviceVector{T}, c3s::CuDeviceVector{T}) where {N,T}
+     c2::T, c3s::CuDeviceVector{T}) where {N,T}
      Npart = length(r)
      tid = threadIdx().x
      gtid = (blockIdx().x - 1) * blockDim().x + tid  # global thread id
@@ -32,7 +32,6 @@ function update_parts_em_kernel!(r::CuDeviceVector{SVector{N,T}}, v::CuDeviceVec
              frc = f[gtid]
              rnd = noise[gtid]
              c1  = c1s[gtid]
-             c2  = c2s[gtid]
              c3  = c3s[gtid]
              dQ  = dq[gtid]
              Eₖ   = eₖ[gtid]
@@ -75,13 +74,13 @@ function update_positions_vv!(
     f::CuVector{SVector{N,T}},
     fR::CuVector{SVector{N,T}},
     c1s::CuVector{T},
-    c2s::CuVector{T},
+    c2::T,
     c3s::CuVector{T};
     nthreads=128) where {N,T}
 
     Npart = UInt32(length(r))
     nblocks = ceil(Int, Npart/nthreads)
-    CUDA.@sync @cuda blocks=nblocks threads=nthreads update_positions_kernel_vv!(r, v, f, fR, c1s, c2s, c3s)
+    CUDA.@sync @cuda blocks=nblocks threads=nthreads update_positions_kernel_vv!(r, v, f, fR, c1s, c2, c3s)
     return nothing
 end
 
@@ -94,7 +93,7 @@ function update_positions_kernel_vv!(
     f::CuDeviceVector{SVector{N,T}},
     noise::CuDeviceVector{SVector{N,T}},
     c1s::CuDeviceVector{T},
-    c2s::CuDeviceVector{T},
+    c2::T,
     c3s::CuDeviceVector{T}) where {N,T}
 
      Npart = length(r)
@@ -108,7 +107,7 @@ function update_positions_kernel_vv!(
              frc = f[gtid]
              rnd = noise[gtid]
              c1  = c1s[gtid]
-             c2  = c2s[gtid]
+             #c2  = c2s[gtid]
              c3  = c3s[gtid]
 
              rnd_force = c3 .* rnd
@@ -139,12 +138,12 @@ function update_velocities_vv!(
     dq::CuVector{T},
     eₖ::CuVector{T},
     c1s::CuVector{T},
-    c2s::CuVector{T},
+    c2::T,
     c3s::CuVector{T};
      nthreads=128) where {N,T}
     Npart = UInt32(length(v))
     nblocks = ceil(Int, Npart/nthreads)
-    CUDA.@sync @cuda blocks=nblocks threads=nthreads update_velocities_kernel_vv!(v, f₀, f, fR, dq, eₖ, c1s, c2s, c3s)
+    CUDA.@sync @cuda blocks=nblocks threads=nthreads update_velocities_kernel_vv!(v, f₀, f, fR, dq, eₖ, c1s, c2, c3s)
     return nothing
 end
 
@@ -158,9 +157,9 @@ function update_velocities_kernel_vv!(
     noise::CuDeviceVector{SVector{N,T}},
     dq::CuDeviceVector{T},
     eₖ::CuDeviceVector{T},
-    c₁::CuDeviceVector{T},
-    c₂::CuDeviceVector{T},
-    c₃::CuDeviceVector{T}) where {N,T}
+    c1s::CuDeviceVector{T},
+    c2::T,
+    c3s::CuDeviceVector{T}) where {N,T}
 
      Npart = length(v)
      tid = threadIdx().x
@@ -172,9 +171,9 @@ function update_velocities_kernel_vv!(
              frc_prev = f₀[gtid]
              frc = f[gtid]
              rnd = noise[gtid]
-             c1  = c₁[gtid]
-             c2  = c₂[gtid]
-             c3  = c₃[gtid]
+             c1  = c1s[gtid]
+             #c2  = c₂[gtid]
+             c3  = c3s[gtid]
              dQ  = dq[gtid]
              Eₖ   = eₖ[gtid]
 

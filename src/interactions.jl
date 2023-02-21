@@ -215,13 +215,13 @@ function collisions!(
     r::CuVector{SVector{N,T}},
     coll::CuMatrix{T},
     coll_switch::CuMatrix{I},
-    cut_off::Float32,
+    cut_off::T,
     box::SVector{N,T}) where {N,I,T}
 
-    Npart = size(r,1)
-    block_dim = (16, 16, 1)
+    Npart = length(r)
+    block_dim = (32, 32)
     grid_dim = (div(Npart + block_dim[1] - 1, block_dim[1]), div(Npart + block_dim[2] - 1, block_dim[2]), 1)
-    CUDA.@sync threads=block_dim blocks=grid_dim collisions_kernel!(r, coll, coll_switch, cut_off, box)
+    CUDA.@sync @cuda threads=block_dim blocks=grid_dim collisions_kernel!(r, coll, coll_switch, cut_off, box)
     return coll, coll_switch
 end
 
@@ -232,13 +232,14 @@ function collisions_kernel!(
     coll::CuDeviceMatrix{T1},
     coll_switch::CuDeviceMatrix{I},
     cut_off::T1,
-    box::T) where {T,I}
+    box::T) where {T,T1,I}
     Npart = length(r)
     dim   = length(box)
-
+    cut_off²=cut_off^2
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     j = (blockIdx().y - 1) * blockDim().y + threadIdx().y
 
+    
     if dim == 2
         @inbounds begin
             if i <= Npart && j <= Npart
