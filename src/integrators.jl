@@ -81,7 +81,7 @@ function update_positions_vv!(
     Npart = UInt32(length(r))
     nblocks = ceil(Int, Npart/nthreads)
     CUDA.@sync @cuda blocks=nblocks threads=nthreads update_positions_kernel_vv!(r, v, f, fR, c1s, c2, c3s)
-    return nothing
+    return r
 end
 
 
@@ -144,7 +144,7 @@ function update_velocities_vv!(
     Npart = UInt32(length(v))
     nblocks = ceil(Int, Npart/nthreads)
     CUDA.@sync @cuda blocks=nblocks threads=nthreads update_velocities_kernel_vv!(v, f₀, f, fR, dq, eₖ, c1s, c2, c3s)
-    return nothing
+    return v
 end
 
 
