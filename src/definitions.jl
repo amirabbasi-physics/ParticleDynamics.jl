@@ -127,58 +127,63 @@ function isincircle(pos::SVector{2,T}, rad::T, r_margin::T) where T
     end
 end
 
+
+
 export cut_circle_sphere
 
-function cut_circle_sphere!(box::SVector{N,T}, σ::T, Npart::Int, fraction::T) where {N,T}
+function cut_circle_sphere!(box::SVector{N,T}, σ::T, Npart::Int, fraction::T,cold_frac::T) where {N,T}
     dim = length(box)
     R = T(σ/2)
     if dim == 2
-        N_circle = ceil(Npart .* fraction)
-        nn = Int(50*ceil(0.5*sqrt(N_circle)))
+        N_circle = Int(ceil(Npart .* fraction))
         L_x, L_y = box[1], box[2]
         lattice_const = σ
-        r = triangular_lattice(box,lattice_const, nn, nn)
-        rad = T(sqrt(N_circle*3*sqrt(3)*(σ/2)^2 /2π))
-        #println(norm.(r),rad)
-        r  = circle_cut(r, rad)
-        n_remain = Int(ceil(length(r) *(1/fraction -1)))
-        Npart_new = n_remain + length(r)
-        
+        r = triangular_lattice(box,lattice_const, N_circle, N_circle)
+        rad = T(sqrt(N_circle))
+
+        r1  = circle_cut(r, rad)
+        num_pl = length(r1)
+        n_remain = Int(ceil(length(r1) *(1/fraction -1)))
+        Npart_new = n_remain + num_pl 
+        r2  = circle_cut(r, rad*cold_frac)
+        n_remain = Npart_new-length(r2)
+
         r_init = Array{SVector{2,T}}(undef, Npart_new)
-        [r_init[i]=r[i] for i = 1:length(r)]
-        #println(r_init)
+        [r_init[i]=r2[i] for i = 1:length(r2)]
         ii = 0
         while ii < n_remain
             pos = random_pos(box)
-            if !isincircle(pos,rad,R)
+            if !isincircle(pos,rad*cold_frac,R)
                 ii += 1
-                r_init[length(r)+ ii] = pos                
+                r_init[length(r2)+ ii] = pos               
             end
         end
     elseif dim == 3
-        N_shape = ceil(Npart .* fraction)
-        nn = Int(ceil(cbrt(N_shape)))
+        N_sphere = Int(ceil(Npart .* fraction))
         L_x, L_y, L_z = box[1], box[2], box[3]
         lattice_const = sqrt(2.0f0)*σ
-        r = fcc_lattice(box,lattice_const, nn, nn, nn)
-        rad = T((N_shape*4*sqrt(2)*(σ/2)^3 / 3π)^(1/3))
-        r  = sphere_cut(r, rad)
+        r = fcc_lattice(box,lattice_const, N_sphere, N_sphere, N_sphere)
+        rad = T(cbrt(N_sphere))
 
-        n_remain = Int(ceil(length(r) *(1/fraction -1)))
-        n_remain = Npart - length(r)
-        Npart_new = n_remain + length(r)
+        r1  = sphere_cut(r, rad)
+        num_pl = length(r1)
+        n_remain = Int(ceil(length(r1) *(1/fraction -1)))
+        Npart_new = n_remain + num_pl 
+        r2  = sphere_cut(r, rad*cold_frac)
+        n_remain = Npart_new-length(r2)
+
         r_init = Array{SVector{3,T}}(undef, Npart_new)
-        [r_init[i]=r[i] for i = 1:length(r)]
+        [r_init[i]=r2[i] for i = 1:length(r2)]
         ii = 0
         while ii < n_remain
             pos = random_pos(box)
-            if !isinsphere(pos,rad,R)
+            if !isinsphere(pos,rad*cold_frac,R)
                 ii += 1
-                r_init[length(r)+ ii] = pos                
+                r_init[length(r2)+ ii] = pos                
             end
         end
     end
-    return r_init, length(r)
+    return r_init, num_pl
 end
 
 export volume

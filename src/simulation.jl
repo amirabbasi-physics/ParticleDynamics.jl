@@ -23,6 +23,7 @@ function sim_run(;
     dim::N,
     ϕ::T,
     fraction::T,
+	cold_frac::T,
     R::T,
 	ϵ::T,
     α₁::T,
@@ -52,7 +53,7 @@ function sim_run(;
             r_init = simplecubic_lattice(Npart, box)
         end
     else
-        r_init, num_pl = cut_circle_sphere!(box, σ, Npart, fraction)
+        r_init, num_pl = cut_circle_sphere!(box, σ, Npart, fraction,cold_frac)
     end
 
     Npart = length(r_init)
