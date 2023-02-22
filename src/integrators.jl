@@ -107,7 +107,6 @@ function update_positions_kernel_vv!(
              frc = f[gtid]
              rnd = noise[gtid]
              c1  = c1s[gtid]
-             #c2  = c2s[gtid]
              c3  = c3s[gtid]
 
              rnd_force = c3 .* rnd
@@ -172,7 +171,6 @@ function update_velocities_kernel_vv!(
              frc = f[gtid]
              rnd = noise[gtid]
              c1  = c1s[gtid]
-             #c2  = c₂[gtid]
              c3  = c3s[gtid]
              dQ  = dq[gtid]
              Eₖ   = eₖ[gtid]
