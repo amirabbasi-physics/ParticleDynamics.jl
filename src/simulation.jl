@@ -16,6 +16,7 @@ function sim_run(;
     homogeneous::Union{Nothing,Vector},
 	collision_calc::Bool,
     num_steps::N,
+	dump_freq::N,
     Npart::N,
     ptypes::Vector{String},
 	p_ids::Vector{Int},
@@ -27,12 +28,11 @@ function sim_run(;
     α₁::T,
     α₂::T,
     Δt_prod::T,
-    dump_freq::N,
     integ::String) where {N,T}
 
     η		= T(8.9e-4)
     density = T(1.0e3) # mass density of particles (kg/m³)
-	σ = 2.0f0
+	σ = T(2R/(1.0e-6))
     box = Box(dim = dim, Npart = Npart, ϕ = ϕ, σ = σ )
     num_pl = ceil(Int, Npart*fraction)
 
@@ -59,38 +59,25 @@ function sim_run(;
 
     for run = 1:num_runs
 		simulation = Simulation()
-        output_file = "GPU_part_num$Npart,run_num-$run"  # check this!
+        output_file = "$dim,dimension_Npart,$Npart,run_num-$run"  # check this!
 		simulation.part_types = ptypes
         simulation.output_file = output_file
-        simulation.num_steps = num_steps
-        simulation.save_interval = dump_freq
+        
 		simulation.integrator = integ
 		simulation.ϵ = ϵ 
 		simulation.σ = σ 
         simulation.box = box
         r0 = r_init
         for i = 1:num_pl
-            push!(simulation.particles, PassiveP(part_type = ptypes[1], part_id = p_ids[1],r = r0[i], v = SVector{dim,T}(randn(T,dim)), f = SVector{dim,T}(zeros(T,dim)), density = density, η = η, Radii = R, α = α₁))
+            push!(simulation.particles, PassiveP(part_type = ptypes[1], part_id = p_ids[1],r = r0[i], v = SVector{dim,T}(zeros(T,dim)), f = SVector{dim,T}(zeros(T,dim)), density = density, η = η, Radii = R, α = α₁))
         end
         for i = num_pl+1:Npart
-            push!(simulation.particles, PassiveP(part_type = ptypes[2], part_id = p_ids[2],r = r0[i], v = SVector{dim,T}(randn(T,dim)), f = SVector{dim,T}(zeros(T,dim)), density = density, η = η, Radii = R, α = α₂))
+            push!(simulation.particles, PassiveP(part_type = ptypes[2], part_id = p_ids[2],r = r0[i], v = SVector{dim,T}(zeros(T,dim)), f = SVector{dim,T}(zeros(T,dim)), density = density, η = η, Radii = R, α = α₂))
         end
 
 		# Check for homogeneous simulation to see wether it performs simulation up to the correct number of steps
         if homogeneous != nothing
-            Δt,α_init,num_steps_relax,freq_relax = homogeneous[1],homogeneous[2],homogeneous[3],homogeneous[4]  
-            batchs  = num_steps_relax ÷ freq_relax
-            for i = 0:batchs
-                α_relax  =   α_init - i*(α_init - max(α₁,α₂))/batchs
-
-                for particle in simulation.particles
-                    particle.α = α_relax
-                end
-                simulation.dt = T(Δt)
-                simulate!(simulation, collision_calc, noisefun) 
-            end
-
-            idx = randperm(Npart)
+			idx = randperm(Npart)
             for i = 1:num_pl
                 simulation.particles[i].α = α₁
                 simulation.particles[i].v = @SVector zeros(T,dim)
@@ -102,18 +89,31 @@ function sim_run(;
 			for i = 1:Npart
 				simulation.particles[i].r, simulation.particles[idx[i]].r = simulation.particles[idx[i]].r, simulation.particles[i].r
 			end
-        end
 
-        ###############################################################################
-        #                           Production run
-        ###############################################################################
+            Δt_relax,α_init,num_steps_relax,freq_relax = homogeneous[1],homogeneous[2],homogeneous[3],homogeneous[4]  
+            batchs  = num_steps_relax ÷ freq_relax
 
-		# Check for simulation to see wether it performs simulation up to the correct number of steps
-        Δt = Δt_prod 
-        freq = dump_freq
-        steps = num_steps ÷ dump_freq
+			simulation.num_steps = num_steps_relax
+        	simulation.save_interval = freq_relax
+            for i = 0:batchs
+                α_relax  =   α_init - i*(α_init - max(α₁,α₂))/batchs
 
-        simulate!(simulation, collision_calc, noisefun) 
+                for particle in simulation.particles
+                    particle.α = α_relax
+                end
+                simulation.dt = T(Δt_relax)
+                simulate!(simulation, collision_calc, noisefun) 
+            end
+			simulation.num_steps = num_steps
+        	simulation.save_interval = dump_freq
+			simulate!(simulation, collision_calc, noisefun)
+        elseif homogeneous == nothing
+			simulation.num_steps = num_steps
+        	simulation.save_interval = dump_freq
+			# Check for simulation to see wether it performs simulation up to the correct number of steps 
+			simulation.dt = T(Δt_prod)	
+			simulate!(simulation, collision_calc, noisefun)
+		end
     end
     return nothing
 end
@@ -151,7 +151,6 @@ function simulate!(
 	v = CuVector(v)
 	f = [simulation.particles[i].f for i=1:Npart]
 	f = CuVector(f)
-	f₀ = similar(f)
 	if collision_calc
 		coll = CuArray(cu(zeros(Npart,Npart)))
 		coll₀ = CuArray(cu(zeros(Npart,Npart)))
@@ -161,25 +160,24 @@ function simulate!(
 	dQ₀ = zero(dQ)
 	Ekin = zero(Eₖ)
 	Epot = zero(Eₚ)
-	step = 0 
-	write_gsd(step,simulation, part_id, r, v)
 
 	
 	if simulation.integrator == "vv"
-		for step = 1:simulation.num_steps
+		f₀ = similar(f)
+		for step = 0:simulation.num_steps
 			f = f₀
 			dQ₀ = zero(dQ₀)
 			Ekin = zero(Ekin)
 			Epot = zero(Epot)
 			fR = noisefun(Npart)
-			update_positions_vv!(r, v, f₀, fR, c1, c2, c3)
+			r = update_positions_vv!(r, v, f₀, fR, c1, c2, c3)
 			PBC!(r,simulation.box)
 			f, Epot = forces!(r, f, Epot, simulation.box, simulation.ϵ, simulation.σ)
 			if collision_calc
 				coll₀, coll_switch₀ = collisions!(r, coll₀, coll_switch₀, simulation.σ, simulation.box)
 				coll .+= coll₀
 			end
-			update_velocities_vv!(v, f₀, f, fR, dQ₀, Ekin, c1, c2, c3)
+			v = update_velocities_vv!(v, f₀, f, fR, dQ₀, Ekin, c1, c2, c3)
 			f₀ = f
 			dQ .+= dQ₀
 			Eₖ .+= Ekin

@@ -10,12 +10,14 @@ function PBC_kernel!(r::CuDeviceVector{T}, box::T,::Val{TH}) where {T,TH}
     @inbounds begin
         if gtid <= Npart
             pos = r[gtid]
-            pos = mod.(pos, box)
+            pos = mod.(pos .+ box ./ 2, box) .- box ./ 2
+            #pos = mod.(pos, box)
 #        else
 #            pos = zero(T)
         end
         sync_threads()
         if gtid <= Npart
+
             r[gtid] = pos
         end
         sync_threads()

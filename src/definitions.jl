@@ -37,8 +37,44 @@ function rectangular_lattice(Npart::Int, box::SVector{2,T}) where T
     return positions
 end
 
-export simplecubic_lattice
+export triangular_lattice
+function triangular_lattice(box::SVector{N,T},lattice_const::T,M_x::Int64, M_y::Int64) where {N,T}
+    positions = Array{SVector{2,T}, 1}()
+    for i = 1:M_x
+        for j = 1:M_y
+            pos = SVector{2,T}([(i-1)*lattice_const + (j%2)*lattice_const/2, (j-1)*lattice_const*sqrt(3)/2]) 
+            pos = pos .- box ./ 2
+            push!(positions, pos)
+        end
+    end
+    return positions
+end
 
+export circle_cut
+function circle_cut(r0::Array{SVector{N,T}}, rad::T) where {N,T}
+    new_pos = Array{SVector{2,T}, 1}()
+    #r_center = @SVector T[0.5*L_box,0.5*L_box]
+    for i = 1:length(r0)
+        if norm(r0[i])/rad <= 1
+            push!(new_pos , r0[i])
+        end
+    end
+    return new_pos
+end
+
+export sphere_cut
+function sphere_cut(r0::Array{SVector{N,T}}, rad::T) where {N,T}
+    r0_new = Array{SVector{3,T}, 1}()
+    #r_center = @SVector T[0.5*L_box,0.5*L_box,0.5*L_box]
+    for i = 1:length(r0)
+        if norm(r0[i])/rad <= 1
+            push!(r0_new , r0[i])
+        end
+    end
+    return r0_new
+end
+
+export simplecubic_lattice
 function simplecubic_lattice(Npart::Int, box::SVector{3,T}) where T
     positions = Array{SVector{3,T}, 1}()
     L_x = box[1]
@@ -57,103 +93,24 @@ function simplecubic_lattice(Npart::Int, box::SVector{3,T}) where T
     return positions
 end
 
-export triangular_lattice
-
-function triangular_lattice(box::T,lattice_const::T,M_x::Int64, M_y::Int64) where T
-    """Calculates the positions of an hexagonal lattice with the lattice constant a
-    in a square box with the given dimensions"""
-    # initialize coordinates: time 4 since there are 4 atoms in each unit cell
-    positions = Array{SVector{2,T}, 1}()
-    r_x = lattice_const*M_x/2
-    r_y = lattice_const*M_y/2
-    for i = 0:M_x-1
-        for j = 0:M_y-1
-            pos = [pos_triangular(lattice_const)[n] .+ @SVector T[i * lattice_const - r_x-0.5*box[1], j * lattice_const - r_y-0.5*box[1]] for n = 1:4]
-            for nn = 1:4
-                #if pos_num < Npart
-                    push!(positions, pos[nn])
-                    #pos_num += 1
-                #end
-            end
-        end
-    end
-    return positions
-end
-
-export pos_triangular
-function pos_triangular(a::T) where T
-    """returns the positions (x,y) of the 4 atoms in a hexagonal unit cell with the lattice constant a."""
-    p₁ = @SVector T[0.0, 0.0]
-    p₂ = @SVector T[0.0, a]
-    p₃ = @SVector T[-0.50*a, 0.50 *sqrt(3)*a]
-    p₄ = @SVector T[0.50*a, 0.50 *sqrt(3)*a]
-    return p₁, p₂, p₃, p₄
-end
-
-export triangular_circle
-function triangular_circle(L_box::T, r0::Array{SVector{N,T}}, rad::T) where {N,T}
-    new_pos = Array{SVector{2,T}, 1}()
-    #r_center = @SVector T[0.5*L_box,0.5*L_box]
-    for i = 1:length(r0)
-        if norm(r0[i])/rad <= 1
-            push!(new_pos , r0[i])
-        end
-    end
-    return new_pos
-end
-
-export fcc_sphere
-function fcc_sphere(r0::Array{SVector{N,T}}, rad::T) where {N,T}
-    new_pos = Array{SVector{3,T}, 1}()
-    #r_center = @SVector T[0.5*L_box,0.5*L_box,0.5*L_box]
-    for i = 1:length(r0)
-        if norm(r0[i])/rad <= 1
-            push!(new_pos , r0[i])
-        end
-    end
-    return new_pos
-end
-
 export fcc_lattice
-function fcc_lattice(box::SVector{N,T},lattice_const::T,M_x::Int, M_y::Int, M_z::Int) where {N,T}
-    """Calculates the positions of an fcc lattice with the lattice constant a
-    in a cubic box with the given dimensions"""
-    # initialize coordinates: time 4 since there are 4 atoms in each unit cell
+function fcc_lattice(box::SVector{N,T},a::T,M_x::Int, M_y::Int, M_z::Int) where {N,T}
     positions = Array{SVector{3,T}, 1}()
-    r_x = lattice_const*M_x/2
-    r_y = lattice_const*M_y/2
-    r_z = lattice_const*M_z/2
-    for i = 0:M_x-1
-        for j = 0:M_y-1
-            for k = 0:M_z-1
-                pos = [pos_fcc(lattice_const)[n] .+ @SVector T[i * lattice_const - r_x-0.5*box[1], j * lattice_const - r_y-0.5*box[2], k * lattice_const - r_z-0.5*box[3]] for n = 1:4]
-                for nn = 1:4
-                    #if pos_num < Npart
-                        push!(positions, pos[nn])
-                        #pos_num += 1
-                    #end
-                end
-            end
-        end
+    for i = 0:M_x-1, j = 0:M_y-1, k = 0:M_z-1
+        x = i*a
+        y = j*a
+        z = k*a
+        push!(positions, SVector{3,T}([x, y, z]) .- box ./ 2)
+        push!(positions, SVector{3,T}([x+a/2, y+a/2, z]) .- box ./ 2)
+        push!(positions, SVector{3,T}([x+a/2, y, z+a/2]) .- box ./ 2)
+        push!(positions, SVector{3,T}([x, y+a/2, z+a/2]) .- box ./ 2)
     end
     return positions
-end
-
-export pos_fcc
-function pos_fcc(a::T) where T
-    """returns the positions (x,y,z) of the 4 atoms in a fcc unit cell with the lattice constant a."""
-    p₁ = @SVector T[0.0, 0.0, 0.0]
-    p₂ = @SVector T[0.0, 0.50*a, 0.50*a]
-    p₃ = @SVector T[0.50*a, 0.0, 0.50*a]
-    p₄ = @SVector T[0.50*a, 0.50*a, 0.0]
-    return p₁, p₂, p₃, p₄
 end
 
 export isinsphere
-function isinsphere(L::T, N::Int, σ::T, pos::SVector{3,T}) where T
-    #mid_point = @SVector T[0.50*L, 0.50*L, 0.50*L]
-    sphere_rad = T((N/8)^(1/3)*σ)
-    if norm(pos) < sphere_rad
+function isinsphere(pos::SVector{3,T}, rad::T, r_margin::T) where T
+    if norm(pos) < rad + r_margin
         return true
     else
         return false
@@ -161,65 +118,63 @@ function isinsphere(L::T, N::Int, σ::T, pos::SVector{3,T}) where T
 end
 
 export isincircle
-function isincircle(L::T, N::Int, σ::T, pos::SVector{2,T}) where T
-    #mid_point = @SVector T[0.50*L, 0.50*L]
-    circle_rad = T((N/8)^(1/3)*σ)                   # Correct the formula!!!!!!!!!!!!
-    if norm(pos) < circle_rad
+function isincircle(pos::SVector{2,T}, rad::T, r_margin::T) where T
+    #mid_point = @SVector T[0.50*L, 0.50*L]                
+    if norm(pos) < rad + r_margin
         return true
     else
         return false
     end
 end
 
+export cut_circle_sphere
+
 function cut_circle_sphere!(box::SVector{N,T}, σ::T, Npart::Int, fraction::T) where {N,T}
     dim = length(box)
     R = T(σ/2)
     if dim == 2
-        r_init = Array{SVector{2,T}}(undef, Npart)
-        N_shape = ceil(Npart .* fraction)
-        nn = Int(ceil(0.5*sqrt(N_shape)))
+        N_circle = ceil(Npart .* fraction)
+        nn = Int(50*ceil(0.5*sqrt(N_circle)))
         L_x, L_y = box[1], box[2]
-        a_x = 0.5f0*L_x
-        a_y = 0.5f0*L_y
-        r_mean = @SVector [a_x, a_y]
         lattice_const = σ
-        r = triangular_lattice(L_x,lattice_const, nn, nn)
-        r = [r[i] .+ r_mean for i in 1:length(r)]
-        rad = T(sqrt(N_shape*3*sqrt(3)*(σ/2)^2 /2π))
-        r  = triangular_circle(L_x, r, rad)
+        r = triangular_lattice(box,lattice_const, nn, nn)
+        rad = T(sqrt(N_circle*3*sqrt(3)*(σ/2)^2 /2π))
+        #println(norm.(r),rad)
+        r  = circle_cut(r, rad)
+        n_remain = Int(ceil(length(r) *(1/fraction -1)))
+        Npart_new = n_remain + length(r)
+        
+        r_init = Array{SVector{2,T}}(undef, Npart_new)
         [r_init[i]=r[i] for i = 1:length(r)]
-        n_remain = Npart - length(r)
+        #println(r_init)
         ii = 0
         while ii < n_remain
-            pos = random_pos(dim,L_x)
-            if (pos[1] > - rad + 4R || pos[1] < rad - 4R) || (pos[2] > - rad + 4R || pos[2] < rad - 4R)
+            pos = random_pos(box)
+            if !isincircle(pos,rad,R)
                 ii += 1
                 r_init[length(r)+ ii] = pos                
             end
         end
     elseif dim == 3
-        r_init = Array{SVector{3,T}}(undef, Npart)
         N_shape = ceil(Npart .* fraction)
         nn = Int(ceil(cbrt(N_shape)))
         L_x, L_y, L_z = box[1], box[2], box[3]
-        a_x = 0.5f0*L_x
-        a_y = 0.5f0*L_y
-        a_z = 0.5f0*L_z
-        r_mean = @SVector [a_x, a_y, a_z]
-
         lattice_const = sqrt(2.0f0)*σ
         r = fcc_lattice(box,lattice_const, nn, nn, nn)
-        r = [r[i] .+ r_mean for i in 1:length(r)]
         rad = T((N_shape*4*sqrt(2)*(σ/2)^3 / 3π)^(1/3))
-        r  = fcc_sphere(r, rad)
-        [r_init[i]=r[i] for i = 1:length(r)]
+        r  = sphere_cut(r, rad)
+
+        n_remain = Int(ceil(length(r) *(1/fraction -1)))
         n_remain = Npart - length(r)
+        Npart_new = n_remain + length(r)
+        r_init = Array{SVector{3,T}}(undef, Npart_new)
+        [r_init[i]=r[i] for i = 1:length(r)]
         ii = 0
         while ii < n_remain
-            pos = random_pos(dim,L_x)
-            if (pos[1] > - rad + 4R || pos[1] < rad - 4R) || (pos[2] > - rad + 4R || pos[2] < rad - 4R) || (pos[3] > - rad + 4R || pos[3] < rad - 4R)
+            pos = random_pos(box)
+            if !isinsphere(pos,rad,R)
                 ii += 1
-                r_init[length(r)+ ii] = pos 
+                r_init[length(r)+ ii] = pos                
             end
         end
     end
@@ -238,9 +193,9 @@ export friction
 end
 
 export random_pos
-
-function random_pos(dim::Int, L::T) where T
-	return SVector{dim,T}(rand(dim)) .* L .- T(0.5*L)
+function random_pos(box::SVector{N,T}) where {N,T}
+    dim = length(box)
+	return SVector{dim,T}((rand(dim)) .-T(0.5) ) .* box
 end
 
 
