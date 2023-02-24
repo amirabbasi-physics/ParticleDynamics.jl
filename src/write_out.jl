@@ -51,7 +51,7 @@ end
 #Pkg.build("PyCall")
 
 # Append snapshot to GSD file
-function write_gsd(step::Int,simulation, part_id::Vector{Int},pos::CuVector{SVector{N,T}}, vel::CuVector{SVector{N,T}}) where {N,T}
+function write_gsd(step::Int,simulation, part_id::Vector{Int},positions::Vector{SVector{N,T}}, velocities::Vector{SVector{N,T}}) where {N,T}
 
     gsdhoomd = pyimport("gsd.hoomd")
     output_file = simulation.output_file*".gsd"
@@ -63,8 +63,6 @@ function write_gsd(step::Int,simulation, part_id::Vector{Int},pos::CuVector{SVec
     f = gsdhoomd.open(name = output_file, mode=mode)
 
     box = simulation.box
-    positions = Vector(pos)
-    velocities = Vector(vel)
     
     if length(box) == 2
         positions = [vcat(positions[i],zero(T)) for i = 1:length(positions)]
@@ -91,74 +89,30 @@ function write_gsd(step::Int,simulation, part_id::Vector{Int},pos::CuVector{SVec
     f.close()
 end
 
-
-"""
-# Append snapshot to GSD file
-function write_gsd(step::Int,simulation, part_id::Vector{Int},pos::CuVector{SVector{N,T}}, vel::CuVector{SVector{N,T}}) where {N,T}
-
-    gsd = pyimport("gsd.fl")
-    gsdhoomd = pyimport("gsd.hoomd")
-
-    if isfile(simulation.output_file) && step != 0
-        mode = "ab"
-    else
-        mode = "wb"
-    end
-    file = gsdhoomd.open(name = simulation.output_file, mode=mode)
-
-    positions = Vector(pos)
-    velocities = Vector(vel)
-    box = simulation.box
-    
-    if length(box) == 2
-        positions = [vcat(positions[i],zero(T)) for i = 1:length(positions)]
-        velocities = [vcat(velocities[i],zero(T)) for i = 1:length(velocities)]       
-    end
-
-    
-    s = gsdhoomd.Snapshot()
-   
-    s.configuration.step = step
-    
-    s.particles.N = length(positions)
-    s.particles.types = simulation.part_types
-    s.particles.typeid = part_id
-    s.particles.position = positions
-    s.particles.velocity = velocities
-    if length(box) == 2
-        s.configuration.box = vcat(box, zeros(eltype(box), 4))
-    elseif length(box) == 3
-        s.configuration.box = vcat(box, zeros(eltype(box), 3))
-    end
-
-    file.append(s)
-    file[:end_frame]()
-    file.close()
-end
-"""
-
 function write_log(
-    ofname::String,
     step::Int,
-    α::Vector{T},
+    simulation,
     Eₖ::Vector{T},
     Eₚ::Vector{T},
     dQ::Vector{T}) where T
 
-    out_file = ofname*".log"
-    sdot = sum(sort(dQ ./ α, by = abs))
-    sdotpp = sdot/length(α)
-    Ekin = sum(sort(Eₖ,by=abs))
+    output_file = simulation.output_file*".log"
 
-    data = hcat(step, Ekin, sdot, sdotpp)
+    α_list = [simulation.particles[i].α for i = 1:length(simulation.particles)]
+    
+    sdot = sum(dQ ./ α_list )
+    sdotpp = sdot/length(simulation.particles)
+    Ekin = sum(Eₖ)
+    Epot = sum(Eₚ)
+    data = hcat(step, Ekin, Epot, sdot, sdotpp)
     if step == 0
-       open(out_file,"w") do file
-            println(file,"Time  E_kin  E_pot EPR")
+       open(output_file,"w") do file
+            println(file,"Time          E_kin           E_pot           EPR             EPR per particle")
             #writedlm(file,data)
         end
     else
-        open(out_file,"a+") do file
-            println("Time = ",data[1], " | E_kin = ", data[2], " | EPR = " ,data[3], " | EPR per particle = " ,data[4] )
+        open(output_file,"a+") do file
+            println("Time = ",data[1], " | E_kin = ", data[2], " | E_pot = ", data[3], " | EPR = " ,data[4], " | EPR per particle = " ,data[5] )
             writedlm(file,data, '\t')
         end
     end
@@ -166,10 +120,8 @@ end
 
 
 function write_log(
-    ofname::String,
     step::Int,
-    c2::T,
-    α::Vector{T},
+    simulation,
     num_pl::Int,
     Eₖ::Vector{T},
     Eₚ::Vector{T},
@@ -178,30 +130,29 @@ function write_log(
 
     cold_cold = coll[1:num_pl , 1:num_pl]
     cold_hot = coll[(num_pl+1):end , 1:num_pl]
-
     hot_hot = coll[(num_pl+1):end , num_pl+1:end]
 
+    coll_cold_cold  = T(0.5*sum(cold_cold)./c2)
+    coll_cold_hot   = T(sum(cold_hot)./c2)
+    coll_hot_hot    = T(0.5*sum(hot_hot)./c2)
 
-    coll_cold_cold  = 0.5*sum(cold_cold)./c2
-    coll_cold_hot   = sum(cold_hot)./c2
-    coll_hot_hot    = 0.5*sum(hot_hot)./c2
-    coll_tot        = 0.5*sum(coll)./c2
+    α_list = [simulation.particles[i].α for i = 1:length(simulation.particles)]
 
-
-    out_file = ofname*".log"
-    sdot = sum(sort(dQ ./ α, by = abs))
-    sdotpp = sdot/length(α)
-    Ekin = sum(sort(Eₖ,by=abs))
-
-    data = hcat(step, Ekin, sdot, sdotpp, Float32(coll_cold_cold), Float32(coll_cold_hot), Float32(coll_hot_hot), Float32(coll_tot))
+    output_file = simulation.output_file*".log"
+    sdot = sum(dQ ./ α_list)
+    sdotpp = sdot/length(simulation.particles)
+    Ekin = sum(Eₖ)
+    Epot = sum(Eₚ)
+    println("simulation.dump_freq not considered!")
+    data = hcat(step, Ekin, Epot, sdot, sdotpp, coll_cold_cold, coll_cold_hot, coll_hot_hot)
     if step == 0
-       open(out_file,"w") do file
-            println(file,"Time      |   E_kin  |    EPR  |    EPR per part    |   cold/cold coll rate    |   cold/hot coll rate     |   hot/hot coll rate  |   total coll rate")
+       open(output_file,"w") do file
+            println(file,"Time      |       E_kin       |       E_pot      |    EPR per part    |   cold/cold coll rate    |   cold/hot coll rate     |   hot/hot coll rate  ")
             #writedlm(file,data)
         end
     else
-        open(out_file,"a+") do file
-            println("Time = ",data[1], " | E_kin = ", data[2], " | EPR = " ,data[3], " | EPR per particle = " ,data[4], "  |  cold/cold coll rate = " ,data[5],"  |  cold/hot coll rate = " ,data[6],"  |  hot/hot coll rate = " ,data[7], "  |  total coll rate = " ,data[8])
+        open(output_file,"a+") do file
+            println("Time = ",data[1], " | E_kin = ", data[2]," | E_pot = ", data[3], " | EPR = " ,data[4], " | EPR per particle = " ,data[5], "  |  cold/cold coll rate = " ,data[6],"  |  cold/hot coll rate = " ,data[7],"  |  hot/hot coll rate = " ,data[8])
             #println(coll_tot - coll_hot_hot -coll_cold_hot - coll_cold_cold)
             writedlm(file,data, '\t')
         end

@@ -1,9 +1,9 @@
-
 #####################################################################################
 #####################################################################################
 ##              Positions and velocities update for Euler-Maruyama algorithm       ##
 #####################################################################################
 #####################################################################################
+
 
 export update_parts_em!
 
@@ -13,7 +13,7 @@ function update_parts_em!(r::CuVector{SVector{N,T}}, v::CuVector{SVector{N,T}}, 
     Npart = UInt32(length(r))
     nblocks=ceil(Int, Npart/nthreads)
     CUDA.@sync @cuda blocks=nblocks threads=nthreads update_parts_em_kernel!(r, v, f, fR, dq, eₖ, c1s, c2, c3s)
-    return nothing
+    return r, v, dq, eₖ
 end
 
 export update_parts_em_kernel!
@@ -27,34 +27,31 @@ function update_parts_em_kernel!(r::CuDeviceVector{SVector{N,T}}, v::CuDeviceVec
 
      @inbounds begin
          if gtid <= Npart
-             pos = r[gtid]
-             vel = v[gtid]
-             frc = f[gtid]
-             rnd = noise[gtid]
-             c1  = c1s[gtid]
-             c3  = c3s[gtid]
-             dQ  = dq[gtid]
-             Eₖ   = eₖ[gtid]
+            pos = r[gtid]
+            vel = v[gtid]
+            frc = f[gtid]
+            rnd = noise[gtid]
+            c1  = c1s[gtid]
+            c3  = c3s[gtid]
+            dQ  = dq[gtid]
+            Eₖ   = eₖ[gtid]
 
-             rnd_force = c3 .* rnd
-             v_prev = vel
+            rnd_force = c3 .* rnd
+            v_prev = vel
+            a = c1*c2
+            v_next = (1.0f0-a).* v_prev .+ a .* frc .+ a .* rnd_force
+            pos = pos .+ c2 .* v_next
 
+            injected_energy   = 0.50f0  * dot((v_prev .+ v_next), rnd_force)
+            dissipated_energy = -dot(v_next ,v_next)
 
-             a = c1*c2
-             v_next = (1.0f0-a).* v_prev .+ a .* frc .+ a .* rnd_force
-             pos = pos .+ c2 .* v_next
-
-             injected_energy   = 0.50f0  * dot((v_prev .+ v_next), rnd_force)
-             dissipated_energy = -dot(v_next ,v_next)
-
-             dQ = -(injected_energy + dissipated_energy)
-             Eₖ = 0.50f0*dot(v_next,v_next)/c1
+            dQ = -(injected_energy + dissipated_energy)
+            Eₖ = 0.50f0*dot(v_next,v_next)/c1
          end
          sync_threads()
          if gtid <= Npart
              r[gtid] = pos
              v[gtid] = v_next
-             noise[gtid] = rnd_force
              dq[gtid] = dQ
              eₖ[gtid] = Eₖ
          end
@@ -62,6 +59,7 @@ function update_parts_em_kernel!(r::CuDeviceVector{SVector{N,T}}, v::CuDeviceVec
      end
      return nothing
 end
+
 
 #####################################################################################
 #               Positions and velocities update for Verlet-type algorithm           #
@@ -143,7 +141,7 @@ function update_velocities_vv!(
     Npart = UInt32(length(v))
     nblocks = ceil(Int, Npart/nthreads)
     CUDA.@sync @cuda blocks=nblocks threads=nthreads update_velocities_kernel_vv!(v, f₀, f, fR, dq, eₖ, c1s, c2, c3s)
-    return v
+    return v, dq, eₖ
 end
 
 
@@ -166,26 +164,27 @@ function update_velocities_kernel_vv!(
 
      @inbounds begin
          if gtid <= Npart
-             v_prev = v[gtid]
-             frc_prev = f₀[gtid]
-             frc = f[gtid]
-             rnd = noise[gtid]
-             c1  = c1s[gtid]
-             c3  = c3s[gtid]
-             dQ  = dq[gtid]
-             Eₖ   = eₖ[gtid]
+            v_prev = v[gtid]
+            frc_prev = f₀[gtid]
+            frc = f[gtid]
+            rnd = noise[gtid]
+            c1  = c1s[gtid]
+            c3  = c3s[gtid]
+            dQ  = dq[gtid]
+            Eₖ   = eₖ[gtid]
 
-             rnd_force = c3 .* rnd
-             a = c1*c2
-             aa = (1.f0 - 0.5f0*a) / (1.f0 + 0.5f0*a)
-             bb = 1.f0 / (1.f0 + 0.5f0*a)
-             v_next = aa .* v_prev + (0.5f0*a*aa) .* frc_prev + (0.5f0*a) .* frc + (bb*a) .* rnd_force
+            rnd_force = c3 .* rnd
+            a = c1*c2
+            aa = (1.f0 - 0.5f0*a) / (1.f0 + 0.5f0*a)
+            bb = 1.f0 / (1.f0 + 0.5f0*a)
+            v_next = aa .* v_prev + (0.5f0*a*aa) .* frc_prev + (0.5f0*a) .* frc + (bb*a) .* rnd_force
 
-             injected_energy = 0.5f0 * dot((v_prev .+ v_next), rnd_force)
-             dissipated_energy = -dot(v_next ,v_next)
+            injected_energy = 0.5f0 * dot((v_prev .+ v_next), rnd_force)
 
-             dQ = -(injected_energy + dissipated_energy)
-             Eₖ = 0.5f0*dot(v_next,v_next)/c1
+            dissipated_energy = -dot(v_next ,v_next)
+
+            dQ = -(injected_energy + dissipated_energy)
+            Eₖ = 0.5f0*dot(v_next,v_next)/c1
          end
          sync_threads()
          if gtid <= Npart
