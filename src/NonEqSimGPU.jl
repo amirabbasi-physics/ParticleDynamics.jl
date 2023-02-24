@@ -20,7 +20,8 @@ using CSV
 using DataFrames
 using LinearAlgebra
 using PyCall
-import Random: randperm
+using Random
+using Distributed
 
 include("definitions.jl")
 include("simulation.jl")

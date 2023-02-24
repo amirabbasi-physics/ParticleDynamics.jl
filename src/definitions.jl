@@ -22,6 +22,13 @@ function Box(; dim::Int, Npart::Int, ϕ::T, σ::T) where T <: AbstractFloat    #
 end
 
 
+function shuffle_pos!(simulation)
+    r_tmp = [simulation.particles[i].r for i = 1:length(simulation.particles)]
+    shuffle!(r_tmp)
+    [simulation.particles[i].r = r_tmp[i] for i = 1:length(simulation.particles)]
+    return nothing
+end
+
 export rectangular_lattice
 
 function rectangular_lattice(Npart::Int, box::SVector{2,T}) where T
@@ -94,6 +101,36 @@ function simplecubic_lattice(Npart::Int, box::SVector{3,T}) where T
 end
 
 export fcc_lattice
+function fcc_lattice(box::SVector{N,T},lattice_const::T,M_x::Int64, M_y::Int64, M_z::Int64) where {N,T}
+    """Calculates the positions of an fcc lattice with the lattice constant a
+    in a cubic box with the given dimensions"""
+    # initialize coordinates: time 4 since there are 4 atoms in each unit cell
+    positions = Array{SVector{3,Float32}, 1}()
+    for i = 0:M_x-1
+        for j = 0:M_y-1
+            for k = 0:M_z-1
+                pos = [pos_fcc(lattice_const)[n] .+ @SVector [i * lattice_const, j * lattice_const, k * lattice_const] for n = 1:4]
+                pos = [pos[i] .- box ./2 for i=1:4]
+                for nn = 1:4
+                    push!(positions, pos[nn])
+                end
+            end
+        end
+    end
+    return positions
+end
+export pos_fcc
+function pos_fcc(a::T) where T
+    """returns the positions (x,y,z) of the 4 atoms in a fcc unit cell with the lattice constant a."""
+    p₁ = @SVector [0.f0, 0.f0, 0.f0]
+    p₂ = @SVector [0.f0, 0.5f0*a, 0.5f0*a]
+    p₃ = @SVector [0.5f0*a, 0.f0, 0.5f0*a]
+    p₄ = @SVector [0.5f0*a, 0.5f0*a, 0.f0]
+    return p₁, p₂, p₃, p₄
+end
+
+"""
+export fcc_lattice
 function fcc_lattice(box::SVector{N,T},a::T,M_x::Int, M_y::Int, M_z::Int) where {N,T}
     positions = Array{SVector{3,T}, 1}()
     for i = 0:M_x-1, j = 0:M_y-1, k = 0:M_z-1
@@ -107,6 +144,7 @@ function fcc_lattice(box::SVector{N,T},a::T,M_x::Int, M_y::Int, M_z::Int) where 
     end
     return positions
 end
+"""
 
 export isinsphere
 function isinsphere(pos::SVector{3,T}, rad::T, r_margin::T) where T
@@ -127,7 +165,15 @@ function isincircle(pos::SVector{2,T}, rad::T, r_margin::T) where T
     end
 end
 
-
+export check_overlap
+function check_overlap(pos, positions, R)
+    for p in positions
+        if norm(pos - p) < 2R
+            return true
+        end
+    end
+    return false
+end
 
 export cut_circle_sphere
 
@@ -136,7 +182,6 @@ function cut_circle_sphere!(box::SVector{N,T}, σ::T, Npart::Int, fraction::T,co
     R = T(σ/2)
     if dim == 2
         N_circle = Int(ceil(Npart .* fraction))
-        L_x, L_y = box[1], box[2]
         lattice_const = σ
         r = triangular_lattice(box,lattice_const, N_circle, N_circle)
         rad = T(sqrt(N_circle))
@@ -150,22 +195,27 @@ function cut_circle_sphere!(box::SVector{N,T}, σ::T, Npart::Int, fraction::T,co
 
         r_init = Array{SVector{2,T}}(undef, Npart_new)
         [r_init[i]=r2[i] for i = 1:length(r2)]
-        ii = 0
-        while ii < n_remain
-            pos = random_pos(box)
-            if !isincircle(pos,rad*cold_frac,R)
-                ii += 1
-                r_init[length(r2)+ ii] = pos               
-            end
+
+        for ii in 1:n_remain
+            # Generate a random position
+            pos = random_pos(box)    
+            # Check for overlap with other particles
+            while check_overlap(pos, r_init[1:n_remain+ii-1], R)
+                pos = random_pos(box)
+            end        
+            # Append the position to the list of positions
+            r_init[length(r2)+ ii] = pos
         end
     elseif dim == 3
-        N_sphere = Int(ceil(Npart .* fraction))
-        L_x, L_y, L_z = box[1], box[2], box[3]
-        lattice_const = sqrt(2.0f0)*σ
-        r = fcc_lattice(box,lattice_const, N_sphere, N_sphere, N_sphere)
-        rad = T(cbrt(N_sphere))
 
+        N_sphere = Int(ceil(Npart .* fraction))
+        rad = T(cbrt(N_sphere))
+        nn = Int(ceil(rad))
+        lattice_const = sqrt(2.0f0)*σ
+        r = fcc_lattice(box,lattice_const, nn, nn, nn)
+        
         r1  = sphere_cut(r, rad)
+
         num_pl = length(r1)
         n_remain = Int(ceil(length(r1) *(1/fraction -1)))
         Npart_new = n_remain + num_pl 
@@ -236,7 +286,7 @@ function PassiveP(; part_type::String = "Cold",
     density::T, η::T, Radii::T, α::T) where {T<:AbstractFloat}
     kB = T(1.380649*10^(-23))
     Temp = T(300.0)
-    rad = Radii/1.0e-6
+    rad = T(1.0)               # Needs to be modified for polydispersed systems
     m = density*volume(Radii)
     γ = friction(η,Radii)
     τm = m/γ
