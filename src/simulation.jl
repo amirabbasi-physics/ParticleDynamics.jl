@@ -60,7 +60,7 @@ function sim_run(;
 
     for run = 1:num_runs
 		simulation = Simulation()
-        output_file = "$dim,dimension_Npart,$Npart,run_num-$run,deltat-$Δt_prod,integ-$integ"  # check this!
+        output_file = "Npart,$Npart,deltat-$Δt_prod,alpha_2-$α₂,fraction-$ϕ,integ-$integ,run_num-$run"  # check this!
 		simulation.part_types = ptypes
         simulation.output_file = output_file
         
