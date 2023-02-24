@@ -132,9 +132,9 @@ function write_log(
     cold_hot = coll[(num_pl+1):end , 1:num_pl]
     hot_hot = coll[(num_pl+1):end , num_pl+1:end]
 
-    coll_cold_cold  = T(0.5*sum(cold_cold)./c2)
-    coll_cold_hot   = T(sum(cold_hot)./c2)
-    coll_hot_hot    = T(0.5*sum(hot_hot)./c2)
+    coll_cold_cold  = T(0.5*sum(cold_cold) / simulation.dt)
+    coll_cold_hot   = T(sum(cold_hot) / simulation.dt)
+    coll_hot_hot    = T(0.5*sum(hot_hot) / simulation.dt)
 
     α_list = [simulation.particles[i].α for i = 1:length(simulation.particles)]
 
@@ -143,7 +143,6 @@ function write_log(
     sdotpp = sdot/length(simulation.particles)
     Ekin = sum(Eₖ)
     Epot = sum(Eₚ)
-    println("simulation.dump_freq not considered!")
     data = hcat(step, Ekin, Epot, sdot, sdotpp, coll_cold_cold, coll_cold_hot, coll_hot_hot)
     if step == 0
        open(output_file,"w") do file

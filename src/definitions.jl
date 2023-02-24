@@ -196,11 +196,11 @@ function cut_circle_sphere!(box::SVector{N,T}, σ::T, Npart::Int, fraction::T,co
         r_init = Array{SVector{2,T}}(undef, Npart_new)
         [r_init[i]=r2[i] for i = 1:length(r2)]
 
-        for ii in 1:n_remain
+        for ii in 1:n_remain-1
             # Generate a random position
             pos = random_pos(box)    
             # Check for overlap with other particles
-            while check_overlap(pos, r_init[1:n_remain+ii-1], R)
+            while check_overlap(pos, r_init, R)
                 pos = random_pos(box)
             end        
             # Append the position to the list of positions

@@ -78,7 +78,7 @@ function sim_run(;
 
 		# Check for homogeneous simulation to see wether it performs simulation up to the correct number of steps
         if homogeneous != nothing
-			"""
+			
             Δt_relax,α_init,num_steps_relax,freq_relax = homogeneous[1],homogeneous[2],homogeneous[3],homogeneous[4]  
             batchs  = num_steps_relax ÷ freq_relax
 			shuffle_pos!(simulation)
@@ -93,7 +93,6 @@ function sim_run(;
                 simulation.dt = T(Δt_relax)
                 simulate!(simulation, collision_calc, num_pl, noisefun) 
             end
-			"""
             for i = 1:num_pl
                 simulation.particles[i].α = α₁
                 simulation.particles[i].v = @SVector zeros(T,dim)
@@ -201,14 +200,16 @@ function simulate!(
 					Eₖ = zero(Eₖ)
 					Eₚ = zero(Eₚ)
 					coll = zero(coll)
+					write_gsd(step,simulation, part_id, r_c, v_c)
+					write_log(step, simulation, num_pl, Eₖ_c, Eₚ_c, dQ_c,coll_c)
 				else
 					r_c, v_c, Eₖ_c, Eₚ_c, dQ_c = Vector(r), Vector(v), Vector(Eₖ), Vector(Eₚ), Vector(dQ)
 					dQ = zero(dQ)
 					Eₖ = zero(Eₖ)
 					Eₚ = zero(Eₚ)
-				end
-				write_gsd(step,simulation, part_id, r_c, v_c)
-				write_log(step, simulation, Eₖ_c, Eₚ_c, dQ_c)
+					write_gsd(step,simulation, part_id, r_c, v_c)
+					write_log(step, simulation, Eₖ_c, Eₚ_c, dQ_c)
+				end				
 			end
 		end
 	elseif simulation.integrator == "em"
@@ -240,20 +241,16 @@ function simulate!(
 					Eₖ = zero(Eₖ)
 					Eₚ = zero(Eₚ)
 					coll = zero(coll)
+					write_gsd(step,simulation, part_id, r_c, v_c)
+					write_log(step, simulation, num_pl, Eₖ_c, Eₚ_c, dQ_c,coll_c)
 				else
 					r_c, v_c, Eₖ_c, Eₚ_c, dQ_c = Vector(r), Vector(v), Vector(Eₖ), Vector(Eₚ), Vector(dQ)
 					dQ = zero(dQ)
 					Eₖ = zero(Eₖ)
 					Eₚ = zero(Eₚ)
-				end
-				write_gsd(step,simulation, part_id, r_c, v_c)
-				write_log(step, simulation, Eₖ_c, Eₚ_c, dQ_c)
-				"""
-				@async begin
 					write_gsd(step,simulation, part_id, r_c, v_c)
 					write_log(step, simulation, Eₖ_c, Eₚ_c, dQ_c)
-				end
-				"""
+				end		
 			end
 		end
 		# The leapfrog integrator should be revised carefully!!!!
