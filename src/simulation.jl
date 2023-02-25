@@ -52,15 +52,17 @@ function sim_run(;
         elseif dim == 3
             r_init = simplecubic_lattice(Npart, box)
         end
+		homog = "homogeneous"
     else
         r_init, num_pl = cut_circle_sphere!(box, σ, Npart, fraction,cold_frac)
+		homog = "inhomogeneous"
     end
 
     Npart = length(r_init)
 
     for run = 1:num_runs
 		simulation = Simulation()
-        output_file = "Npart,$Npart,deltat-$Δt_prod,alpha_2-$α₂,fraction-$ϕ,integ-$integ,run_num-$run"  # check this!
+        output_file = "Npart,$Npart,deltat-$Δt_prod,alpha_2-$α₂,fraction-$ϕ,integ-$integ,run_num-$run,$homog"  # check this!
 		simulation.part_types = ptypes
         simulation.output_file = output_file
         
