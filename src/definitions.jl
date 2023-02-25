@@ -196,7 +196,7 @@ function cut_circle_sphere!(box::SVector{N,T}, σ::T, Npart::Int, fraction::T,co
         r_init = Array{SVector{2,T}}(undef, Npart_new)
         [r_init[i]=r2[i] for i = 1:length(r2)]
 
-        for ii in 1:n_remain-1
+        for ii in 1:n_remain
             # Generate a random position
             pos = random_pos(box)    
             # Check for overlap with other particles
@@ -224,13 +224,15 @@ function cut_circle_sphere!(box::SVector{N,T}, σ::T, Npart::Int, fraction::T,co
 
         r_init = Array{SVector{3,T}}(undef, Npart_new)
         [r_init[i]=r2[i] for i = 1:length(r2)]
-        ii = 0
-        while ii < n_remain
-            pos = random_pos(box)
-            if !isinsphere(pos,rad*cold_frac,R)
-                ii += 1
-                r_init[length(r2)+ ii] = pos                
-            end
+        for ii in 1:n_remain
+            # Generate a random position
+            pos = random_pos(box)    
+            # Check for overlap with other particles
+            while check_overlap(pos, r_init, R)
+                pos = random_pos(box)
+            end        
+            # Append the position to the list of positions
+            r_init[length(r2)+ ii] = pos
         end
     end
     return r_init, num_pl
