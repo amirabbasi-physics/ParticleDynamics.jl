@@ -84,17 +84,20 @@ function sim_run(;
             Δt_relax,α_init,num_steps_relax,freq_relax = homogeneous[1],homogeneous[2],homogeneous[3],homogeneous[4]  
             batchs  = num_steps_relax ÷ freq_relax
 			shuffle_pos!(simulation)
+			
             for i = 0:batchs
                 α_relax  =   α_init - i*(α_init - max(α₁,α₂))/batchs
 
-                for particle in simulation.particles
-                    particle.α = α_relax
+                for i = 1:length(simulation.particles)
+                    simulation.particles[i].α = α_relax
+					simulation.particles[i].v = @SVector zeros(T,dim)
                 end
 				simulation.num_steps = freq_relax
         		simulation.save_interval = freq_relax
-                simulation.dt = T(Δt_relax)
+                simulation.dt = Δt_relax
                 simulate!(simulation, collision_calc, num_pl, noisefun) 
             end
+			
             for i = 1:num_pl
                 simulation.particles[i].α = α₁
                 simulation.particles[i].v = @SVector zeros(T,dim)
@@ -105,7 +108,7 @@ function sim_run(;
             end
 
 			shuffle_pos!(simulation)
-			simulation.dt = T(Δt_prod)
+			simulation.dt = Δt_prod
 			simulation.num_steps = num_steps
         	simulation.save_interval = save_interval
 			simulate!(simulation, collision_calc, num_pl, noisefun)
@@ -114,7 +117,7 @@ function sim_run(;
 			simulation.num_steps = num_steps
         	simulation.save_interval = save_interval
 			# Check for simulation to see wether it performs simulation up to the correct number of steps 
-			simulation.dt = T(Δt_prod)	
+			simulation.dt = Δt_prod	
 			simulate!(simulation, collision_calc, num_pl, noisefun)
 		end
     end
@@ -145,7 +148,8 @@ function simulate!(
 
 	c1 = [(simulation.particles[i].τD/simulation.particles[i].τm) for i=1:Npart]
 	c1 = CuVector(c1)
-	c2 = simulation.dt
+	c2 = [simulation.dt for i=1:Npart]
+	c2 = CuVector(c2)
 	c3 = [Float32(sqrt(2.0*simulation.particles[i].α/simulation.dt)) for i=1:Npart]
 	c3 = CuVector(c3)
 
@@ -169,7 +173,7 @@ function simulate!(
 
 	
 	if simulation.integrator == "vv"
-		f₀ = similar(f)
+		f₀ = zero(f)
 		for step = 0:simulation.num_steps
 			f = f₀
 			dQ₀ = zero(dQ₀)
@@ -257,24 +261,48 @@ function simulate!(
 		end
 		# The leapfrog integrator should be revised carefully!!!!
 	elseif simulation.integrator == "lf"
-		for _ in 1:freq
+		for step = 0:simulation.num_steps
 			dQ₀ = zero(dQ₀)
 			Ekin = zero(Ekin)
 			Epot = zero(Epot)
 			fR = noisefun(Npart)
-			update_positions_lf!(r, v, c₂)
-			PBC!(r,box)
-			f, Epot = forces!(r, f, Epot, box, ϵ, cut_off)
-			update_velocities_lf!(v, f, fR, dQ₀, Ekin, c₁, c₂, c₃)
-			update_positions_lf!(r, v, c₂)
+			update_positions_lf!(r, v, c2)
+			PBC!(r,simulation.box)
+			f, Epot = forces!(r, f, Epot, simulation.box, simulation.ϵ, simulation.σ)
 			if collision_calc
-				coll₀, coll_switch₀ = collisions!(r, coll₀, coll_switch₀, cut_off, box)
+				coll₀, coll_switch₀ = collisions!(r, coll₀, coll_switch₀, simulation.σ, simulation.box)
 				coll .+= coll₀
 			end
-			PBC!(r,box)
-			dQ .+= dQ₀ ./freq
-			Eₖ .+= Ekin ./freq
-			Eₚ .+= Epot ./freq
+			update_velocities_lf!(v, f, fR, dQ₀, Ekin, c1, c2, c3)
+			update_positions_lf!(r, v, c2)
+			PBC!(r,simulation.box)
+			dQ .+= dQ₀ 
+			Eₖ .+= Ekin
+			Eₚ .+= Epot
+			if step % simulation.save_interval == 0
+				if collision_calc
+					coll ./= simulation.save_interval
+				end
+				dQ ./= simulation.save_interval
+				Eₖ ./= simulation.save_interval
+				Eₚ ./= simulation.save_interval
+				if collision_calc
+					r_c, v_c, Eₖ_c, Eₚ_c, dQ_c, coll_c = Vector(r), Vector(v), Vector(Eₖ), Vector(Eₚ), Vector(dQ), Array(coll)
+					dQ = zero(dQ)
+					Eₖ = zero(Eₖ)
+					Eₚ = zero(Eₚ)
+					coll = zero(coll)
+					write_gsd(step,simulation, part_id, r_c, v_c)
+					write_log(step, simulation, num_pl, Eₖ_c, Eₚ_c, dQ_c,coll_c)
+				else
+					r_c, v_c, Eₖ_c, Eₚ_c, dQ_c = Vector(r), Vector(v), Vector(Eₖ), Vector(Eₚ), Vector(dQ)
+					dQ = zero(dQ)
+					Eₖ = zero(Eₖ)
+					Eₚ = zero(Eₚ)
+					write_gsd(step,simulation, part_id, r_c, v_c)
+					write_log(step, simulation, Eₖ_c, Eₚ_c, dQ_c)
+				end		
+			end
 		end
 	end
 	
