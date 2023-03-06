@@ -2,9 +2,9 @@ export harm_rep2D
 export harm_rep3D
 
 @inline function harm_rep2D(dx::T, dy::T, dist::T, ϵ::T, σ::T) where {T}
-    inv_dist = T(1.0f0/dist)
-    f_int = T(ϵ*(inv_dist - 1.0/σ))
-    e_int = T(0.25*f_int*dist*f_int*dist/ϵ)
+    inv_dist = (1/dist)
+    f_int = ϵ*(inv_dist - 1/σ)
+    e_int = f_int*dist*f_int*dist/(4ϵ)
     f_x = f_int*dx
     f_y = f_int*dy
     return SVector{2,T}(f_x,f_y) , e_int
@@ -12,9 +12,9 @@ end
 
 
 @inline function harm_rep3D(dx::T, dy::T, dz::T, dist::T, ϵ::T, σ::T) where {T}
-    inv_dist = T(1.0/dist)
-    f_int = T(ϵ*(inv_dist - 1.0/σ))
-    e_int = e_int = T(0.25*f_int*dist*f_int*dist/ϵ)
+    inv_dist = 1/dist
+    f_int = ϵ*(inv_dist - 1/σ)
+    e_int = e_int = f_int*dist*f_int*dist/(4ϵ)
     f_x = f_int*dx
     f_y = f_int*dy
     f_z = f_int*dz
@@ -111,7 +111,7 @@ function forces_kernel!(
                 dy = ifelse(abs(dy) > box[2] / 2, dy - sign(dy) * box[2] ,dy)
                 dr² = dx*dx + dy*dy 
                 dist  = sqrt(dr²)
-                if 0.0f0 < dist < cut_off
+                if 0 < dist < cut_off
                     frc, ep = harm_rep2D(dx,dy,dist, ϵ, cut_off)
                     acc = acc .+ frc
                     epot = epot + ep
@@ -146,7 +146,7 @@ function forces_kernel!(
                     dz = ifelse(abs(dz) > box[3] / 2, dz - sign(dz) * box[3] ,dz)
                     dr² = dx*dx + dy*dy + dz*dz
                     dist  = sqrt(dr²)
-                    if 0.0f0 < dist < cut_off
+                    if 0 < dist < cut_off
                         frc, ep = harm_rep3D(dx,dy,dz,dist, ϵ, cut_off)
                         acc = acc .+ frc
                         epot = epot + ep
@@ -169,7 +169,7 @@ function forces_kernel!(
                 dz = ifelse(abs(dz) > box[3] / 2, dz - sign(dz) * box[3] ,dz)
                 dr² = dx*dx + dy*dy + dz*dz
                 dist  = sqrt(dr²)
-                if 0.0f0 < dist < cut_off
+                if 0 < dist < cut_off
                     frc, ep = harm_rep3D(dx,dy,dz,dist, ϵ, cut_off)
                     acc = acc .+ frc
                     epot = epot + ep

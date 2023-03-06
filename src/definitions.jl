@@ -1,9 +1,12 @@
 
 export noise2D
 export noise3D
+
 @inline function noise2D(Npart::Int)
     return SVector{2,Float32}.(CUDA.randn(Float32,Npart) ,CUDA.randn(Float32,Npart))
 end
+
+
 
 function noise3D(Npart::Int) 
     return SVector{3,Float32}.(CUDA.randn(Float32,Npart) ,CUDA.randn(Float32,Npart),CUDA.randn(Float32,Npart))
