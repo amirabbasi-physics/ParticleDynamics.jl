@@ -102,17 +102,22 @@ function write_log(
     
     sdot = sum(dQ ./ α_list )
     sdotpp = sdot/length(simulation.particles)
+
+    c1 = [(simulation.particles[i].τD/simulation.particles[i].τm) for i=1:length(simulation.particles)]
+
+    sdotpp2 = sum(2 .* c1 .* ( Eₖ ./ α_list .- 1))/length(simulation.particles)
+
     Ekin = sum(Eₖ)
     Epot = sum(Eₚ)
-    data = hcat(step, Ekin, Epot, sdot, sdotpp)
+    data = hcat(step, Ekin, Epot, sdot, sdotpp, sdotpp2)
     if step == 0
        open(output_file,"w") do file
-            println(file,"Time          E_kin           E_pot           EPR             EPR per particle")
+            println(file,"Time          E_kin           E_pot           EPR             EPR per particle       EPR per particle2")
             #writedlm(file,data)
         end
     else
         open(output_file,"a+") do file
-            println("Time = ",data[1], " | E_kin = ", data[2], " | E_pot = ", data[3], " | EPR = " ,data[4], " | EPR per particle = " ,data[5] )
+            println("Time = ",data[1], " | E_kin = ", data[2], " | E_pot = ", data[3], " | EPR = " ,data[4], " | EPR per particle = " ,data[5] , " | EPR per particle 2= " ,data[6] )
             writedlm(file,data, '\t')
         end
     end

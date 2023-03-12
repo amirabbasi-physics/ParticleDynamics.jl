@@ -90,7 +90,7 @@ function sim_run(;
 
                 for i = 1:length(simulation.particles)
                     simulation.particles[i].α = α_relax
-					simulation.particles[i].v = @SVector zeros(T,dim)
+					simulation.particles[i].v = sqrt(simulation.particles[i].α*(simulation.particles[i].τD/simulation.particles[i].τm)) .* @SVector randn(T,dim)
                 end
 				simulation.num_steps = freq_relax
         		simulation.save_interval = freq_relax
@@ -100,11 +100,11 @@ function sim_run(;
 			
             for i = 1:num_pl
                 simulation.particles[i].α = α₁
-                simulation.particles[i].v = @SVector zeros(T,dim)
+                simulation.particles[i].v = sqrt(simulation.particles[i].α*(simulation.particles[i].τD/simulation.particles[i].τm)) .* @SVector randn(T,dim)
             end
             for i = num_pl+1:Npart
                 simulation.particles[i].α = α₂
-                simulation.particles[i].v = @SVector zeros(T,dim)
+                simulation.particles[i].v = sqrt(simulation.particles[i].α*(simulation.particles[i].τD/simulation.particles[i].τm)) .* @SVector randn(T,dim)
             end
 
 			shuffle_pos!(simulation)
@@ -141,7 +141,7 @@ function simulate!(
 
 	Npart = length(simulation.particles)
 
-	dQ = CuVector(zeros(Float32,Npart))
+	dQ = CuVector(zeros(Float64,Npart))
 	Eₖ = similar(dQ)
 	Eₚ = similar(dQ)
 
@@ -150,7 +150,7 @@ function simulate!(
 	c1 = CuVector(c1)
 	c2 = [simulation.dt for i=1:Npart]
 	c2 = CuVector(c2)
-	c3 = [Float32(sqrt(2.0*simulation.particles[i].α/simulation.dt)) for i=1:Npart]
+	c3 = [sqrt(2*simulation.particles[i].α/simulation.dt) for i=1:Npart]
 	c3 = CuVector(c3)
 
 	part_id = [simulation.particles[i].part_id for i=1:Npart]
@@ -162,17 +162,93 @@ function simulate!(
 	f_c = [simulation.particles[i].f for i=1:Npart]
 	f = CuVector(f_c)
 	if collision_calc
-		coll = CuArray(cu(zeros(Npart,Npart)))
-		coll₀ = CuArray(cu(zeros(Npart,Npart)))
-    	coll_switch₀ = CuArray(cu(Matrix{Int32}(I,Npart,Npart)))
+		coll = CuArray(zeros(Float64,Npart,Npart))
+		#coll₀ = CuArray(cu(zeros(Npart,Npart)))
+    	coll_switch = CuArray(cu(Matrix{Int32}(I,Npart,Npart)))
 	end
 
 	dQ₀ = zero(dQ)
 	Ekin = zero(Eₖ)
 	Epot = zero(Eₚ)
 
-	
-	if simulation.integrator == "vv"
+	if simulation.integrator == "em_fast"
+		for step = 0:simulation.num_steps
+			#forces!(r, f, Eₚ, simulation.box, simulation.ϵ, simulation.σ)
+			if collision_calc
+				collisions!(r, coll, coll_switch, simulation.σ, simulation.box)
+			end
+			EM_integrate!(r, v, f, dQ, Eₖ, c1, c2, c3,simulation.box)
+			yield()
+			if step % simulation.save_interval == 0
+				dQ₀, Epot, Ekin = dQ, Eₚ, Eₖ
+				dQ = zero(dQ)
+				Eₖ = zero(Eₖ)
+				Eₚ = zero(Eₚ)
+				if collision_calc
+					coll₀ = coll
+					coll = zero(coll)
+				end
+				@async begin
+					if collision_calc
+						coll₀ ./= simulation.save_interval
+					end
+					dQ₀ ./= simulation.save_interval
+					Ekin ./= simulation.save_interval
+					Epot ./= simulation.save_interval
+					if collision_calc
+						r_c, v_c, Eₖ_c, Eₚ_c, dQ_c, coll_c = Vector(r), Vector(v), Vector(Ekin), Vector(Epot), Vector(dQ₀), Array(coll₀)
+						write_gsd(step,simulation, part_id, r_c, v_c)
+						write_log(step, simulation, num_pl, Eₖ_c, Eₚ_c, dQ_c,coll_c)
+					else
+						r_c, v_c, Eₖ_c, Eₚ_c, dQ_c = Vector(r), Vector(v), Vector(Ekin), Vector(Epot), Vector(dQ₀)
+						write_gsd(step,simulation, part_id, r_c, v_c)
+						write_log(step, simulation, Eₖ_c, Eₚ_c, dQ_c)
+					end
+				end		
+			end
+		end
+	elseif simulation.integrator == "em_new"
+		for step = 0:simulation.num_steps
+			dQ₀ = zero(dQ₀)
+			Ekin = zero(Ekin)
+			Epot = zero(Epot)
+			#f, Epot = forces!(r, f, Epot, simulation.box, simulation.ϵ, simulation.σ)
+			if collision_calc
+				coll₀, coll_switch₀ = collisions!(r, coll₀, coll_switch₀, simulation.σ, simulation.box)
+				coll .+= coll₀
+			end
+			em_new!(r, v, f, dQ₀, Ekin, c1, c2, c3, noisefun)
+			PBC!(r,simulation.box)
+			dQ .+= dQ₀
+			Eₖ .+= Ekin
+			Eₚ .+= Epot
+			yield()
+			if step % simulation.save_interval == 0
+				if collision_calc
+					coll ./= simulation.save_interval
+				end
+				dQ ./= simulation.save_interval
+				Eₖ ./= simulation.save_interval
+				Eₚ ./= simulation.save_interval
+				if collision_calc
+					r_c, v_c, Eₖ_c, Eₚ_c, dQ_c, coll_c = Vector(r), Vector(v), Vector(Eₖ), Vector(Eₚ), Vector(dQ), Array(coll)
+					dQ = zero(dQ)
+					Eₖ = zero(Eₖ)
+					Eₚ = zero(Eₚ)
+					coll = zero(coll)
+					write_gsd(step,simulation, part_id, r_c, v_c)
+					write_log(step, simulation, num_pl, Eₖ_c, Eₚ_c, dQ_c,coll_c)
+				else
+					r_c, v_c, Eₖ_c, Eₚ_c, dQ_c = Vector(r), Vector(v), Vector(Eₖ), Vector(Eₚ), Vector(dQ)
+					dQ = zero(dQ)
+					Eₖ = zero(Eₖ)
+					Eₚ = zero(Eₚ)
+					write_gsd(step,simulation, part_id, r_c, v_c)
+					write_log(step, simulation, Eₖ_c, Eₚ_c, dQ_c)
+				end		
+			end
+		end
+	elseif simulation.integrator == "vv"
 		f₀ = zero(f)
 		for step = 0:simulation.num_steps
 			f = f₀
@@ -182,7 +258,7 @@ function simulate!(
 			fR = noisefun(Npart)
 			r = update_positions_vv!(r, v, f₀, fR, c1, c2, c3)
 			PBC!(r,simulation.box)
-			f, Epot = forces!(r, f, Epot, simulation.box, simulation.ϵ, simulation.σ)
+			#f, Epot = forces!(r, f, Epot, simulation.box, simulation.ϵ, simulation.σ)
 			if collision_calc
 				coll₀, coll_switch₀ = collisions!(r, coll₀, coll_switch₀, simulation.σ, simulation.box)
 				coll .+= coll₀
@@ -192,6 +268,7 @@ function simulate!(
 			dQ .+= dQ₀
 			Eₖ .+= Ekin
 			Eₚ .+= Epot
+			yield()
 			if step % simulation.save_interval == 0
 				if collision_calc
 					coll ./= simulation.save_interval
@@ -218,47 +295,6 @@ function simulate!(
 				end				
 			end
 		end
-	elseif simulation.integrator == "em"
-		for step = 0:simulation.num_steps
-			dQ₀ = zero(dQ₀)
-			Ekin = zero(Ekin)
-			Epot = zero(Epot)
-			fR = noisefun(Npart)
-			f, Epot = forces!(r, f, Epot, simulation.box, simulation.ϵ, simulation.σ)
-			if collision_calc
-				coll₀, coll_switch₀ = collisions!(r, coll₀, coll_switch₀, simulation.σ, simulation.box)
-				coll .+= coll₀
-			end
-			r, v, dQ₀, Ekin = update_parts_em!(r, v, f, fR, dQ₀, Ekin, c1, c2, c3)
-			PBC!(r,simulation.box)
-			dQ .+= dQ₀
-			Eₖ .+= Ekin
-			Eₚ .+= Epot
-			if step % simulation.save_interval == 0
-				if collision_calc
-					coll ./= simulation.save_interval
-				end
-				dQ ./= simulation.save_interval
-				Eₖ ./= simulation.save_interval
-				Eₚ ./= simulation.save_interval
-				if collision_calc
-					r_c, v_c, Eₖ_c, Eₚ_c, dQ_c, coll_c = Vector(r), Vector(v), Vector(Eₖ), Vector(Eₚ), Vector(dQ), Array(coll)
-					dQ = zero(dQ)
-					Eₖ = zero(Eₖ)
-					Eₚ = zero(Eₚ)
-					coll = zero(coll)
-					write_gsd(step,simulation, part_id, r_c, v_c)
-					write_log(step, simulation, num_pl, Eₖ_c, Eₚ_c, dQ_c,coll_c)
-				else
-					r_c, v_c, Eₖ_c, Eₚ_c, dQ_c = Vector(r), Vector(v), Vector(Eₖ), Vector(Eₚ), Vector(dQ)
-					dQ = zero(dQ)
-					Eₖ = zero(Eₖ)
-					Eₚ = zero(Eₚ)
-					write_gsd(step,simulation, part_id, r_c, v_c)
-					write_log(step, simulation, Eₖ_c, Eₚ_c, dQ_c)
-				end		
-			end
-		end
 		# The leapfrog integrator should be revised carefully!!!!
 	elseif simulation.integrator == "lf"
 		for step = 0:simulation.num_steps
@@ -268,7 +304,7 @@ function simulate!(
 			fR = noisefun(Npart)
 			update_positions_lf!(r, v, c2)
 			PBC!(r,simulation.box)
-			f, Epot = forces!(r, f, Epot, simulation.box, simulation.ϵ, simulation.σ)
+			#f, Epot = forces!(r, f, Epot, simulation.box, simulation.ϵ, simulation.σ)
 			if collision_calc
 				coll₀, coll_switch₀ = collisions!(r, coll₀, coll_switch₀, simulation.σ, simulation.box)
 				coll .+= coll₀
@@ -279,6 +315,7 @@ function simulate!(
 			dQ .+= dQ₀ 
 			Eₖ .+= Ekin
 			Eₚ .+= Epot
+			yield()
 			if step % simulation.save_interval == 0
 				if collision_calc
 					coll ./= simulation.save_interval
