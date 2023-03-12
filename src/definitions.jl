@@ -2,8 +2,14 @@
 export noise2D
 export noise3D
 
+"""
 @inline function noise2D(Npart::Int)
     return SVector{2,Float32}.(CUDA.randn(Float32,Npart) ,CUDA.randn(Float32,Npart))
+end
+"""
+
+@inline function noise2D(Npart::Int)
+    return SVector{2,Float64}.(CUDA.randn(Float64,Npart) ,CUDA.randn(Float64,Npart))
 end
 
 
@@ -16,10 +22,10 @@ export Box
 
 function Box(; dim::Int, Npart::Int, ϕ::T, σ::T) where T <: AbstractFloat    # This should be changed for polydisperse particles!
     if dim == 2
-        L = T(sqrt(π*σ^2.0*Npart/(4.0*ϕ)))
+        L = sqrt(π*σ^2*Npart/(4*ϕ))
         return SVector{2,T}([L,L])
     elseif dim == 3
-        L = T((π*σ^3.0*Npart/(6.0*ϕ))^(1.0/3.0))
+        L = (π*σ^3*Npart/(6*ϕ))^(1/3)
         return SVector{3,T}([L,L,L])
     end
 end
@@ -38,11 +44,11 @@ function rectangular_lattice(Npart::Int, box::SVector{2,T}) where T
     positions = Array{SVector{2,T}, 1}()
     L_x = box[1]
     L_y = L_x
-    s_x, s_y = T(L_x/sqrt(Npart)), T(L_y/sqrt(Npart))
+    s_x, s_y = L_x/sqrt(Npart), L_y/sqrt(Npart)
     M_x = ceil(Int,Npart^(1/2))
     M_y = M_x
     for i = 0 : M_x - 1, j = 0 : M_y - 1
-        push!(positions, SVector{2,T}([(i + 0.50) * s_x, (j + 0.50) * s_y] .- [L_x/2, L_y/2]))
+        push!(positions, SVector{2,T}([(i + 1/2) * s_x, (j + 1/2) * s_y] .- [L_x/2, L_y/2]))
     end
     return positions
 end
@@ -95,10 +101,10 @@ function simplecubic_lattice(Npart::Int, box::SVector{3,T}) where T
     M_y = M_x
     M_z = M_y
 
-    s_x, s_y, s_z = T(L_x/(Npart)^(1.0/3.0)), T(L_y/(Npart)^(1.0/3.0)), T(L_z/(Npart)^(1.0/3.0))
+    s_x, s_y, s_z = L_x/(Npart)^(1/3), L_y/(Npart)^(1/3), L_z/(Npart)^(1/3)
 
     for i = 0 : M_x - 1, j = 0 : M_y - 1, k = 0 : M_z - 1
-        push!(positions, SVector{3,T}(T[(i + 0.50) * s_x, (j + 0.50) * s_y, (k + 0.50) * s_z] .- [L_x/2, L_y/2, L_z/2]))
+        push!(positions, SVector{3,T}([(i + 1/2) * s_x, (j + 1/2) * s_y, (k + 1/2) * s_z] .- [L_x/2, L_y/2, L_z/2]))
     end
     return positions
 end
@@ -375,9 +381,9 @@ mutable struct Simulation
     box::SVector
     particles::Array{Particle, 1}
     part_types::Vector{String}
-    ϵ::Float32
-    σ::Float32
-    dt::Float32
+    ϵ::Float64
+    σ::Float64
+    dt::Float64
     integrator::String
     num_steps::Int
     save_interval::Int
@@ -389,11 +395,10 @@ function Simulation(; descriptor::String = "No description given...",
     box::SVector=SVector{3,Float32}(ones(Float32,3)),
     particles::Array{Particle, 1} = Particle[],
     part_types::Vector{String}=["A","B"],
-    ϵ::Float32 = 0.001f0,
-    σ::Float32 = 2.0f0,
+    ϵ::Float64 = 5.0e6,
+    σ::Float64 = 2.0,
 
-    #interaction_type::Interaction,
-    dt::Float32=0.0001f0,
+    dt::Float64=0.0001,
     integrator::String = "vv",
     num_steps::Int = 0,
     save_interval::Int = 0,

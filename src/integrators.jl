@@ -3,43 +3,75 @@
 ##              Positions and velocities update for Euler-Maruyama algorithm       ##
 #####################################################################################
 #####################################################################################
+export em_new!
+function em_new!(r::CuVector{SVector{N,T}}, v::CuVector{SVector{N,T}}, f::CuVector{SVector{N,T}},
+    dq::CuVector{T},eₖ::CuVector{T},c1s::CuVector{T},dt::CuVector{T},c3s::CuVector{T}, noisefun::Function) where {N,T}
+    Npart = length(r)
+    fR = noisefun(Npart)
+    v_next = similar(v)
+    v_next .= (1 .- c1s .* dt) .* v .+ (c1s.*dt) .* (f .+ c3s .* fR)
+    r .= r .+ dt.*v_next
 
+    dq .= -dot.((v .+ v_next), c3s .* fR)./2 .+ dot.(v_next ,v_next)             # Minus sign indicates the dQ of the heat bath
+    eₖ .= dot.(v_next,v_next) ./ (2c1s)
+    return nothing
+end
 
-export update_parts_em!
+export EM_integrate!
 
-function update_parts_em!(r::CuVector{SVector{N,T}}, v::CuVector{SVector{N,T}}, f::CuVector{SVector{N,T}},
-    fR::CuVector{SVector{N,T}},dq::CuVector{T},eₖ::CuVector{T},c1s::CuVector{T},c2s::CuVector{T},c3s::CuVector{T}; nthreads=100) where {N,T}
+function EM_integrate!(r::CuVector{SVector{N,T}}, v::CuVector{SVector{N,T}}, f::CuVector{SVector{N,T}},
+    dq::CuVector{T},eₖ::CuVector{T},c1s::CuVector{T},c2s::CuVector{T},c3s::CuVector{T}, box::SVector{N,T}) where {N,T}
 
-    kernel = @cuda launch=false update_parts_em_kernel!(r, v, f, fR, dq, eₖ, c1s, c2s, c3s)
+    kernel = @cuda launch=false EM_kernel!(r, v, f, dq, eₖ, c1s, c2s, c3s, box)
+
     Npart = length(r)
     config = launch_configuration(kernel.fun)
     nthreads = Base.min(Npart, ceil(Int,config.threads))
     nblocks = cld(Npart, nthreads)
-    CUDA.@sync kernel(r, v, f, fR, dq, eₖ, c1s, c2s, c3s; threads=nthreads, blocks=nblocks)
-    return r, v, dq, eₖ
+    CUDA.@sync kernel(r, v, f, dq, eₖ, c1s, c2s, c3s, box; threads=nthreads, blocks=nblocks)
+    return nothing
 end
 
-export update_parts_em_kernel!
+export EM_kernel!
 
-function update_parts_em_kernel!(r::CuDeviceVector{SVector{N,T}}, v::CuDeviceVector{SVector{N,T}}, f::CuDeviceVector{SVector{N,T}},
-     noise::CuDeviceVector{SVector{N,T}},dq::CuDeviceVector{T},eₖ::CuDeviceVector{T}, c1s::CuDeviceVector{T},c2s::CuDeviceVector{T},
-     c3s::CuDeviceVector{T}) where {N,T}
-     Npart = length(r)
-     tid = threadIdx().x
-     gtid = (blockIdx().x - 1) * blockDim().x + tid  # global thread id
+function EM_kernel!(r::CuDeviceVector{SVector{N,T}}, v::CuDeviceVector{SVector{N,T}}, f::CuDeviceVector{SVector{N,T}},
+    dq::CuDeviceVector{T},eₖ::CuDeviceVector{T}, c1s::CuDeviceVector{T},c2s::CuDeviceVector{T},
+    c3s::CuDeviceVector{T}, box::SVector{N,T}) where {N,T}
+    Npart = length(r)
+    tid = threadIdx().x
+    gtid = (blockIdx().x - 1) * blockDim().x + tid  # global thread id
 
-     @inbounds begin
-         if gtid <= Npart
-            pos = r[gtid]
-            vel = v[gtid]
-            frc = f[gtid]
-            rnd = noise[gtid]
-            c1  = c1s[gtid]
-            c2  = c2s[gtid]
-            c3  = c3s[gtid]
-            dQ  = dq[gtid]
-            Eₖ   = eₖ[gtid]
 
+    @inbounds begin
+        if length(box) == 2
+            if gtid <= Npart
+                pos = r[gtid]
+                vel = v[gtid]
+                frc = f[gtid]
+                c1  = c1s[gtid]
+                c2  = c2s[gtid]
+                c3  = c3s[gtid]
+                dQ  = dq[gtid]
+                Eₖ   = eₖ[gtid]
+                rnd = @SVector randn(T,2)
+            end
+        elseif length(box) == 3
+            if gtid <= Npart
+                pos = r[gtid]
+                vel = v[gtid]
+                frc = f[gtid]
+                c1  = c1s[gtid]
+                c2  = c2s[gtid]
+                c3  = c3s[gtid]
+                dQ  = dq[gtid]
+                Eₖ   = eₖ[gtid]
+                rnd = @SVector randn(T,3)
+            end
+        end
+
+            
+
+        if gtid <= Npart
             dt  = c2
 
             rnd_force = c3 .* rnd
@@ -47,26 +79,25 @@ function update_parts_em_kernel!(r::CuDeviceVector{SVector{N,T}}, v::CuDeviceVec
             a = c1*dt
             v_next = (1-a) .* v_prev .+ a .* (frc .+ rnd_force)
             pos = pos .+ dt .* v_next
+            pos = mod.(pos .+ box ./ 2, box) .- box ./ 2                    # Applying PBC!
 
             injected_energy   =  dot((v_prev .+ v_next), rnd_force)/2
             dissipated_energy = -dot(v_prev ,v_prev)
 
-            dQ = -(injected_energy + dissipated_energy)                 # Minus sign indicates the dQ of the heat bath
-            Eₖ = dot(v_next,v_next)/(2c1)
-         end
-         sync_threads()
-         if gtid <= Npart
-             r[gtid] = pos
-             v[gtid] = v_next
-             dq[gtid] = dQ
-             eₖ[gtid] = Eₖ
-         end
+            dQ += -(injected_energy + dissipated_energy)                 # Minus sign indicates the dQ of the heat bath
+            Eₖ += dot(v_next,v_next)/(2c1)
+        end
         sync_threads()
-     end
-     return nothing
+        if gtid <= Npart
+            r[gtid] = pos
+            v[gtid] = v_next
+            dq[gtid] = dQ
+            eₖ[gtid] = Eₖ
+        end
+       sync_threads()
+    end
+    return nothing
 end
-
-
 #####################################################################################
 #               Positions and velocities update for Verlet-type algorithm           #
 #####################################################################################
@@ -196,7 +227,7 @@ function update_velocities_kernel_vv!(
 
             injected_energy = dot((v_prev .+ v_next), rnd_force)/2
 
-            dissipated_energy = -dot(v_prev ,v_prev)
+            dissipated_energy = - dot(v_prev ,v_prev)
 
             dQ = -(injected_energy + dissipated_energy)                         # Minus sign indicates the dQ of the heat bath
             Eₖ = dot(v_next,v_next)/(2c1)
@@ -217,6 +248,8 @@ end
 #               Positions and velocities update for leap-frog algorithm             #
 #####################################################################################
 #####################################################################################
+#This integrator has problem: The problem is that it does not update postions of the particles
+#on the upper right of the box in a 2D simulation.
 
 function update_positions_lf!(
     r  ::CuVector{SVector{N,T}},
@@ -245,7 +278,7 @@ function update_positions_kernel_lf!(
              vel = v[gtid]
              dt = c2s[gtid]
 
-             pos = pos + dt/2 .* vel
+             pos = pos .+ (dt/2) .* vel
          end
          sync_threads()
 
