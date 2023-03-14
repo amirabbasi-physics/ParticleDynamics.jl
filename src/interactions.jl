@@ -53,10 +53,10 @@ end
 function forces_kernel!(
     r::CuDeviceVector{T},
     f::CuDeviceVector{T},
-    Epot::CuDeviceVector{Float64},
+    Epot::CuDeviceVector{T1},
     box::T,
-    ϵ::Float64,
-    cut_off::Float64,::Val{TH}) where {T,TH}
+    ϵ::T1,
+    cut_off::T1,::Val{TH}) where {T,T1,TH}
 
     Npart = length(r)
     tid = threadIdx().x
@@ -69,7 +69,7 @@ function forces_kernel!(
     dim = length(box)
     tile = 0
     acc = zero(T)
-    epot= 0.0
+    epot= zero(T1)
 
     if dim == 2
         @inbounds begin
@@ -79,7 +79,7 @@ function forces_kernel!(
                 pos = zero(T)
             end
             acc = zero(T)
-            epot= 0.0
+            epot= zero(T1)
             for i in 1:full_blocks
                 idx = tile * blockDim().x + tid
                 shared_pos[tid] = r[idx]
@@ -133,7 +133,7 @@ function forces_kernel!(
                 pos = zero(T)
             end
             acc = zero(T)
-            epot= 0.0
+            epot= zero(T1)
             for i in 1:full_blocks
                 idx = tile * blockDim().x + tid
                 shared_pos[tid] = r[idx]
@@ -186,144 +186,6 @@ function forces_kernel!(
     end
 end
 
-
-
-
-function forces_kernel!(
-    r::CuDeviceVector{T},
-    f::CuDeviceVector{T},
-    Epot::CuDeviceVector{Float32},
-    box::T,
-    ϵ::Float32,
-    cut_off::Float32,::Val{TH}) where {T,TH}
-
-    Npart = length(r)
-    tid = threadIdx().x
-    gtid = (blockIdx().x - 1) * blockDim().x + threadIdx().x  # global thread id
-
-    shared_pos = CuStaticSharedArray(T, TH)
-    full_blocks = Npart ÷ blockDim().x
-    rest = Npart % blockDim().x
-
-    dim = length(box)
-    tile = 0
-    acc = zero(T)
-    epot= 0.0f0
-
-    if dim == 2
-        @inbounds begin
-            if gtid <= Npart
-                pos = r[gtid]
-            else
-                pos = zero(T)
-            end
-            acc = zero(T)
-            epot= 0.0f0
-            for i in 1:full_blocks
-                idx = tile * blockDim().x + tid
-                shared_pos[tid] = r[idx]
-                sync_threads()
-                @inbounds for j in 1:blockDim().x
-                    dx  = pos[1] - shared_pos[j][1]
-                    dy  = pos[2] - shared_pos[j][2]
-                    dx = ifelse(abs(dx) > box[1] / 2, dx - sign(dx) * box[1] ,dx)
-                    dy = ifelse(abs(dy) > box[2] / 2, dy - sign(dy) * box[2] ,dy)
-                    dr² = dx*dx + dy*dy
-                    dist  = sqrt(dr²)
-                    if 0.0f0 < dist < cut_off
-                        frc, ep = harm_rep2D(dx,dy,dist, ϵ, cut_off)
-                        acc = acc .+ frc
-                        epot = epot + ep
-                    end
-                end
-                sync_threads()
-                tile += 1
-            end
-            if tid <= rest
-                idx = tile * blockDim().x + tid
-                shared_pos[tid] = r[idx]
-            end
-            sync_threads()
-            @inbounds for j in 1:rest
-                dx  = pos[1] - shared_pos[j][1]
-                dy  = pos[2] - shared_pos[j][2]
-                dx = ifelse(abs(dx) > box[1] / 2, dx - sign(dx) * box[1] ,dx)
-                dy = ifelse(abs(dy) > box[2] / 2, dy - sign(dy) * box[2] ,dy)
-                dr² = dx*dx + dy*dy 
-                dist  = sqrt(dr²)
-                if 0 < dist < cut_off
-                    frc, ep = harm_rep2D(dx,dy,dist, ϵ, cut_off)
-                    acc = acc .+ frc
-                    epot = epot + ep
-                end
-            end
-            sync_threads()
-            if gtid <= Npart
-                f[gtid] = acc
-                Epot[gtid] = epot
-            end
-        end
-        return nothing
-    elseif dim == 3
-        @inbounds begin
-            if gtid <= Npart
-                pos = r[gtid]
-            else
-                pos = zero(T)
-            end
-            acc = zero(T)
-            epot= 0.0f0
-            for i in 1:full_blocks
-                idx = tile * blockDim().x + tid
-                shared_pos[tid] = r[idx]
-                sync_threads()
-                @inbounds for j in 1:blockDim().x
-                    dx  = pos[1] - shared_pos[j][1]
-                    dy  = pos[2] - shared_pos[j][2]
-                    dz  = pos[3] - shared_pos[j][3]
-                    dx = ifelse(abs(dx) > box[1] / 2, dx - sign(dx) * box[1] ,dx)
-                    dy = ifelse(abs(dy) > box[2] / 2, dy - sign(dy) * box[2] ,dy)
-                    dz = ifelse(abs(dz) > box[3] / 2, dz - sign(dz) * box[3] ,dz)
-                    dr² = dx*dx + dy*dy + dz*dz
-                    dist  = sqrt(dr²)
-                    if 0 < dist < cut_off
-                        frc, ep = harm_rep3D(dx,dy,dz,dist, ϵ, cut_off)
-                        acc = acc .+ frc
-                        epot = epot + ep
-                    end
-                end
-                sync_threads()
-                tile += 1
-            end
-            if tid <= rest
-                idx = tile * blockDim().x + tid
-                shared_pos[tid] = r[idx]
-            end
-            sync_threads()
-            @inbounds for j in 1:rest
-                dx  = pos[1] - shared_pos[j][1]
-                dy  = pos[2] - shared_pos[j][2]
-                dz  = pos[3] - shared_pos[j][3]
-                dx = ifelse(abs(dx) > box[1] / 2, dx - sign(dx) * box[1] ,dx)
-                dy = ifelse(abs(dy) > box[2] / 2, dy - sign(dy) * box[2] ,dy)
-                dz = ifelse(abs(dz) > box[3] / 2, dz - sign(dz) * box[3] ,dz)
-                dr² = dx*dx + dy*dy + dz*dz
-                dist  = sqrt(dr²)
-                if 0 < dist < cut_off
-                    frc, ep = harm_rep3D(dx,dy,dz,dist, ϵ, cut_off)
-                    acc = acc .+ frc
-                    epot = epot + ep
-                end
-            end
-            sync_threads()
-            if gtid <= Npart
-                f[gtid] = acc
-                Epot[gtid] = epot
-            end
-        end
-        return nothing
-    end
-end
 
 
 
