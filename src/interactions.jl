@@ -49,7 +49,6 @@ function forces!(
     return nothing
 end
 
-export forces_kernel!
 
 function forces_kernel!(
     r::CuDeviceVector{T},

@@ -36,12 +36,6 @@ function sim_run(;
 	σ = T(2.0)
     box = Box(dim = dim, Npart = Npart, ϕ = ϕ, σ = σ )
     num_pl = ceil(Int, Npart*fraction)
-
-	if dim == 2
-		noisefun = noise2D
-	elseif dim == 3
-		noisefun = noise3D
-	end
     ###############################################################################
     #   Initializing the system to get randomly distributed positions
     ###############################################################################
@@ -95,7 +89,7 @@ function sim_run(;
 				simulation.num_steps = freq_relax
         		simulation.save_interval = freq_relax
                 simulation.dt = Δt_relax
-                simulate!(simulation, collision_calc, num_pl, noisefun) 
+                simulate!(simulation, collision_calc, num_pl) 
             end
 			
             for i = 1:num_pl
@@ -111,14 +105,14 @@ function sim_run(;
 			simulation.dt = Δt_prod
 			simulation.num_steps = num_steps
         	simulation.save_interval = save_interval
-			simulate!(simulation, collision_calc, num_pl, noisefun)
+			simulate!(simulation, collision_calc, num_pl)
 
         elseif homogeneous == nothing
 			simulation.num_steps = num_steps
         	simulation.save_interval = save_interval
 			# Check for simulation to see wether it performs simulation up to the correct number of steps 
 			simulation.dt = Δt_prod	
-			simulate!(simulation, collision_calc, num_pl, noisefun)
+			simulate!(simulation, collision_calc, num_pl)
 		end
     end
     return nothing
@@ -135,8 +129,7 @@ export simulate!
 function simulate!(
 	simulation::Simulation,
 	collision_calc::Bool,
-	num_pl::Int,
-	noisefun::Function)
+	num_pl::Int)
 
 
 	Npart = length(simulation.particles)
@@ -248,6 +241,7 @@ function simulate!(
 				end		
 			end
 		end
+	"""	
 	elseif simulation.integrator == "vv"
 		f₀ = zero(f)
 		for step = 0:simulation.num_steps
@@ -341,6 +335,7 @@ function simulate!(
 				end		
 			end
 		end
+	"""
 	end
 	
 	r_c, v_c, f_c = Vector(r), Vector(v), Vector(f)
