@@ -24,7 +24,7 @@ function hexagonal_neighbors(R::T, circ_R::T) where T
     n_max = floor(circ_R / R)
     n = 1:n_max
     num_circles = 1 + 6 * sum(n .- 1)
-    return Int(num_circles+5)
+    return Int(num_circles)
 end 
 
 export rectangular_lattice
@@ -372,6 +372,8 @@ mutable struct Simulation
     part_types::Vector{String}
     ϵ::Float64
     σ::Float64
+    neigh_cut_off::Float64
+    neigh_update::Int
     dt::Float64
     integrator::String
     num_steps::Int
@@ -386,12 +388,13 @@ function Simulation(; descriptor::String = "No description given...",
     part_types::Vector{String}=["A","B"],
     ϵ::Float64 = 5.0e6,
     σ::Float64 = 2.0,
-
+    neigh_cut_off::Float64 = 5.0,
+    neigh_update::Int = 100000, 
     dt::Float64=0.0001,
     integrator::String = "vv",
     num_steps::Int = 0,
     save_interval::Int = 0,
     particles_to_save::Array{Particle, 1} =  Particle[],
     output_file::String = "output")
-    Simulation(descriptor,box, particles, part_types, ϵ, σ, dt,integrator, num_steps, save_interval, particles_to_save,output_file)
+    Simulation(descriptor,box, particles, part_types, ϵ, σ, neigh_cut_off, neigh_update, dt,integrator, num_steps, save_interval, particles_to_save,output_file)
 end

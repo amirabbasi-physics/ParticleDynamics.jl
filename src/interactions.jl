@@ -50,6 +50,32 @@ function neighbor_list!(
 end
 
 export neighbor_list_kernel!
+
+"""
+function neighbor_list_kernel!(
+    neighbor_matrix::CuDeviceMatrix{I},
+    Neighbors::CuDeviceMatrix{I}) where I
+
+    tid = threadIdx().x
+    gtid = (blockIdx().x - 1) * blockDim().x + tid
+    Npart = size(neighbor_matrix, 2)
+    @inbounds begin
+        if gtid <= Npart
+            col = view(neighbor_matrix, :, gtid)
+            k = 1 
+            for j = 1:length(col)
+                if col[j] == 1 && gtid != j 
+                    Neighbors[k, gtid] = j
+                    k += 1
+                end
+            end
+        end
+    end
+    return nothing            
+end
+
+"""
+
 function neighbor_list_kernel!(
     neighbor_matrix::CuDeviceMatrix{I},
     Neighbors::CuDeviceMatrix{I}) where I
@@ -61,7 +87,7 @@ function neighbor_list_kernel!(
         if gtid <= Npart
             row = view(neighbor_matrix, gtid, :)
             k = 1 
-            @inbounds for j = 1:length(row)
+            for j = 1:length(row)
                 if row[j] == 1 && gtid != j 
                     Neighbors[gtid,k] = j
                     k += 1
@@ -71,6 +97,7 @@ function neighbor_list_kernel!(
     end
     return nothing            
 end
+
 
 export neighbor_matrix_kernel!
 
@@ -261,7 +288,7 @@ function forces!(
     Neighbors::CuMatrix{I},
     box::SVector{N,T},
     ϵ::T,
-    cut_off::T; nthreads=128) where {N,T,I}
+    cut_off::T) where {N,T,I}
 
     Npart = length(r)
 
@@ -274,6 +301,66 @@ function forces!(
 
     return nothing
 end
+
+"""
+function forces_kernel!(
+    r::CuDeviceVector{T},
+    f::CuDeviceVector{T},
+    Epot::CuDeviceVector{T1},
+    Neighbors::CuDeviceMatrix{I},
+    box::T,
+    ϵ::T1,
+    cut_off::T1) where {T,T1,I}
+
+    Npart = length(r)
+    tid = threadIdx().x
+    gtid = (blockIdx().x - 1) * blockDim().x + tid  # global thread id
+    NNeigh = size(Neighbors,1)
+
+    cut_off² = cut_off^2
+    acc = zero(T)
+    epot= zero(T1)
+
+    @inbounds begin
+        if gtid <= Npart
+            pos₁ = r[gtid]
+        else
+            pos₁ = zero(T)
+        end
+        acc = zero(T)
+        epot= zero(T1)
+
+
+        @inbounds for j = 1:NNeigh
+            idx = Neighbors[j,gtid]
+            if (idx != 0 && idx <= Npart)
+                pos₂  = r[idx]
+            else
+                break
+            end
+            dx  = pos₁[1] - pos₂[1]
+            dy  = pos₁[2] - pos₂[2]
+
+            dx = ifelse(abs(dx) > box[1] / 2, dx - sign(dx) * box[1] ,dx)
+            dy = ifelse(abs(dy) > box[2] / 2, dy - sign(dy) * box[2] ,dy)
+            dr² = dx*dx + dy*dy
+
+            if 0 < dr² < cut_off²
+                frc, ep = harm_rep2D(dx, dy, dr², ϵ, cut_off)
+                acc = acc .+ frc
+                epot = epot + ep
+            end
+        end
+        sync_threads()
+              
+        if gtid <= Npart
+            f[gtid] = acc
+            Epot[gtid] += epot
+        end
+    end
+    return nothing
+end
+
 
 function forces_kernel!(
     r::CuDeviceVector{T},
@@ -289,6 +376,8 @@ function forces_kernel!(
     gtid = (blockIdx().x - 1) * blockDim().x + tid  # global thread id
     NNeigh = size(Neighbors,2)
 
+    shared_pos = CuStaticSharedArray(T, 40)
+
     cut_off² = cut_off^2
     acc = zero(T)
     epot= zero(T1)
@@ -299,7 +388,69 @@ function forces_kernel!(
         else
             pos₁ = zero(T)
         end
+        acc = zero(T)
+        epot= zero(T1)
+
+
+        @inbounds for j = 1:NNeigh
+            idx = Neighbors[gtid,j]
+            if (idx != 0 && idx <= Npart)
+                shared_pos[j]  = r[idx]
+            else
+                break
+            end
+
+            dx  = pos₁[1] - shared_pos[j][1]
+            dy  = pos₁[2] - shared_pos[j][2]
+
+            dx = ifelse(abs(dx) > box[1] / 2, dx - sign(dx) * box[1] ,dx)
+            dy = ifelse(abs(dy) > box[2] / 2, dy - sign(dy) * box[2] ,dy)
+            dr² = dx*dx + dy*dy
+
+            if 0 < dr² < cut_off²
+                frc, ep = harm_rep2D(dx, dy, dr², ϵ, cut_off)
+                acc = acc .+ frc
+                epot = epot + ep
+            end
+        end
         sync_threads()
+              
+        if gtid <= Npart
+            f[gtid] = acc
+            Epot[gtid] += epot
+        end
+    end
+    return nothing
+end
+
+
+"""
+
+function forces_kernel!(
+    r::CuDeviceVector{T},
+    f::CuDeviceVector{T},
+    Epot::CuDeviceVector{T1},
+    Neighbors::CuDeviceMatrix{I},
+    box::T,
+    ϵ::T1,
+    cut_off::T1) where {T,T1,I}
+
+    Npart = length(r)
+    tid = threadIdx().x
+    gtid = (blockIdx().x - 1) * blockDim().x + tid  # global thread id
+    NNeigh = size(Neighbors,2)
+
+    
+    cut_off² = cut_off^2
+    acc = zero(T)
+    epot= zero(T1)
+
+    @inbounds begin
+        if gtid <= Npart
+            pos₁ = r[gtid]
+        else
+            pos₁ = zero(T)
+        end
         acc = zero(T)
         epot= zero(T1)
 
@@ -311,23 +462,24 @@ function forces_kernel!(
             else
                 break
             end
-            sync_threads()
-            if idx <= Npart
-                dx  = pos₁[1] - pos₂[1]
-                dy  = pos₁[2] - pos₂[2]
+            dx  = pos₁[1] - pos₂[1]
+            dy  = pos₁[2] - pos₂[2]
 
-                dx = ifelse(abs(dx) > box[1] / 2, dx - sign(dx) * box[1] ,dx)
-                dy = ifelse(abs(dy) > box[2] / 2, dy - sign(dy) * box[2] ,dy)
-                dr² = dx*dx + dy*dy
+            dx = ifelse(abs(dx) > box[1] / 2, dx - sign(dx) * box[1] ,dx)
+            dy = ifelse(abs(dy) > box[2] / 2, dy - sign(dy) * box[2] ,dy)
 
-                if 0 < dr² < cut_off²
-                    frc, ep = harm_rep2D(dx, dy, dr², ϵ, cut_off)
-                    acc = acc .+ frc
-                    epot = epot + ep
-                end
+            #dx = rem(dx + box[1]/2, box[1]) - box[1]/2
+            #dy = rem(dy + box[2]/2, box[2]) - box[2]/2
+
+            dr² = dx*dx + dy*dy
+
+            if 0 < dr² < cut_off²
+                frc, ep = harm_rep2D(dx, dy, dr², ϵ, cut_off)
+                acc = acc .+ frc
+                epot = epot + ep
             end
-            sync_threads()
         end
+        sync_threads()
               
         if gtid <= Npart
             f[gtid] = acc
@@ -336,8 +488,6 @@ function forces_kernel!(
     end
     return nothing
 end
-
-
 
 
 ################################################################################
