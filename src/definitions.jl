@@ -1,26 +1,3 @@
-
-"""
-export noise2D
-export noise3D
-@inline function noise2D(Npart::Int)
-    return SVector{2,Float32}.(CUDA.randn(Float32,Npart) ,CUDA.randn(Float32,Npart))
-end
-
-
-@inline function noise2D(Npart::Int)
-    return SVector{2,Float64}.(CUDA.randn(Float64,Npart) ,CUDA.randn(Float64,Npart))
-end
-
-
-
-function noise3D(Npart::Int) 
-    return SVector{3,Float32}.(CUDA.randn(Float32,Npart) ,CUDA.randn(Float32,Npart),CUDA.randn(Float32,Npart))
-end
-"""
-
-
-
-
 export Box
 
 function Box(; dim::Int, Npart::Int, ϕ::T, σ::T) where T <: AbstractFloat    # This should be changed for polydisperse particles!
@@ -33,13 +10,22 @@ function Box(; dim::Int, Npart::Int, ϕ::T, σ::T) where T <: AbstractFloat    #
     end
 end
 
-
+export shuffle_pos!
 function shuffle_pos!(simulation)
     r_tmp = [simulation.particles[i].r for i = 1:length(simulation.particles)]
     shuffle!(r_tmp)
     [simulation.particles[i].r = r_tmp[i] for i = 1:length(simulation.particles)]
     return nothing
 end
+
+
+export hexagonal_neighbors
+function hexagonal_neighbors(R::T, circ_R::T) where T
+    n_max = floor(circ_R / R)
+    n = 1:n_max
+    num_circles = 1 + 6 * sum(n .- 1)
+    return Int(num_circles+5)
+end 
 
 export rectangular_lattice
 
@@ -178,7 +164,7 @@ function isincircle(pos::SVector{2,T}, rad::T, r_margin::T) where T
 end
 
 export check_overlap
-function check_overlap(pos, positions, R)
+function check_overlap(pos::SVector{N,T}, positions::Vector{SVector{N,T}}, R::T) where {N,T}
     for p in positions
         if norm(pos - p) < 2R
             return true
