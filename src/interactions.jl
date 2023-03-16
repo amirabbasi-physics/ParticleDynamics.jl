@@ -290,13 +290,13 @@ function forces!(
     ϵ::T,
     cut_off::T) where {N,T,I}
 
-    Npart = length(r)
+    #Npart = length(r)
 
 
     kernel = @cuda launch = false forces_kernel!(r, f, Epot, Neighbors, box, ϵ, cut_off)
     config = launch_configuration(kernel.fun)
-    threads = min(Npart, config.threads)
-    blocks = cld(Npart, threads)
+    threads = min(length(r), config.threads)
+    blocks = cld(length(r), threads)
     CUDA.@sync kernel(r, f, Epot, Neighbors, box, ϵ, cut_off; threads, blocks)
 
     return nothing
@@ -457,7 +457,7 @@ function forces_kernel!(
 
         @inbounds for j = 1:NNeigh
             idx = Neighbors[gtid,j]
-            if (idx != 0 && idx <= Npart)
+            if idx != 0 
                 pos₂  = r[idx]
             else
                 break
@@ -465,8 +465,8 @@ function forces_kernel!(
             dx  = pos₁[1] - pos₂[1]
             dy  = pos₁[2] - pos₂[2]
 
-            dx = ifelse(abs(dx) > box[1] / 2, dx - sign(dx) * box[1] ,dx)
-            dy = ifelse(abs(dy) > box[2] / 2, dy - sign(dy) * box[2] ,dy)
+            dx = ifelse(2abs(dx) > box[1] , dx - sign(dx) * box[1] ,dx)
+            dy = ifelse(2abs(dy) > box[2] , dy - sign(dy) * box[2] ,dy)
 
             #dx = rem(dx + box[1]/2, box[1]) - box[1]/2
             #dy = rem(dy + box[2]/2, box[2]) - box[2]/2
@@ -479,7 +479,7 @@ function forces_kernel!(
                 epot = epot + ep
             end
         end
-        sync_threads()
+        #sync_threads()
               
         if gtid <= Npart
             f[gtid] = acc
