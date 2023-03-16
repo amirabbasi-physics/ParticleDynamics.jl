@@ -14,17 +14,18 @@ function sim_run(;
     fraction::T,
 	cold_frac::T,
     R::T,
+	neigh_cut_off::T,
+	neigh_update::I,
 	ϵ::T,
     α₁::T,
     α₂::T,
     Δt_prod::T,
-    integ::String) where {N,T}
+    integ::String) where {N,I,T}
 
     η		= T(8.9e-4)
     density = T(1.0e3) # mass density of particles (kg/m³)
 	σ = T(2.0)
 
-	neigh_cut_off = T(5.0)
 
     box = Box(dim = dim, Npart = Npart, ϕ = ϕ, σ = σ )
     num_pl = ceil(Int, Npart*fraction)
@@ -53,7 +54,9 @@ function sim_run(;
 
     for run = 1:num_runs
 		simulation = Simulation()
-        output_file = "Npart,$Npart,deltat-$Δt_prod,alpha_1-$α₁,alpha_2-$α₂,fraction-$ϕ,integ-$integ,run_num-$run,$homog"  # check this!
+		simulation.neigh_update = neigh_update
+		simulation.neigh_cut_off = neigh_cut_off
+        output_file = "Npart,$Npart,deltat-$Δt_prod,alpha_1-$α₁,alpha_2-$α₂,fraction-$ϕ,integ-$integ,run_num-$run,$homog,$neigh_update,$neigh_cut_off"  # check this!
 		simulation.part_types = ptypes
         simulation.output_file = output_file
         
@@ -82,7 +85,7 @@ function sim_run(;
 		simulation.num_steps = num_steps
 		simulation.save_interval = save_interval
 		simulate!(simulation, collision_calc, num_pl)
-
+		yield()
     end
     return nothing
 end
@@ -140,7 +143,7 @@ function simulate!(
 				collisions!(r, coll, coll_switch, simulation.σ, simulation.box)
 			end
 			EM_integrate!(r, v, f, dQ, Eₖ, c1, c2, c3,simulation.box)
-			yield()
+			#yield()
 			if step % simulation.save_interval == 0
 				dQ₀, Epot, Ekin = dQ, Eₚ, Eₖ
 				dQ = zero(dQ)
@@ -170,14 +173,13 @@ function simulate!(
 			end
 		end
 	elseif simulation.integrator == "em_fast_neigh"
-		neigh_cut_off = 5.0
-		NN = hexagonal_neighbors(1.0, neigh_cut_off)
+		NN = hexagonal_neighbors(1.0, simulation.neigh_cut_off)
 		Neighbors = CuArray(Matrix(zeros(Int,Npart,NN)))
-		neighbor_list!(r,Neighbors,neigh_cut_off,simulation.box)
+		neighbor_list!(r,Neighbors,simulation.neigh_cut_off,simulation.box)
 
 		for step = 0:simulation.num_steps
-			if step % 50000 == 0
-				neighbor_list!(r,Neighbors,neigh_cut_off,simulation.box)
+			if step % simulation.neigh_update == 0
+				neighbor_list!(r,Neighbors,simulation.neigh_cut_off,simulation.box)
 			end
 			forces!(r, f, Eₚ, Neighbors, simulation.box, simulation.ϵ, simulation.σ)
 			
@@ -299,14 +301,14 @@ function simulate!(
 		end
 	elseif simulation.integrator == "vv_neigh"
 		f₀ = zero(f)
-		neigh_cut_off = 5.0
-		NN = hexagonal_neighbors(1.0, neigh_cut_off)
+		NN = hexagonal_neighbors(1.0, simulation.neigh_cut_off)
 		Neighbors = CuArray(Matrix(zeros(Int,Npart,NN)))
-		neighbor_list!(r,Neighbors,neigh_cut_off,simulation.box)
+		#Neighbors = CuArray(Matrix(zeros(Int,NN,Npart)))
+		neighbor_list!(r,Neighbors,simulation.neigh_cut_off,simulation.box)
 
 		for step = 0:simulation.num_steps
-			if step % 100000 == 0
-				neighbor_list!(r,Neighbors,neigh_cut_off,simulation.box)
+			if step % simulation.neigh_update == 0
+				neighbor_list!(r,Neighbors,simulation.neigh_cut_off,simulation.box)
 			end
 
 			f = f₀
