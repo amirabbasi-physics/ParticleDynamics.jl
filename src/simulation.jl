@@ -312,13 +312,13 @@ function simulate!(
 			end
 
 			f = f₀
-			update_positions_vv!(r, v, f₀, c1, c2, c3,simulation.box)
+			update_positions_vv!(r, v, f₀, c1, simulation.dt, c3,simulation.box)
 			forces!(r, f, Eₚ,Neighbors, simulation.box, simulation.ϵ, simulation.σ)
 			if collision_calc
 				coll₀, coll_switch₀ = collisions!(r, coll₀, coll_switch₀, simulation.σ, simulation.box)
 				coll .+= coll₀
 			end
-			update_velocities_vv!(v, f₀, f, dQ, Eₖ, c1, c2, c3, simulation.box)
+			update_velocities_vv!(v, f₀, f, dQ, Eₖ, c1, simulation.dt, c3, simulation.box)
 			f₀ = f
 
 			if step % simulation.save_interval == 0

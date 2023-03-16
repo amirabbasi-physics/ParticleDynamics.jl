@@ -95,6 +95,192 @@ function EM_kernel!(r::CuDeviceVector{SVector{N,T}}, v::CuDeviceVector{SVector{N
     end
     return nothing
 end
+
+#####################################################################################
+#               Positions and velocities update for Verlet-type algorithm           #
+#####################################################################################
+export update_positions_vv!
+
+function update_positions_vv!(
+    r::CuVector{SVector{N,T}},
+    v::CuVector{SVector{N,T}},
+    f::CuVector{SVector{N,T}},
+    c1s::CuVector{T},
+    c2::T,
+    c3s::CuVector{T},
+    box::SVector{N,T}) where {N,T}
+
+    kernel = @cuda launch=false update_positions_kernel_vv!(r, v, f, c1s, c2, c3s, box)
+
+    Npart = length(r)
+    config = launch_configuration(kernel.fun)
+    nthreads = Base.min(Npart, config.threads)
+    nblocks = cld(Npart, nthreads)
+    CUDA.@sync kernel(r, v, f, c1s, c2, c3s, box; threads=nthreads, blocks=nblocks)
+    return nothing
+end
+
+
+export update_positions_kernel_vv!
+
+function update_positions_kernel_vv!(
+    r::CuDeviceVector{SVector{N,T}},
+    v::CuDeviceVector{SVector{N,T}},
+    f::CuDeviceVector{SVector{N,T}},
+    c1s::CuDeviceVector{T},
+    c2::T,
+    c3s::CuDeviceVector{T},
+    box::SVector{N,T}) where {N,T}
+
+    Npart = length(r)
+    tid = threadIdx().x
+    gtid = (blockIdx().x - 1) * blockDim().x + tid  # global thread id
+    dt  = c2
+    @inbounds begin
+        if length(box) == 2
+            if gtid <= Npart
+                pos = r[gtid]
+                vel = v[gtid]
+                frc = f[gtid]
+                c1  = c1s[gtid]
+                #c2  = c2s[gtid]
+                c3  = c3s[gtid]
+                rnd = @SVector randn(T,2)
+            end
+        elseif length(box) == 3
+            if gtid <= Npart
+                pos = r[gtid]
+                vel = v[gtid]
+                frc = f[gtid]
+                c1  = c1s[gtid]
+                #c2  = c2s[gtid]
+                c3  = c3s[gtid]
+                rnd = @SVector randn(T,3)
+            end
+        end
+
+        if gtid <= Npart
+
+            
+            rnd_force = c3 .* rnd
+            a = c1*dt
+            bb = (1 / (1 + a/2))
+            bbdt = bb*dt
+            d_pos = bbdt .* vel .+ (bbdt*a/2) .* (frc .+ rnd_force)
+            pos = pos .+ d_pos
+            pos = mod.(pos .+ box ./ 2, box) .- box ./ 2                    # Applying PBC!
+        end
+        #sync_threads()
+        if gtid <= Npart
+            r[gtid] = pos
+        end
+    #sync_threads()
+     end
+     return nothing
+end
+
+
+
+export update_velocities_vv!
+
+function update_velocities_vv!(
+    v::CuVector{SVector{N,T}},
+    f₀::CuVector{SVector{N,T}},
+    f::CuVector{SVector{N,T}},
+    dq::CuVector{T},
+    eₖ::CuVector{T},
+    c1s::CuVector{T},
+    c2::T,
+    c3s::CuVector{T},
+    box::SVector{N,T}) where {N,T}
+
+    kernel = @cuda launch=false update_velocities_kernel_vv!(v, f₀, f, dq, eₖ, c1s, c2, c3s, box)
+
+    Npart = length(v)
+    config = launch_configuration(kernel.fun)
+    nthreads = Base.min(Npart, config.threads)
+    nblocks = cld(Npart, nthreads)
+    CUDA.@sync kernel(v, f₀, f, dq, eₖ, c1s, c2, c3s, box; threads=nthreads, blocks=nblocks)
+    return nothing
+end
+
+
+export update_velocities_kernel_vv!
+
+function update_velocities_kernel_vv!(
+    v::CuDeviceVector{SVector{N,T}},
+    f₀::CuDeviceVector{SVector{N,T}},
+    f::CuDeviceVector{SVector{N,T}},
+    dq::CuDeviceVector{T},
+    eₖ::CuDeviceVector{T},
+    c1s::CuDeviceVector{T},
+    c2::T,
+    c3s::CuDeviceVector{T},
+    box::SVector{N,T}) where {N,T}
+
+     Npart = length(v)
+     tid = threadIdx().x
+     gtid = (blockIdx().x - 1) * blockDim().x + tid  # global thread id
+
+     dt  = c2
+
+     @inbounds begin
+        if length(box) == 2
+            if gtid <= Npart
+                v_prev = v[gtid]
+                frc_prev = f₀[gtid]
+                frc = f[gtid]
+                c1  = c1s[gtid]
+                #c2  = c2s[gtid]
+                c3  = c3s[gtid]
+                dQ  = dq[gtid]
+                Eₖ   = eₖ[gtid]
+                rnd = @SVector randn(T,2)
+            end
+        elseif length(box) == 3
+            if gtid <= Npart
+                v_prev = v[gtid]
+                frc_prev = f₀[gtid]
+                frc = f[gtid]
+                c1  = c1s[gtid]
+                #c2  = c2s[gtid]
+                c3  = c3s[gtid]
+                dQ  = dq[gtid]
+                Eₖ   = eₖ[gtid]
+                rnd = @SVector randn(T,3)
+            end
+        end
+
+
+        if gtid <= Npart
+            
+
+            rnd_force = c3 .* rnd
+            a = c1*dt
+            bb = 1 / (1 + a/2)
+            aa = (1 - a/2) * bb
+            
+            v_next = aa .* v_prev + (a*aa/2) .* frc_prev + (a/2) .* frc + (bb*a) .* rnd_force
+
+            injected_energy = dot((v_prev .+ v_next), rnd_force)/2
+            dissipated_energy = - dot(v_prev ,v_prev)
+
+            dQ += -(injected_energy + dissipated_energy)                 # Minus sign indicates the dQ of the heat bath
+            Eₖ += dot(v_next,v_next)/(2c1)
+        end
+        sync_threads()
+        if gtid <= Npart
+            v[gtid]  = v_next
+            dq[gtid] = dQ
+            eₖ[gtid] = Eₖ
+        end
+        sync_threads()
+     end
+     return nothing
+end
+
+
+"""
 #####################################################################################
 #               Positions and velocities update for Verlet-type algorithm           #
 #####################################################################################
@@ -273,7 +459,7 @@ function update_velocities_kernel_vv!(
      end
      return nothing
 end
-
+"""
 #####################################################################################
 #####################################################################################
 #               Positions and velocities update for leap-frog algorithm             #
