@@ -111,14 +111,14 @@ function simulate!(
 	NN = hexagonal_neighbors(1.0, simulation.neigh_cut_off)
 	Neighbors = CuArray(Matrix(zeros(Int,Npart,NN)))
 	if collision_calc
-		colls = CuVector(zeros(Int,Npart))
+		colls = CuVector(zeros(Npart))
 		coll_switch = CuArray(falses(Npart,NN))
 	end
 
 	c1 = [(simulation.particles[i].τD/simulation.particles[i].τm) for i=1:Npart]
 	c1 = CuVector(c1)
-	c2 = [simulation.dt for i=1:Npart]
-	c2 = CuVector(c2)
+	#c2 = [simulation.dt for i=1:Npart]
+	#c2 = CuVector(c2)
 	c3 = [sqrt(2*simulation.particles[i].α/simulation.dt) for i=1:Npart]
 	c3 = CuVector(c3)
 
@@ -131,9 +131,10 @@ function simulate!(
 	f_c = [simulation.particles[i].f for i=1:Npart]
 	f = CuVector(f_c)
 
-	dQ₀ = zero(dQ)
-	Ekin = zero(Eₖ)
-	Epot = zero(Eₚ)
+	dQ₀ = zeros(Npart)
+	Ekin = similar(dQ₀)
+	Epot = similar(dQ₀)
+	coll₀ = similar(dQ₀)
 
 	"""
 	if simulation.integrator == "em_fast"
@@ -256,8 +257,7 @@ function simulate!(
 					write_log(step, simulation, Eₖ_c, Eₚ_c, dQ_c)
 				end		
 			end
-		end
-	
+		end	
 	elseif simulation.integrator == "vv"
 		f₀ = zero(f)
 		for step = 0:simulation.num_steps
@@ -306,13 +306,14 @@ function simulate!(
 		neighbor_list!(r,Neighbors,simulation.neigh_cut_off,simulation.box)
 
 		for step = 0:simulation.num_steps
+
 			if step % simulation.neigh_update == 0
 				neighbor_list!(r,Neighbors,simulation.neigh_cut_off,simulation.box)
 			end
 			copyto!(f , f₀)
 			update_positions_vv!(r, v, f₀, c1, simulation.dt, c3,simulation.box)
 
-			
+
 			if collision_calc
 				forces!(r, f, Eₚ, Neighbors, simulation.num_cold, colls, coll_switch, simulation.box, simulation.ϵ, simulation.σ)
 			else
@@ -324,12 +325,16 @@ function simulate!(
 
 			if step % simulation.save_interval == 0
 				if collision_calc
-					dQ₀, Epot, Ekin, coll₀ = Vector(dQ), Vector(Eₚ), Vector(Eₖ), Vector{Float64}(colls)
+					copyto!(dQ₀,dQ)
+					copyto!(Epot,Eₚ)
+					copyto!(Ekin,Eₖ)
+					copyto!(coll₀,colls)
+					#dQ₀, Epot, Ekin, coll₀ = Vector(dQ), Vector(Eₚ), Vector(Eₖ), Vector{Float64}(colls)
 				else
-					dQ₀, Epot, Ekin = Vector(dQ), Vector(Eₚ), Vector(Eₖ)
-					#copyto!(dQ₀,Vector(dQ))
-					#copyto!(Epot,Vector(Eₚ))
-					#copyto!(Ekin,Vector(Eₖ))
+					#dQ₀, Epot, Ekin = Vector(dQ), Vector(Eₚ), Vector(Eₖ)
+					copyto!(dQ₀,dQ)
+					copyto!(Epot,Eₚ)
+					copyto!(Ekin,Eₖ)
 				end
 
 				fill!(dQ, zero(eltype(dQ)))
@@ -409,7 +414,10 @@ function simulate!(
 	"""
 	end
 	
-	r_c, v_c, f_c = Vector(r), Vector(v), Vector(f)
+
+	copyto!(r_c,r)
+	copyto!(v_c,v)
+	copyto!(f_c,f)
 	# After finishing the simulation it saves the positions, velocities and forces back into the simulation structure! 
 	[simulation.particles[i].r = r_c[i] for i=1:Npart]
 	[simulation.particles[i].v = v_c[i] for i=1:Npart]

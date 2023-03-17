@@ -309,7 +309,7 @@ function forces!(
     Epot::CuVector{T},
     Neighbors::CuMatrix{I},
     cold_num::I,
-    colls::CuVector{I},
+    colls::CuVector{T},
     coll_switch::CuMatrix{Bool},
     box::SVector{N,T},
     ϵ::T,
@@ -521,7 +521,7 @@ function forces_kernel!(
     Epot::CuDeviceVector{T1},
     Neighbors::CuDeviceMatrix{I},
     num_cold::Int,
-    colls::CuDeviceVector{I},
+    colls::CuDeviceVector{T1},
     coll_switch::CuDeviceMatrix{Bool},
     box::T,
     ϵ::T1,
@@ -536,7 +536,7 @@ function forces_kernel!(
     cut_off² = cut_off^2
     acc = zero(T)
     epot= zero(T1)
-    coll = zero(I)
+    coll = zero(T1)
     @inbounds begin
         if gtid <= Npart
             pos₁ = r[gtid]
@@ -545,13 +545,12 @@ function forces_kernel!(
         end
         acc = zero(T)
         epot= zero(T1)
-
+        coll = zero(T1)
 
         @inbounds for j = 1:NNeigh
             idx = Neighbors[gtid,j]
             if idx != 0 
                 pos₂  = r[idx]
-                collision_switch = coll_switch[gtid,j]
             else
                 break
             end
@@ -567,12 +566,12 @@ function forces_kernel!(
                 if !coll_switch[gtid,j]                    
                     if gtid <= num_cold
                         if idx > num_cold
-                            coll += 1
+                            coll += one(T1)
                             coll_switch[gtid,j] = true
                         end
                     else
                         if idx <= num_cold
-                            coll += 1
+                            coll += one(T1)
                             coll_switch[gtid,j] = true
                         end
                     end
