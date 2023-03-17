@@ -57,7 +57,7 @@ function sim_run(;
 		simulation.neigh_update = neigh_update
 		simulation.neigh_cut_off = neigh_cut_off
 		simulation.num_cold = num_cold
-        output_file = "Npart,$Npart,deltat-$Δt_prod,alpha_1-$α₁,alpha_2-$α₂,fraction-$ϕ,integ-$integ,run_num-$run,$homog,$neigh_update,$neigh_cut_off"  # check this!
+        output_file = "Npart,$Npart,deltat-$Δt_prod,alpha_1-$α₁,alpha_2-$α₂,fraction-$ϕ,integ-$integ,run_num-$run,$homog"  # check this!
 		simulation.part_types = ptypes
         simulation.output_file = output_file
         
