@@ -302,6 +302,31 @@ function forces!(
     return nothing
 end
 
+
+function forces!(
+    r::CuVector{SVector{N,T}},
+    f::CuVector{SVector{N,T}},
+    Epot::CuVector{T},
+    Neighbors::CuMatrix{I},
+    cold_num::I,
+    colls::CuVector{I},
+    coll_switch::CuMatrix{Bool},
+    box::SVector{N,T},
+    ϵ::T,
+    cut_off::T) where {N,T,I}
+
+    #Npart = length(r)
+
+
+    kernel = @cuda launch = false forces_kernel!(r, f, Epot, Neighbors, cold_num, colls, coll_switch, box, ϵ, cut_off)
+    config = launch_configuration(kernel.fun)
+    threads = min(length(r), config.threads)
+    blocks = cld(length(r), threads)
+    CUDA.@sync kernel(r, f, Epot, Neighbors, cold_num, colls, coll_switch, box, ϵ, cut_off; threads, blocks)
+
+    return nothing
+end
+
 """
 function forces_kernel!(
     r::CuDeviceVector{T},
@@ -489,6 +514,88 @@ function forces_kernel!(
     return nothing
 end
 
+
+function forces_kernel!(
+    r::CuDeviceVector{T},
+    f::CuDeviceVector{T},
+    Epot::CuDeviceVector{T1},
+    Neighbors::CuDeviceMatrix{I},
+    num_cold::Int,
+    colls::CuDeviceVector{I},
+    coll_switch::CuDeviceMatrix{Bool},
+    box::T,
+    ϵ::T1,
+    cut_off::T1) where {T,T1,I}
+
+    Npart = length(r)
+    tid = threadIdx().x
+    gtid = (blockIdx().x - 1) * blockDim().x + tid  # global thread id
+    NNeigh = size(Neighbors,2)
+
+    
+    cut_off² = cut_off^2
+    acc = zero(T)
+    epot= zero(T1)
+    coll = zero(I)
+    @inbounds begin
+        if gtid <= Npart
+            pos₁ = r[gtid]
+        else
+            pos₁ = zero(T)
+        end
+        acc = zero(T)
+        epot= zero(T1)
+
+
+        @inbounds for j = 1:NNeigh
+            idx = Neighbors[gtid,j]
+            if idx != 0 
+                pos₂  = r[idx]
+                collision_switch = coll_switch[gtid,j]
+            else
+                break
+            end
+            dx  = pos₁[1] - pos₂[1]
+            dy  = pos₁[2] - pos₂[2]
+
+            dx = ifelse(2abs(dx) > box[1] , dx - sign(dx) * box[1] ,dx)
+            dy = ifelse(2abs(dy) > box[2] , dy - sign(dy) * box[2] ,dy)
+
+            dr² = dx*dx + dy*dy
+
+            if 0 < dr² < cut_off²          
+                if !coll_switch[gtid,j]                    
+                    if gtid <= num_cold
+                        if idx > num_cold
+                            coll += 1
+                            coll_switch[gtid,j] = true
+                        end
+                    else
+                        if idx <= num_cold
+                            coll += 1
+                            coll_switch[gtid,j] = true
+                        end
+                    end
+                end
+                
+
+                frc, ep = harm_rep2D(dx, dy, dr², ϵ, cut_off)
+                acc = acc .+ frc
+                epot = epot + ep
+            else
+                coll_switch[gtid,j] = false
+            end
+        end
+        sync_threads()
+              
+        if gtid <= Npart
+            f[gtid] = acc
+            Epot[gtid] += epot
+            colls[gtid] += coll 
+        end
+    end
+    return nothing
+end
 
 ################################################################################
 #                                                                              #

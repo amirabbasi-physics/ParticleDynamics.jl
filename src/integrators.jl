@@ -253,8 +253,6 @@ function update_velocities_kernel_vv!(
 
 
         if gtid <= Npart
-            
-
             rnd_force = c3 .* rnd
             a = c1*dt
             bb = 1 / (1 + a/2)
