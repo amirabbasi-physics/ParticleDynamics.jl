@@ -138,7 +138,7 @@ function write_log(
     Eₖ::Vector{T},
     Eₚ::Vector{T},
     dQ::Vector{T},
-    colls::Vector) where T
+    colls::Vector{T}) where T
 
     coll_cold_hot   = sum(colls) / simulation.dt
 
@@ -166,7 +166,7 @@ function write_log(
 
     if step == 0
        open(output_file,"w") do file
-        println(file,"     Time     |     E_kin     |     E_pot    |     EPR     |  EPR per particle  | EPR per particle averaged | cold/hot coll rate ")
+        println(file,"     Time     |     E_kin     |     E_pot     |      EPR     | EPR per particle | EPR per particle ave | cold/hot coll rate ")
         #writedlm(file,data)
         end
     else
