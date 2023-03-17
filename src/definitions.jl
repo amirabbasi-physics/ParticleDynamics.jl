@@ -374,6 +374,7 @@ mutable struct Simulation
     σ::Float64
     neigh_cut_off::Float64
     neigh_update::Int
+    num_cold::Int
     dt::Float64
     integrator::String
     num_steps::Int
@@ -390,11 +391,12 @@ function Simulation(; descriptor::String = "No description given...",
     σ::Float64 = 2.0,
     neigh_cut_off::Float64 = 5.0,
     neigh_update::Int = 100000, 
+    num_cold::Int = 1,
     dt::Float64=0.0001,
     integrator::String = "vv",
     num_steps::Int = 0,
     save_interval::Int = 0,
     particles_to_save::Array{Particle, 1} =  Particle[],
     output_file::String = "output")
-    Simulation(descriptor,box, particles, part_types, ϵ, σ, neigh_cut_off, neigh_update, dt,integrator, num_steps, save_interval, particles_to_save,output_file)
+    Simulation(descriptor,box, particles, part_types, ϵ, σ, neigh_cut_off, neigh_update, num_cold, dt,integrator, num_steps, save_interval, particles_to_save,output_file)
 end
