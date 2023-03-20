@@ -20,7 +20,8 @@ function sim_run(;
     α₁::T,
     α₂::T,
     Δt_prod::T,
-    integ::String) where {N,I,T}
+    integ::String,
+	random_positions::Bool) where {N,I,T}
 
     η		= T(8.9e-4)
     density = T(1.0e3) # mass density of particles (kg/m³)
@@ -33,16 +34,20 @@ function sim_run(;
     #   Initializing the system to get randomly distributed positions
     ###############################################################################
 
-    if homogeneous 
-        r_init = [random_pos(box)]
-		for i in 1:Npart-1
-			pos = random_pos(box)    
-			# Check for overlap with other particles
-			while check_overlap(pos, r_init, σ/2)
-				pos = random_pos(box)
-			end        
-			# Append the position to the list of positions
-			push!(r_init,pos)
+    if homogeneous
+		if random_positions
+			r_init = [random_pos(box)]
+			for i in 1:Npart-1
+				pos = random_pos(box)    
+				# Check for overlap with other particles
+				while check_overlap(pos, r_init, σ/2)
+					pos = random_pos(box)
+				end        
+				# Append the position to the list of positions
+				push!(r_init,pos)
+			end
+		else
+			r_init = rectangular_lattice(Npart,box)
 		end
 		homog = "homogeneous"
     else
@@ -57,7 +62,7 @@ function sim_run(;
 		simulation.neigh_update = neigh_update
 		simulation.neigh_cut_off = neigh_cut_off
 		simulation.num_cold = num_cold
-        output_file = "Npart,$Npart,deltat-$Δt_prod,alpha_1-$α₁,alpha_2-$α₂,fraction-$ϕ,integ-$integ,run_num-$run,$homog"  # check this!
+        output_file = "Npart,$Npart,deltat-$Δt_prod,epsilon-$ϵ,alpha_1-$α₁,alpha_2-$α₂,fraction-$ϕ,integ-$integ,run_num-$run,$homog"  # check this!
 		simulation.part_types = ptypes
         simulation.output_file = output_file
         
@@ -72,7 +77,7 @@ function sim_run(;
         for i = num_cold+1:Npart
             push!(simulation.particles, PassiveP(part_type = ptypes[2], part_id = p_ids[2],r = r0[i], v = SVector{dim,T}(zeros(T,dim)), f = SVector{dim,T}(zeros(T,dim)), density = density, η = η, Radii = R, α = α₂))
         end
-
+		println("System initialized!")
 		for i = 1:num_cold
 			simulation.particles[i].α = α₁
 			simulation.particles[i].v = sqrt(simulation.particles[i].α*(simulation.particles[i].τD/simulation.particles[i].τm)) .* @SVector randn(T,dim)
@@ -82,9 +87,14 @@ function sim_run(;
 			simulation.particles[i].v = sqrt(simulation.particles[i].α*(simulation.particles[i].τD/simulation.particles[i].τm)) .* @SVector randn(T,dim)
 		end
 
+		if homogeneous
+			shuffle_pos!(simulation)
+		end
+
 		simulation.dt = Δt_prod
 		simulation.num_steps = num_steps
 		simulation.save_interval = save_interval
+		println("Simulation starts!")
 		simulate!(simulation, collision_calc)
 		yield()
     end
@@ -301,14 +311,14 @@ function simulate!(
 		end
 	"""
 	
+
 	if simulation.integrator == "vv_neigh"
 		f₀ = zero(f)
-		neighbor_list!(r,Neighbors,simulation.neigh_cut_off,simulation.box)
-
+		neighbor_list_new!(r,Neighbors,simulation.neigh_cut_off,simulation.box)
 		for step = 0:simulation.num_steps
 
 			if step % simulation.neigh_update == 0
-				neighbor_list!(r,Neighbors,simulation.neigh_cut_off,simulation.box)
+				neighbor_list_new!(r,Neighbors,simulation.neigh_cut_off,simulation.box)
 			end
 			copyto!(f , f₀)
 			update_positions_vv!(r, v, f₀, c1, simulation.dt, c3,simulation.box)
