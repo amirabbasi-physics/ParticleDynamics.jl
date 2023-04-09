@@ -45,8 +45,6 @@ function write_xyz(
         end
     end
 end
-
-
 #ENV["PYTHON"]="/local_scratch/abbaa90/miniconda3/envs/hoomd3-venv/bin/python"
 #Pkg.build("PyCall")
 
@@ -96,40 +94,42 @@ function write_log(
     Eₚ::Vector{T},
     dQ::Vector{T}) where T
 
-    output_file = simulation.output_file*".log"
 
     α_list = [simulation.particles[i].α for i = 1:length(simulation.particles)]
-    
-    sdot = sum(dQ ./ α_list )
+
+    output_file = simulation.output_file*".log"
+    sdot = sum(dQ ./ α_list)
     sdotpp = sdot/length(simulation.particles)
-
-    c1 = [(simulation.particles[i].τD/simulation.particles[i].τm) for i=1:length(simulation.particles)]
-
-    sdotpp_ave = sum(2 .* c1 .* ( Eₖ ./ α_list .- 1))/length(simulation.particles)
-
     Ekin = sum(Eₖ)
     Epot = sum(Eₚ)
 
-    step_str = @sprintf("%+.4e", step)
-    Ekin_str = @sprintf("%+.4e", Ekin)
-    Epot_str = @sprintf("%+.4e", Epot)
-    sdot_str = @sprintf("%+.4e", sdot)
-    sdotpp_str = @sprintf("%+.4e", sdotpp)
-    sdotpp_ave_str = @sprintf("%+.4e", sdotpp_ave)
+    c1 = [(simulation.particles[i].τD/simulation.particles[i].τm) for i=1:length(simulation.particles)]
 
-    data = join([step_str, Ekin_str, Epot_str, sdot_str, sdotpp_str, sdotpp_ave_str], "\t\t")
+    sdotpp_ave = sum(c1 .* ( 2 .* Eₖ ./ α_list .- length(simulation.box)))/length(simulation.particles)
+
+
+    step_str = @sprintf("%+.5e", step)
+    Ekin_str = @sprintf("%+.5e", Ekin)
+    Epot_str = @sprintf("%+.5e", Epot)
+    sdot_str = @sprintf("%+.5e", sdot)
+    sdotpp_str = @sprintf("%+.5e", sdotpp)
+    sdotpp_ave_str = @sprintf("%+.5e", sdotpp_ave)
+    data = join([step_str, Ekin_str, Epot_str, sdot_str, sdotpp_str, sdotpp_ave_str], "\t")
+
     if step == 0
        open(output_file,"w") do file
-            println(file,"Time          E_kin           E_pot           EPR             EPR per particle       EPR per particle2")
-            #writedlm(file,data)
+        println(file,"     Time     |     E_kin     |     E_pot     |      EPR     | EPR per particle | EPR per particle ave ")
+        #writedlm(file,data)
         end
     else
         open(output_file,"a+") do file
-            println("Time = ",data[1], " | E_kin = ", data[2], " | E_pot = ", data[3], " | EPR = " ,data[4], " | EPR per particle = " ,data[5] , " | EPR per particle 2= " ,data[6] )
-            writedlm(file,data, '\t')
+            println("Time = ",step_str, " | E_kin = ", Ekin_str," | E_pot = ", Epot_str, " | EPR = " ,sdot_str, " | EPR per particle = " ,sdotpp_str, "  |  EPR per particle averaged = " ,sdotpp_ave_str)
+            #println(coll_tot - coll_hot_hot -coll_cold_hot - coll_cold_cold)
+            println(file,data)
         end
     end
 end
+
 
 
 function write_log(

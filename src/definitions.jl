@@ -179,21 +179,51 @@ function cut_circle_sphere!(box::SVector{N,T}, σ::T, Npart::Int, fraction::T,co
     dim = length(box)
     R = T(σ/2)
     if dim == 2
-        N_circle = Int(ceil(Npart .* fraction))
+        println("check  1")
+        N_circle = Int(ceil(Npart .* fraction/10))
         lattice_const = σ
         r = triangular_lattice(box,lattice_const, N_circle, N_circle)
         rad = T(sqrt(N_circle))
+
+        println("check  2")
+
 
         r1  = circle_cut(r, rad)
         num_pl = length(r1)
         n_remain = Int(ceil(length(r1) *(1/fraction -1)))
         Npart_new = n_remain + num_pl 
+
+        println("check  3")
         r2  = circle_cut(r, rad*cold_frac)
         n_remain = Npart_new-length(r2)
 
         r_init = Array{SVector{2,T}}(undef, Npart_new)
         [r_init[i]=r2[i] for i = 1:length(r2)]
+        println("check  4")
+        rr = rectangular_lattice(Npart,box)
+        shuffle!(rr)
+        rr_new = []
+        for j = 1:length(rr)
+            pos = rr[j]
+            aa = true
+            for k = 1:length(r_init)
+                if norm(pos-r_init[k]) <= σ
+                    aa = false
+                    break
+                end
+            end
+            if !aa
+                push!(rr_new,pos)
+            end
+        end
 
+        shuffle!(rr_new)
+        for ii = 1:n_remain
+            r_init[length(r2)+ ii] = rr_new[ii]
+        end
+
+
+        """
         for ii in 1:n_remain
             # Generate a random position
             pos = random_pos(box)    
@@ -204,6 +234,8 @@ function cut_circle_sphere!(box::SVector{N,T}, σ::T, Npart::Int, fraction::T,co
             # Append the position to the list of positions
             r_init[length(r2)+ ii] = pos
         end
+        """
+
     elseif dim == 3
 
         N_sphere = Int(ceil(Npart .* fraction))
@@ -290,7 +322,7 @@ function PassiveP(; part_type::String = "Cold",
     m = density*volume(Radii)
     γ = friction(η,Radii)
     τm = m/γ
-    τD = γ*(Radii)^2/(kB*Temp)
+    τD = γ*(2Radii)^2/(kB*Temp)
 
     PassiveP{T}(part_type,part_id, rad,α,τm, τD,r,v,f)
 end

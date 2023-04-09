@@ -1,16 +1,28 @@
 export harm_rep2D
 export harm_rep3D
+export wca_2D
 
 @inline function harm_rep2D(dx::T, dy::T, dr²::T, ϵ::T, σ::T) where T
-    dist = sqrt(dr²)
-    inv_dist = dist^(-1)
-    f_int = ϵ*(inv_dist - σ^(-1))
-    e_int = f_int*dist*f_int*dist/(4ϵ)
+    dist = dr²^(1/2)
+    f_int = ϵ*(1/dist - 1/σ)
+    e_int = (ϵ/2)*(1 - dist/σ)^2
     f_x = f_int*dx
     f_y = f_int*dy
     return SVector{2,T}(f_x,f_y), e_int
 end
 
+@inline function wca_2D(dx::T, dy::T, dr²::T, ϵ::T, σ::T) where T
+    inv_dr² = 1/dr²
+    σ² = σ^2
+    σ²_inv_dr² = σ²*inv_dr²
+    σ6_inv_dr6 = σ²_inv_dr²^3
+    σ12_inv_dr12 = σ6_inv_dr6^2
+    f_int = 24ϵ*(2σ12_inv_dr12 - σ6_inv_dr6)*inv_dr²
+    e_int = 4ϵ*(2σ12_inv_dr12 - σ6_inv_dr6) + ϵ
+    f_x = f_int*dx
+    f_y = f_int*dy
+    return SVector{2,T}(f_x,f_y), e_int
+end
 
 @inline function harm_rep3D(dx::T, dy::T, dz::T, dr²::T, ϵ::T, σ::T) where {T}
     dist = sqrt(dr²)
@@ -22,7 +34,6 @@ end
     f_z = f_int*dz
     return SVector{3,T}(f_x,f_y,f_z) , e_int
 end
-
 
 
 
@@ -51,31 +62,6 @@ end
 
 export neighbor_list_kernel!
 
-"""
-function neighbor_list_kernel!(
-    neighbor_matrix::CuDeviceMatrix{I},
-    Neighbors::CuDeviceMatrix{I}) where I
-
-    tid = threadIdx().x
-    gtid = (blockIdx().x - 1) * blockDim().x + tid
-    Npart = size(neighbor_matrix, 2)
-    @inbounds begin
-        if gtid <= Npart
-            col = view(neighbor_matrix, :, gtid)
-            k = 1 
-            for j = 1:length(col)
-                if col[j] == 1 && gtid != j 
-                    Neighbors[k, gtid] = j
-                    k += 1
-                end
-            end
-        end
-    end
-    return nothing            
-end
-
-"""
-
 function neighbor_list_kernel!(
     neighbor_matrix::CuDeviceMatrix{I},
     Neighbors::CuDeviceMatrix{I}) where I
@@ -98,7 +84,6 @@ function neighbor_list_kernel!(
     return nothing            
 end
 
-
 export neighbor_matrix_kernel!
 
 function neighbor_matrix_kernel!(
@@ -120,8 +105,8 @@ function neighbor_matrix_kernel!(
             dx  = pos₁[1] - pos₂[1]
             dy  = pos₁[2] - pos₂[2]
 
-            dx = ifelse(abs(dx) > box[1] / 2, dx - sign(dx) * box[1] ,dx)
-            dy = ifelse(abs(dy) > box[2] / 2, dy - sign(dy) * box[2] ,dy)
+            dx = (2abs(dx) > box[1] ) ? dx - sign(dx) * box[1] : dx
+            dy = (2abs(dy) > box[2] ) ? dy - sign(dy) * box[2] : dy
             
             dr² = dx*dx + dy*dy
 
@@ -288,16 +273,16 @@ function forces!(
     Neighbors::CuMatrix{I},
     box::SVector{N,T},
     ϵ::T,
-    cut_off::T) where {N,T,I}
+    σ::T) where {N,T,I}
 
     #Npart = length(r)
 
 
-    kernel = @cuda launch = false forces_kernel!(r, f, Epot, Neighbors, box, ϵ, cut_off)
+    kernel = @cuda launch = false forces_kernel!(r, f, Epot, Neighbors, box, ϵ, σ)
     config = launch_configuration(kernel.fun)
     threads = min(length(r), config.threads)
     blocks = cld(length(r), threads)
-    CUDA.@sync kernel(r, f, Epot, Neighbors, box, ϵ, cut_off; threads, blocks)
+    CUDA.@sync kernel(r, f, Epot, Neighbors, box, ϵ, σ; threads, blocks)
 
     return nothing
 end
@@ -313,78 +298,18 @@ function forces!(
     coll_switch::CuMatrix{Bool},
     box::SVector{N,T},
     ϵ::T,
-    cut_off::T) where {N,T,I}
-
-    #Npart = length(r)
+    σ::T) where {N,T,I}
 
 
-    kernel = @cuda launch = false forces_kernel!(r, f, Epot, Neighbors, cold_num, colls, coll_switch, box, ϵ, cut_off)
+    kernel = @cuda launch = false forces_kernel!(r, f, Epot, Neighbors, cold_num, colls, coll_switch, box, ϵ, σ)
     config = launch_configuration(kernel.fun)
     threads = min(length(r), config.threads)
     blocks = cld(length(r), threads)
-    CUDA.@sync kernel(r, f, Epot, Neighbors, cold_num, colls, coll_switch, box, ϵ, cut_off; threads, blocks)
+    CUDA.@sync kernel(r, f, Epot, Neighbors, cold_num, colls, coll_switch, box, ϵ, σ; threads, blocks)
 
     return nothing
 end
 
-"""
-function forces_kernel!(
-    r::CuDeviceVector{T},
-    f::CuDeviceVector{T},
-    Epot::CuDeviceVector{T1},
-    Neighbors::CuDeviceMatrix{I},
-    box::T,
-    ϵ::T1,
-    cut_off::T1) where {T,T1,I}
-
-    Npart = length(r)
-    tid = threadIdx().x
-    gtid = (blockIdx().x - 1) * blockDim().x + tid  # global thread id
-    NNeigh = size(Neighbors,1)
-
-    cut_off² = cut_off^2
-    acc = zero(T)
-    epot= zero(T1)
-
-    @inbounds begin
-        if gtid <= Npart
-            pos₁ = r[gtid]
-        else
-            pos₁ = zero(T)
-        end
-        acc = zero(T)
-        epot= zero(T1)
-
-
-        @inbounds for j = 1:NNeigh
-            idx = Neighbors[j,gtid]
-            if (idx != 0 && idx <= Npart)
-                pos₂  = r[idx]
-            else
-                break
-            end
-            dx  = pos₁[1] - pos₂[1]
-            dy  = pos₁[2] - pos₂[2]
-
-            dx = ifelse(abs(dx) > box[1] / 2, dx - sign(dx) * box[1] ,dx)
-            dy = ifelse(abs(dy) > box[2] / 2, dy - sign(dy) * box[2] ,dy)
-            dr² = dx*dx + dy*dy
-
-            if 0 < dr² < cut_off²
-                frc, ep = harm_rep2D(dx, dy, dr², ϵ, cut_off)
-                acc = acc .+ frc
-                epot = epot + ep
-            end
-        end
-        sync_threads()
-              
-        if gtid <= Npart
-            f[gtid] = acc
-            Epot[gtid] += epot
-        end
-    end
-    return nothing
-end
 
 
 function forces_kernel!(
@@ -394,71 +319,7 @@ function forces_kernel!(
     Neighbors::CuDeviceMatrix{I},
     box::T,
     ϵ::T1,
-    cut_off::T1) where {T,T1,I}
-
-    Npart = length(r)
-    tid = threadIdx().x
-    gtid = (blockIdx().x - 1) * blockDim().x + tid  # global thread id
-    NNeigh = size(Neighbors,2)
-
-    shared_pos = CuStaticSharedArray(T, 40)
-
-    cut_off² = cut_off^2
-    acc = zero(T)
-    epot= zero(T1)
-
-    @inbounds begin
-        if gtid <= Npart
-            pos₁ = r[gtid]
-        else
-            pos₁ = zero(T)
-        end
-        acc = zero(T)
-        epot= zero(T1)
-
-
-        @inbounds for j = 1:NNeigh
-            idx = Neighbors[gtid,j]
-            if (idx != 0 && idx <= Npart)
-                shared_pos[j]  = r[idx]
-            else
-                break
-            end
-
-            dx  = pos₁[1] - shared_pos[j][1]
-            dy  = pos₁[2] - shared_pos[j][2]
-
-            dx = ifelse(abs(dx) > box[1] / 2, dx - sign(dx) * box[1] ,dx)
-            dy = ifelse(abs(dy) > box[2] / 2, dy - sign(dy) * box[2] ,dy)
-            dr² = dx*dx + dy*dy
-
-            if 0 < dr² < cut_off²
-                frc, ep = harm_rep2D(dx, dy, dr², ϵ, cut_off)
-                acc = acc .+ frc
-                epot = epot + ep
-            end
-        end
-        sync_threads()
-              
-        if gtid <= Npart
-            f[gtid] = acc
-            Epot[gtid] += epot
-        end
-    end
-    return nothing
-end
-
-
-"""
-
-function forces_kernel!(
-    r::CuDeviceVector{T},
-    f::CuDeviceVector{T},
-    Epot::CuDeviceVector{T1},
-    Neighbors::CuDeviceMatrix{I},
-    box::T,
-    ϵ::T1,
-    cut_off::T1) where {T,T1,I}
+    σ::T1) where {T,T1,I}
 
     Npart = length(r)
     tid = threadIdx().x
@@ -466,6 +327,7 @@ function forces_kernel!(
     NNeigh = size(Neighbors,2)
 
     
+    cut_off = σ
     cut_off² = cut_off^2
     acc = zero(T)
     epot= zero(T1)
@@ -479,8 +341,7 @@ function forces_kernel!(
         acc = zero(T)
         epot= zero(T1)
 
-
-        @inbounds for j = 1:NNeigh
+        for j = 1:NNeigh
             idx = Neighbors[gtid,j]
             if idx != 0 
                 pos₂  = r[idx]
@@ -490,21 +351,18 @@ function forces_kernel!(
             dx  = pos₁[1] - pos₂[1]
             dy  = pos₁[2] - pos₂[2]
 
-            dx = ifelse(2abs(dx) > box[1] , dx - sign(dx) * box[1] ,dx)
-            dy = ifelse(2abs(dy) > box[2] , dy - sign(dy) * box[2] ,dy)
 
-            #dx = rem(dx + box[1]/2, box[1]) - box[1]/2
-            #dy = rem(dy + box[2]/2, box[2]) - box[2]/2
-
+            dx = (2abs(dx) > box[1] ) ? dx - sign(dx) * box[1] : dx
+            dy = (2abs(dy) > box[2] ) ? dy - sign(dy) * box[2] : dy
+            
             dr² = dx*dx + dy*dy
 
-            if 0 < dr² < cut_off²
-                frc, ep = harm_rep2D(dx, dy, dr², ϵ, cut_off)
-                acc = acc .+ frc
+            if  0 < dr² < cut_off²
+                frc, ep = wca_2D(dx, dy, dr², ϵ, σ)
+                acc += frc
                 epot = epot + ep
             end
         end
-        #sync_threads()
               
         if gtid <= Npart
             f[gtid] = acc
@@ -513,6 +371,7 @@ function forces_kernel!(
     end
     return nothing
 end
+
 
 
 function forces_kernel!(
@@ -525,14 +384,15 @@ function forces_kernel!(
     coll_switch::CuDeviceMatrix{Bool},
     box::T,
     ϵ::T1,
-    cut_off::T1) where {T,T1,I}
+    σ::T1) where {T,T1,I}
 
     Npart = length(r)
     tid = threadIdx().x
     gtid = (blockIdx().x - 1) * blockDim().x + tid  # global thread id
     NNeigh = size(Neighbors,2)
 
-    
+
+    cut_off = σ
     cut_off² = cut_off^2
     acc = zero(T)
     epot= zero(T1)
@@ -557,12 +417,18 @@ function forces_kernel!(
             dx  = pos₁[1] - pos₂[1]
             dy  = pos₁[2] - pos₂[2]
 
-            dx = ifelse(2abs(dx) > box[1] , dx - sign(dx) * box[1] ,dx)
-            dy = ifelse(2abs(dy) > box[2] , dy - sign(dy) * box[2] ,dy)
+            dx = (2abs(dx) > box[1] ) ? dx - sign(dx) * box[1] : dx
+            dy = (2abs(dy) > box[2] ) ? dy - sign(dy) * box[2] : dy
 
             dr² = dx*dx + dy*dy
 
-            if 0 < dr² < cut_off²          
+            if dr² > cut_off²
+                coll_switch[gtid,j] = false
+                frc = zero(T)
+                ep = zero(T1)
+                acc = acc .+ frc
+                epot = epot + ep          
+            else
                 if !coll_switch[gtid,j]                    
                     if gtid <= num_cold
                         if idx > num_cold
@@ -578,14 +444,11 @@ function forces_kernel!(
                 end
                 
 
-                frc, ep = harm_rep2D(dx, dy, dr², ϵ, cut_off)
+                frc, ep = wca_2D(dx, dy, dr², ϵ, σ)
                 acc = acc .+ frc
                 epot = epot + ep
-            else
-                coll_switch[gtid,j] = false
             end
         end
-        sync_threads()
               
         if gtid <= Npart
             f[gtid] = acc
@@ -657,8 +520,8 @@ function collisions_kernel!(
                 dx  = pos₁[1] - pos₂[1]
                 dy  = pos₁[2] - pos₂[2]
     
-                dx = ifelse(abs(dx) > box[1] / 2, dx - sign(dx) * box[1] ,dx)
-                dy = ifelse(abs(dy) > box[2] / 2, dy - sign(dy) * box[2] ,dy)
+                dx = (2abs(dx) > box[1] ) ? dx - sign(dx) * box[1] : dx
+                dy = (2abs(dy) > box[2] ) ? dy - sign(dy) * box[2] : dy
                 
                 dr² = dx*dx + dy*dy
     
@@ -751,8 +614,8 @@ function neighbor_list_kernel!(
                 dx  = pos₁[1] - pos₂[1]
                 dy  = pos₁[2] - pos₂[2]
     
-                dx = ifelse(abs(dx) > box[1] / 2, dx - sign(dx) * box[1] ,dx)
-                dy = ifelse(abs(dy) > box[2] / 2, dy - sign(dy) * box[2] ,dy)
+                dx = (2abs(dx) > box[1] ) ? dx - sign(dx) * box[1] : dx
+                dy = (2abs(dy) > box[2] ) ? dy - sign(dy) * box[2] : dy
 
                 # Check if j is within the cutoff distance from i
                 dr² = dx*dx + dy*dy
