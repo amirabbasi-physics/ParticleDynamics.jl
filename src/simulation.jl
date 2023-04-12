@@ -100,11 +100,11 @@ function sim_run(;
 		println("System initialized!")
 		for i = 1:num_cold
 			simulation.particles[i].α = α₁
-			simulation.particles[i].v = sqrt(simulation.particles[i].α*sqrt(simulation.particles[i].τD/simulation.particles[i].τm)) .* @SVector randn(T,dim)
+			simulation.particles[i].v = sqrt(simulation.particles[i].α) .* @SVector randn(T,dim)
 		end
 		for i = num_cold+1:Npart
 			simulation.particles[i].α = α₂
-			simulation.particles[i].v = sqrt(simulation.particles[i].α*sqrt(simulation.particles[i].τD/simulation.particles[i].τm)) .* @SVector randn(T,dim)
+			simulation.particles[i].v = sqrt(simulation.particles[i].α) .* @SVector randn(T,dim)
 		end
 
 
