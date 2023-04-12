@@ -26,7 +26,7 @@ function sim_run(;
     η		= T(8.9e-4)
     density = T(1.0e3) # mass density of particles (kg/m³)
 	σ = T(2*2^(1/6))
-
+	neigh_cut_off *= σ
 
     
     ###############################################################################
@@ -41,24 +41,37 @@ function sim_run(;
 			for i in 1:Npart-1
 				pos = random_pos(box)    
 				# Check for overlap with other particles
-				while check_overlap(pos, r_init, σ/2 + 1/5)
+				while check_overlap(pos, r_init, σ/2 + (1e-5))
 					pos = random_pos(box)
 				end        
 				# Append the position to the list of positions
 				push!(r_init,pos)
 			end
 		else
-			Npart = floor(Int,sqrt(Npart))^2
 			box = Box(dim = dim, Npart = Npart, ϕ = ϕ, σ = σ )
     		num_cold = ceil(Int, Npart*fraction)
 			r_init = rectangular_lattice(Npart,box)
+			#r_init = triangular_lattice(Npart, box, σ)
+			r_init = sort_pos_by_dist(r_init, 0.0, 0.0)
 		end
+		shuffle!(r_init)
 		homog = "homogeneous"
-    else								# Adjust the box size for inhomogeneous case!!!!
-		#println("Error! Box size is not adjusted for inhomogeneous case!")
+    else
 		box = Box(dim = dim, Npart = Npart, ϕ = ϕ, σ = σ )
-        r_init, num_cold = cut_circle_sphere!(box, σ, Npart, fraction,cold_frac)
-		#box = box .* sqrt(length(r_init)/Npart)
+		num_cold = ceil(Int, Npart*fraction)
+        r_init = cut_circle_sphere!(box, σ, Npart, fraction, cold_frac)
+		println(length(r_init))
+		if length(r_init) <= num_cold
+			rr_remain = rectangular_lattice(2Npart,box)
+			rad = sqrt(ceil(Npart .* fraction))/(π/(1.0675*2sqrt(3)))
+			r_remain = circle_cut(rr_remain, rad, false)
+			shuffle!(r_remain)
+		else
+			println("Error!")
+		end
+		n_remain = Npart - length(r_init)
+		r_init = append!(r_init, r_remain[1:n_remain])
+		r_init = r_init[1:Npart]
 		homog = "inhomogeneous"
     end
 
@@ -94,9 +107,6 @@ function sim_run(;
 			simulation.particles[i].v = sqrt(simulation.particles[i].α*sqrt(simulation.particles[i].τD/simulation.particles[i].τm)) .* @SVector randn(T,dim)
 		end
 
-		if homogeneous
-			shuffle_pos!(simulation)
-		end
 
 		simulation.dt = Δt_prod
 		simulation.num_steps = num_steps

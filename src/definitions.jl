@@ -10,6 +10,14 @@ function Box(; dim::Int, Npart::Int, ϕ::T, σ::T) where T <: AbstractFloat    #
     end
 end
 
+export sort_pos_by_dist
+function sort_pos_by_dist(positions::Array{SVector{2,T},1}, x0::T, y0::T) where T
+    distances = [(pos[1]-x0)^2 + (pos[2]-y0)^2 for pos in positions]
+    sorted_indices = sortperm(distances)
+    return positions[sorted_indices]
+end
+
+
 export shuffle_pos!
 function shuffle_pos!(simulation)
     r_tmp = [simulation.particles[i].r for i = 1:length(simulation.particles)]
@@ -29,41 +37,75 @@ end
 
 export rectangular_lattice
 
-function rectangular_lattice(Npart::Int, box::SVector{2,T}) where T
-    positions = Array{SVector{2,T}, 1}()
-    L_x = box[1]
-    L_y = L_x
-    s_x, s_y = L_x/sqrt(Npart), L_y/sqrt(Npart)
-    M_x = ceil(Int,Npart^(1/2))
-    M_y = M_x
-    for i = 0 : M_x - 1, j = 0 : M_y - 1
-        push!(positions, SVector{2,T}([(i + 1/2) * s_x, (j + 1/2) * s_y] .- [L_x/2, L_y/2]))
-    end
-    return positions
+function rectangular_lattice(Npart::Int, box::SVector{2, T}) where T
+    n_side = ceil(Int,sqrt(Npart))
+    delta = box ./ n_side
+    x = range(delta[1]/2, stop=box[1]-delta[1]/2, length=n_side)
+    y = range(delta[2]/2, stop=box[2]-delta[2]/2, length=n_side)
+    positions = [SVector{2, T}(xi, yj) .- box/2 for xi in x, yj in y]
+    return positions[1:Npart]
 end
 
 export triangular_lattice
-function triangular_lattice(box::SVector{N,T},lattice_const::T,M_x::Int64, M_y::Int64) where {N,T}
+
+
+function triangular_lattice(Npart::Int, σ::T) where T
+    lattice_const = σ
     positions = Array{SVector{2,T}, 1}()
+    M_x = ceil(Int,sqrt(Npart)) 
+    M_y = ceil(Int,sqrt(Npart))
     for i = 1:M_x
         for j = 1:M_y
             pos = SVector{2,T}([(i-1)*lattice_const + (j%2)*lattice_const/2, (j-1)*lattice_const*sqrt(3)/2]) 
-            pos = pos .- box ./ 2
             push!(positions, pos)
         end
     end
-    return positions
+    max_x = maximum([pos[1] for pos in positions])
+    min_x = minimum([pos[1] for pos in positions])
+
+    max_y = maximum([pos[2] for pos in positions])
+    min_y = minimum([pos[2] for pos in positions])
+
+    L_x = max_x - min_x
+    L_y = max_y - min_y
+
+    size = @SVector [L_x, L_y]
+    positions = [pos = pos .- size/2 for pos in positions]
+    return positions[1:Npart]
+end
+
+function triangular_lattice(Npart::Int, box::SVector{N,T}, σ::T) where {N,T}
+    lattice_const = σ
+    positions = Array{SVector{2,T}, 1}()
+    M_x = ceil(Int,box[1]/σ)
+    M_y = ceil(Int,2box[2]/(sqrt(3)*σ))
+    for i = 1:M_x
+        for j = 1:M_y
+            pos = SVector{2,T}([(i-1)*σ + (j%2)*σ/2, (j-1)*σ*sqrt(3)/2]) 
+            push!(positions, pos)
+        end
+    end
+    positions = [pos = pos .- box/2 for pos in positions]
+    return positions[1:Npart]
 end
 
 export circle_cut
-function circle_cut(r0::Array{SVector{N,T}}, rad::T) where {N,T}
+function circle_cut(r0::Array{SVector{N,T}}, rad::T,in::Bool) where {N,T}
     new_pos = Array{SVector{2,T}, 1}()
-    #r_center = @SVector T[0.5*L_box,0.5*L_box]
-    for i = 1:length(r0)
-        if norm(r0[i])/rad <= 1
-            push!(new_pos , r0[i])
+    if in
+        for i = 1:length(r0)
+            if norm(r0[i])/rad < 1.0
+                push!(new_pos , r0[i])
+            end
+        end
+    else
+        for i = 1:length(r0)
+            if norm(r0[i])/rad > 1.01
+                push!(new_pos , r0[i])
+            end
         end
     end
+
     return new_pos
 end
 
@@ -99,7 +141,7 @@ function simplecubic_lattice(Npart::Int, box::SVector{3,T}) where T
 end
 
 export fcc_lattice
-function fcc_lattice(box::SVector{N,T},lattice_const::T,M_x::Int64, M_y::Int64, M_z::Int64) where {N,T}
+function fcc_lattice(box::SVector{N,T},σ::T,M_x::Int64, M_y::Int64, M_z::Int64) where {N,T}
     """Calculates the positions of an fcc lattice with the lattice constant a
     in a cubic box with the given dimensions"""
     # initialize coordinates: time 4 since there are 4 atoms in each unit cell
@@ -107,7 +149,7 @@ function fcc_lattice(box::SVector{N,T},lattice_const::T,M_x::Int64, M_y::Int64, 
     for i = 0:M_x-1
         for j = 0:M_y-1
             for k = 0:M_z-1
-                pos = [pos_fcc(lattice_const)[n] .+ @SVector [i * lattice_const, j * lattice_const, k * lattice_const] for n = 1:4]
+                pos = [pos_fcc(σ)[n] .+ @SVector [i * σ, j * σ, k * σ] for n = 1:4]
                 pos = [pos[i] .- box ./2 for i=1:4]
                 for nn = 1:4
                     push!(positions, pos[nn])
@@ -179,62 +221,11 @@ function cut_circle_sphere!(box::SVector{N,T}, σ::T, Npart::Int, fraction::T,co
     dim = length(box)
     R = T(σ/2)
     if dim == 2
-        println("check  1")
-        N_circle = Int(ceil(Npart .* fraction/10))
-        lattice_const = σ
-        r = triangular_lattice(box,lattice_const, N_circle, N_circle)
-        rad = T(sqrt(N_circle))
-
-        println("check  2")
-
-
-        r1  = circle_cut(r, rad)
-        num_pl = length(r1)
-        n_remain = Int(ceil(length(r1) *(1/fraction -1)))
-        Npart_new = n_remain + num_pl 
-
-        println("check  3")
-        r2  = circle_cut(r, rad*cold_frac)
-        n_remain = Npart_new-length(r2)
-
-        r_init = Array{SVector{2,T}}(undef, Npart_new)
-        [r_init[i]=r2[i] for i = 1:length(r2)]
-        println("check  4")
-        rr = rectangular_lattice(Npart,box)
-        shuffle!(rr)
-        rr_new = []
-        for j = 1:length(rr)
-            pos = rr[j]
-            aa = true
-            for k = 1:length(r_init)
-                if norm(pos-r_init[k]) <= σ
-                    aa = false
-                    break
-                end
-            end
-            if !aa
-                push!(rr_new,pos)
-            end
-        end
-
-        shuffle!(rr_new)
-        for ii = 1:n_remain
-            r_init[length(r2)+ ii] = rr_new[ii]
-        end
-
-
-        """
-        for ii in 1:n_remain
-            # Generate a random position
-            pos = random_pos(box)    
-            # Check for overlap with other particles
-            while check_overlap(pos, r_init, R)
-                pos = random_pos(box)
-            end        
-            # Append the position to the list of positions
-            r_init[length(r2)+ ii] = pos
-        end
-        """
+        N_circle = Npart * fraction
+        rad = sqrt(N_circle)/(π/(1.0675*2sqrt(3)))
+        N_lattice = ceil(Int,2N_circle)
+        r = triangular_lattice(N_lattice, σ)
+        r_init  = circle_cut(r, rad, true)
 
     elseif dim == 3
 
@@ -265,7 +256,7 @@ function cut_circle_sphere!(box::SVector{N,T}, σ::T, Npart::Int, fraction::T,co
             r_init[length(r2)+ ii] = pos
         end
     end
-    return r_init, num_pl
+    return r_init
 end
 
 export volume
