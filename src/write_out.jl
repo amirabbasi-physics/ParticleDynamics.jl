@@ -103,7 +103,7 @@ function write_log(
     Ekin = sum(Eₖ)
     Epot = sum(Eₚ)
 
-    c1 = [(simulation.particles[i].τD/simulation.particles[i].τm) for i=1:length(simulation.particles)]
+    c1 = [sqrt(simulation.particles[i].τD/simulation.particles[i].τm) for i=1:length(simulation.particles)]
 
     sdotpp_ave = sum(c1 .* ( 2 .* Eₖ ./ α_list .- length(simulation.box)))/length(simulation.particles)
 
@@ -124,7 +124,6 @@ function write_log(
     else
         open(output_file,"a+") do file
             println("Time = ",step_str, " | E_kin = ", Ekin_str," | E_pot = ", Epot_str, " | EPR = " ,sdot_str, " | EPR per particle = " ,sdotpp_str, "  |  EPR per particle averaged = " ,sdotpp_ave_str)
-            #println(coll_tot - coll_hot_hot -coll_cold_hot - coll_cold_cold)
             println(file,data)
         end
     end
@@ -150,7 +149,7 @@ function write_log(
     Ekin = sum(Eₖ)
     Epot = sum(Eₚ)
 
-    c1 = [(simulation.particles[i].τD/simulation.particles[i].τm) for i=1:length(simulation.particles)]
+    c1 = [sqrt(simulation.particles[i].τD/simulation.particles[i].τm) for i=1:length(simulation.particles)]
 
     sdotpp_ave = sum(2 .* c1 .* ( Eₖ ./ α_list .- 1))/length(simulation.particles)
 

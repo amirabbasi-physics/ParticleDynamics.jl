@@ -2,7 +2,7 @@ export PBC_kernel!
 export PBC!
 
 
-function PBC_kernel!(r::CuDeviceVector{T}, box::T,::Val{TH}) where {T,TH}
+function PBC_kernel!(r::CuDeviceVector{SVector{N,T}}, box::SVector{N,T}) where {N,T}
     Npart = length(r)
     tid = threadIdx().x
     gtid = (blockIdx().x - UInt32(1)) * blockDim().x + tid  # global thread id
@@ -11,22 +11,20 @@ function PBC_kernel!(r::CuDeviceVector{T}, box::T,::Val{TH}) where {T,TH}
         if gtid <= Npart
             pos = r[gtid]
             pos = mod.(pos .+ box ./ 2, box) .- box ./ 2
-            #pos = mod.(pos, box)
-#        else
-#            pos = zero(T)
         end
-        sync_threads()
         if gtid <= Npart
-
             r[gtid] = pos
         end
-        sync_threads()
     end
     return nothing
 end
 
-function PBC!(coords::CuVector{T}, box::T; nthreads=128) where T
-    Npart = length(coords)
-    CUDA.@sync @cuda blocks=ceil(Int, Npart/nthreads) threads=nthreads PBC_kernel!(coords, box,Val(nthreads))
+function PBC!(r::CuVector{SVector{N,T}}, box::SVector{N,T}) where {N,T}
+    Npart = length(r)    
+    kernel = @cuda launch = false PBC_kernel!(r, box)
+    config = launch_configuration(kernel.fun)
+    threads = min(Npart, config.threads)
+    blocks = cld(Npart, threads)
+    CUDA.@sync kernel(r, box; threads, blocks)
     return nothing
 end
