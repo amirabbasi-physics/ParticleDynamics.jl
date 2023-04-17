@@ -26,9 +26,10 @@ function sim_run(;
     η		= T(8.9e-4)
     density = T(1.0e3) # mass density of particles (kg/m³)
 	σ = T(2*2^(1/6))
+	#σ = T(2.0)
 	neigh_cut_off *= σ
 
-    
+		 
     ###############################################################################
     #   Initializing the system to get randomly distributed positions
     ###############################################################################
@@ -38,7 +39,7 @@ function sim_run(;
 			box = Box(dim = dim, Npart = Npart, ϕ = ϕ, σ = σ )
     		num_cold = ceil(Int, Npart*fraction)
 			r_init = [random_pos(box)]
-			for i in 1:Npart-1
+			for _ in 1:Npart-1
 				pos = random_pos(box)    
 				# Check for overlap with other particles
 				while check_overlap(pos, r_init, σ/2 + (1e-5))
@@ -143,10 +144,17 @@ function simulate!(
 	end
 
 	c1 = [sqrt(simulation.particles[i].τD/simulation.particles[i].τm) for i=1:Npart]
-	
+	scale = similar(c1)
 	#c2 = [simulation.dt for i=1:Npart]
 	#c2 = CuVector(c2)
-	c3 = [sqrt(2*c1[i]*simulation.particles[i].α/simulation.dt) for i=1:Npart]
+	if simulation.integrator == "lf" || simulation.integrator == "em"
+		scale = 1.0 .- c1 .* simulation.dt ./2
+		#scale = ones(Npart)
+	else
+		scale = ones(Npart)
+	end
+
+	c3 = [sqrt(2*c1[i]*simulation.particles[i].α * scale[i] /simulation.dt) for i=1:Npart]
 	c1 = CuVector(c1)
 	c3 = CuVector(c3)
 
@@ -175,14 +183,14 @@ function simulate!(
 				neighbor_list_new!(r,Neighbors,simulation.neigh_cut_off,simulation.box)
 			end
 			copyto!(f , f₀)
-			update_positions_vv!(r, v, f₀,f_r, c1, simulation.dt, c3,simulation.box)
-
+			update_positions_vv!(r, v, f₀, f_r, c1, simulation.dt, c3,simulation.box)
 
 			if collision_calc
 				forces!(r, f, Eₚ, Neighbors, simulation.num_cold, colls, coll_switch, simulation.box, simulation.ϵ, simulation.σ)
 			else
 				forces!(r, f, Eₚ, Neighbors, simulation.box, simulation.ϵ, simulation.σ)
 			end
+
 
 			update_velocities_vv!(v, f₀, f, f_r, dQ, Eₖ, c1, simulation.dt, c3)
 			copyto!(f₀ , f)
@@ -193,9 +201,7 @@ function simulate!(
 					copyto!(Epot,Eₚ)
 					copyto!(Ekin,Eₖ)
 					copyto!(coll₀,colls)
-					#dQ₀, Epot, Ekin, coll₀ = Vector(dQ), Vector(Eₚ), Vector(Eₖ), Vector{Float64}(colls)
 				else
-					#dQ₀, Epot, Ekin = Vector(dQ), Vector(Eₚ), Vector(Eₖ)
 					copyto!(dQ₀,dQ)
 					copyto!(Epot,Eₚ)
 					copyto!(Ekin,Eₖ)
@@ -240,6 +246,7 @@ function simulate!(
 			else
 				forces!(r, f, Eₚ, Neighbors, simulation.box, simulation.ϵ, simulation.σ)
 			end
+
 
 			update_particles_em!(r, v, f, dQ, Eₖ, c1, simulation.dt, c3,simulation.box)
 			if step % simulation.save_interval == 0
@@ -291,11 +298,13 @@ function simulate!(
 			end
 			update_positions_lf!(r, v, simulation.dt, simulation.box)
 
+
 			if collision_calc
 				forces!(r, f, Eₚ, Neighbors, simulation.num_cold, colls, coll_switch, simulation.box, simulation.ϵ, simulation.σ)
 			else
 				forces!(r, f, Eₚ, Neighbors, simulation.box, simulation.ϵ, simulation.σ)
 			end
+
 
 			update_velocities_lf!(v, f, dQ, Eₖ, c1, simulation.dt, c3, simulation.box)
 			update_positions_lf!(r, v, simulation.dt, simulation.box)
