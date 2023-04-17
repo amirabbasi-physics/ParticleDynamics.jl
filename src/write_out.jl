@@ -94,7 +94,7 @@ function write_log(
     Eₚ::Vector{T},
     dQ::Vector{T}) where T
 
-
+    c1 = [sqrt(simulation.particles[i].τD/simulation.particles[i].τm) for i=1:length(simulation.particles)]
     α_list = [simulation.particles[i].α for i = 1:length(simulation.particles)]
 
     output_file = simulation.output_file*".log"
@@ -103,7 +103,7 @@ function write_log(
     Ekin = sum(Eₖ)
     Epot = sum(Eₚ)
 
-    c1 = [sqrt(simulation.particles[i].τD/simulation.particles[i].τm) for i=1:length(simulation.particles)]
+    
 
     sdotpp_ave = sum(c1 .* ( 2 .* Eₖ ./ α_list .- length(simulation.box)))/length(simulation.particles)
 
@@ -118,7 +118,7 @@ function write_log(
 
     if step == 0
        open(output_file,"w") do file
-        println(file,"     Time     |     E_kin     |     E_pot     |      EPR     | EPR per particle | EPR per particle ave ")
+        println(file,"     Time     |     E_kin     |     E_pot     |     EPR    | EPR per part | EPR per part ave ")
         #writedlm(file,data)
         end
     else
@@ -165,7 +165,7 @@ function write_log(
 
     if step == 0
        open(output_file,"w") do file
-        println(file,"     Time     |     E_kin     |     E_pot     |      EPR     | EPR per particle | EPR per particle ave | cold/hot coll rate ")
+        println(file,"     Time     |     E_kin     |     E_pot     |      EPR      |  EPR / part  | EPR / part Ave | cold/hot coll rate ")
         #writedlm(file,data)
         end
     else

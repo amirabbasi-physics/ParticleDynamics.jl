@@ -74,7 +74,7 @@ function em_kernel!(
             pos = mod.(pos .+ box ./ 2, box) .- box ./ 2                    # Applying PBC!
 
             injected_energy = dot((v_prev .+ v_next), rnd_force)/2
-            dissipated_energy = - c1*dot(v_prev ,v_prev)
+            dissipated_energy = - c1*dot(v_next ,v_next)*(1.0-a/2)
 
             dQ += -(injected_energy + dissipated_energy)                 # Minus sign indicates the dQ of the heat bath
             Eₖ += dot(v_next,v_next)/2
@@ -236,8 +236,8 @@ function update_velocities_kernel_vv!(
             
             v_next = aa .* v_prev + (dt*aa/2) .* frc_prev + (dt/2) .* frc + (bb*dt) .* rnd_force
 
-            injected_energy = dot((v_prev .+ v_next), rnd_force)/2
-            dissipated_energy = - c1*dot(v_prev ,v_prev)
+            injected_energy = dot((v_prev .+ v_next), rnd_force)/(2bb)
+            dissipated_energy = - c1*dot(v_next ,v_next)
 
             dQ += -(injected_energy + dissipated_energy)                 # Minus sign indicates the dQ of the heat bath
             Eₖ += dot(v_next,v_next)/2
@@ -371,7 +371,7 @@ function update_velocities_kernel_lf!(
             v_next = (1-a) .* v_prev .+ dt .* (frc .+ rnd_force)
 
             injected_energy = dot((v_prev .+ v_next), rnd_force)/2
-            dissipated_energy = - c1*dot(v_prev ,v_prev)
+            dissipated_energy = - c1*dot(v_next ,v_next)*(1.0-a/2)
 
             dQ += -(injected_energy + dissipated_energy)                 # Minus sign indicates the dQ of the heat bath
             Eₖ += dot(v_next,v_next)/2
