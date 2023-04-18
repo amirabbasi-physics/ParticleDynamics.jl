@@ -61,7 +61,6 @@ function sim_run(;
 		box = Box(dim = dim, Npart = Npart, ϕ = ϕ, σ = σ )
 		num_cold = ceil(Int, Npart*fraction)
         r_init = cut_circle_sphere!(box, σ, Npart, fraction, cold_frac)
-		println(length(r_init))
 		if length(r_init) <= num_cold
 			rr_remain = rectangular_lattice(2Npart,box)
 			rad = sqrt(ceil(Npart .* fraction))/(π/(1.0675*2sqrt(3)))
