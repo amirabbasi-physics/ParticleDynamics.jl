@@ -144,13 +144,13 @@ function simulate!(
 		coll_switch = CuArray(falses(Npart,NN))
 	end
 
-	c1 = [sqrt(simulation.particles[i].τD/simulation.particles[i].τm) for i=1:Npart]
+	c1 = [T(sqrt(simulation.particles[i].τD/simulation.particles[i].τm)) for i=1:Npart]
 	scale = similar(c1)
 
 	if simulation.integrator == "lf" || simulation.integrator == "em"
 		scale = T(1.0) .- c1 .* simulation.dt ./2
 	else
-		scale = ones(Npart)
+		scale = ones(T,Npart)
 	end
 
 	c3 = [T(sqrt(2*c1[i]*simulation.particles[i].α * scale[i] /simulation.dt)) for i=1:Npart]
