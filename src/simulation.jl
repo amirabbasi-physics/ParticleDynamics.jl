@@ -25,45 +25,45 @@ function sim_run(;
 
     η		= T(8.9e-4)
     density = T(1.0e3) # mass density of particles (kg/m³)
-	σ = T(2*2^(1/6))
-	#σ = T(2.0)
-	neigh_cut_off *= σ
+	σ = T(1.0)
+	
 
 		 
     ###############################################################################
     #   Initializing the system to get randomly distributed positions
     ###############################################################################
-
+	sigma = T(2^(1/6))*σ
+	neigh_cut_off *= sigma
     if homogeneous
 		if random_positions
-			box = Box(dim = dim, Npart = Npart, ϕ = ϕ, σ = σ )
+			box = Box(dim = dim, Npart = Npart, ϕ = ϕ, sigma = sigma )
     		num_cold = ceil(Int, Npart*fraction)
 			r_init = [random_pos(box)]
 			for _ in 1:Npart-1
 				pos = random_pos(box)    
 				# Check for overlap with other particles
-				while check_overlap(pos, r_init, σ/2 + (1e-5))
+				while check_overlap(pos, r_init, sigma + (1e-5))
 					pos = random_pos(box)
 				end        
 				# Append the position to the list of positions
 				push!(r_init,pos)
 			end
 		else
-			box = Box(dim = dim, Npart = Npart, ϕ = ϕ, σ = σ )
+			box = Box(dim = dim, Npart = Npart, ϕ = ϕ, sigma = sigma )
     		num_cold = ceil(Int, Npart*fraction)
 			r_init = rectangular_lattice(Npart,box)
 			#r_init = triangular_lattice(Npart, box, σ)
-			r_init = sort_pos_by_dist(r_init, 0.0, 0.0)
+			r_init = sort_pos_by_dist(r_init, zero(T), zero(T))
 		end
 		shuffle!(r_init)
 		homog = "homogeneous"
     else
-		box = Box(dim = dim, Npart = Npart, ϕ = ϕ, σ = σ )
+		box = Box(dim = dim, Npart = Npart, ϕ = ϕ, sigma = sigma )
 		num_cold = ceil(Int, Npart*fraction)
-        r_init = cut_circle_sphere!(box, σ, Npart, fraction, cold_frac)
+        r_init = cut_circle_sphere!(box, sigma, Npart, fraction, cold_frac)
 		if length(r_init) <= num_cold
 			rr_remain = rectangular_lattice(2Npart,box)
-			rad = sqrt(ceil(Npart .* fraction))/(π/(1.0675*2sqrt(3)))
+			rad = T(sqrt(ceil(Npart .* fraction))/(π/(1.0675*2sqrt(3))))
 			r_remain = circle_cut(rr_remain, rad, false)
 			shuffle!(r_remain)
 		else
@@ -112,7 +112,7 @@ function sim_run(;
 		simulation.num_steps = num_steps
 		simulation.save_interval = save_interval
 		println("Simulation starts!")
-		simulate!(simulation, collision_calc)
+		simulate!(simulation, collision_calc,box)
 		yield()
     end
     return nothing
@@ -126,34 +126,34 @@ export simulate!
 
 function simulate!(
 	simulation::Simulation,
-	collision_calc::Bool)
+	collision_calc::Bool,
+	box::SVector{N,T}) where {N,T}
 
 
 	Npart = length(simulation.particles)
 
-	dQ = CuVector(zeros(Float64,Npart))
+	dQ = CuVector(zeros(T,Npart))
 	Eₖ = similar(dQ)
 	Eₚ = similar(dQ)
 	
-	NN = hexagonal_neighbors(1.0, simulation.neigh_cut_off)
+	NN = hexagonal_neighbors(sigma = T(2^(1/6)), circ_R = simulation.neigh_cut_off)
 	Neighbors = CuArray(Matrix(zeros(Int,Npart,NN)))
+
 	if collision_calc
-		colls = CuVector(zeros(Npart))
+		colls = CuVector(zeros(T,Npart))
 		coll_switch = CuArray(falses(Npart,NN))
 	end
 
 	c1 = [sqrt(simulation.particles[i].τD/simulation.particles[i].τm) for i=1:Npart]
 	scale = similar(c1)
-	#c2 = [simulation.dt for i=1:Npart]
-	#c2 = CuVector(c2)
+
 	if simulation.integrator == "lf" || simulation.integrator == "em"
-		scale = 1.0 .- c1 .* simulation.dt ./2
-		#scale = ones(Npart)
+		scale = T(1.0) .- c1 .* simulation.dt ./2
 	else
 		scale = ones(Npart)
 	end
 
-	c3 = [sqrt(2*c1[i]*simulation.particles[i].α * scale[i] /simulation.dt) for i=1:Npart]
+	c3 = [T(sqrt(2*c1[i]*simulation.particles[i].α * scale[i] /simulation.dt)) for i=1:Npart]
 	c1 = CuVector(c1)
 	c3 = CuVector(c3)
 
@@ -166,7 +166,7 @@ function simulate!(
 	f_c = [simulation.particles[i].f for i=1:Npart]
 	f = CuVector(f_c)
 
-	dQ₀ = zeros(Npart)
+	dQ₀ = zeros(T,Npart)
 	Ekin = similar(dQ₀)
 	Epot = similar(dQ₀)
 	coll₀ = similar(dQ₀)
@@ -214,7 +214,7 @@ function simulate!(
 					fill!(colls, zero(eltype(colls)))
 				end
 
-				begin
+				@spawn begin
 					if collision_calc
 						coll₀ ./= 2simulation.save_interval
 					end
@@ -222,11 +222,15 @@ function simulate!(
 					Ekin ./= simulation.save_interval
 					Epot ./= simulation.save_interval
 					if collision_calc
-						r_c, v_c = Vector(r), Vector(v)
+						copyto!(r_c, Vector(r))
+						copyto!(v_c, Vector(v))
+						#r_c, v_c = Vector(r), Vector(v)
 						write_gsd(step,simulation, part_id, r_c, v_c)
 						write_log(step, simulation, Ekin, Epot, dQ₀, coll₀)
 					else
-						r_c, v_c = Vector(r), Vector(v)
+						copyto!(r_c, Vector(r))
+						copyto!(v_c, Vector(v))
+						#r_c, v_c = Vector(r), Vector(v)
 						write_gsd(step,simulation, part_id, r_c, v_c)
 						write_log(step, simulation, Ekin, Epot, dQ₀)
 					end
@@ -245,7 +249,6 @@ function simulate!(
 			else
 				forces!(r, f, Eₚ, Neighbors, simulation.box, simulation.ϵ, simulation.σ)
 			end
-
 
 			update_particles_em!(r, v, f, dQ, Eₖ, c1, simulation.dt, c3,simulation.box)
 			if step % simulation.save_interval == 0
@@ -270,7 +273,7 @@ function simulate!(
 					fill!(colls, zero(eltype(colls)))
 				end
 
-				begin
+				@spawn begin
 					if collision_calc
 						coll₀ ./= 2simulation.save_interval
 					end
@@ -278,11 +281,15 @@ function simulate!(
 					Ekin ./= simulation.save_interval
 					Epot ./= simulation.save_interval
 					if collision_calc
-						r_c, v_c = Vector(r), Vector(v)
+						copyto!(r_c, Vector(r))
+						copyto!(v_c, Vector(v))
+						#r_c, v_c = Vector(r), Vector(v)
 						write_gsd(step,simulation, part_id, r_c, v_c)
 						write_log(step, simulation, Ekin, Epot, dQ₀, coll₀)
 					else
-						r_c, v_c = Vector(r), Vector(v)
+						copyto!(r_c, Vector(r))
+						copyto!(v_c, Vector(v))
+						#r_c, v_c = Vector(r), Vector(v)
 						write_gsd(step,simulation, part_id, r_c, v_c)
 						write_log(step, simulation, Ekin, Epot, dQ₀)
 					end
@@ -314,9 +321,7 @@ function simulate!(
 					copyto!(Epot,Eₚ)
 					copyto!(Ekin,Eₖ)
 					copyto!(coll₀,colls)
-					#dQ₀, Epot, Ekin, coll₀ = Vector(dQ), Vector(Eₚ), Vector(Eₖ), Vector{Float64}(colls)
 				else
-					#dQ₀, Epot, Ekin = Vector(dQ), Vector(Eₚ), Vector(Eₖ)
 					copyto!(dQ₀,dQ)
 					copyto!(Epot,Eₚ)
 					copyto!(Ekin,Eₖ)
@@ -330,7 +335,7 @@ function simulate!(
 					fill!(colls, zero(eltype(colls)))
 				end
 
-				begin
+				@spawn begin
 					if collision_calc
 						coll₀ ./= 2simulation.save_interval
 					end
@@ -338,11 +343,15 @@ function simulate!(
 					Ekin ./= simulation.save_interval
 					Epot ./= simulation.save_interval
 					if collision_calc
-						r_c, v_c = Vector(r), Vector(v)
+						copyto!(r_c, Vector(r))
+						copyto!(v_c, Vector(v))
+						#r_c, v_c = Vector(r), Vector(v)
 						write_gsd(step,simulation, part_id, r_c, v_c)
 						write_log(step, simulation, Ekin, Epot, dQ₀, coll₀)
 					else
-						r_c, v_c = Vector(r), Vector(v)
+						copyto!(r_c, Vector(r))
+						copyto!(v_c, Vector(v))
+						#r_c, v_c = Vector(r), Vector(v)
 						write_gsd(step,simulation, part_id, r_c, v_c)
 						write_log(step, simulation, Ekin, Epot, dQ₀)
 					end
