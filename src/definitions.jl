@@ -1,11 +1,11 @@
 export Box
-
-function Box(; dim::Int, Npart::Int, ϕ::T, σ::T) where T <: AbstractFloat    # This should be changed for polydisperse particles!
+ # This should be changed for polydisperse particles!
+function Box(; dim::Int, Npart::Int, ϕ::T, sigma::T) where T <: AbstractFloat   
     if dim == 2
-        L = sqrt(π*σ^2*Npart/(4*ϕ))
+        L = sqrt(π*sigma^2*Npart/(4*ϕ))
         return SVector{2,T}([L,L])
     elseif dim == 3
-        L = (π*σ^3*Npart/(6*ϕ))^(1/3)
+        L = (π*sigma^3*Npart/(6*ϕ))^(1/3)
         return SVector{3,T}([L,L,L])
     end
 end
@@ -28,11 +28,10 @@ end
 
 
 export hexagonal_neighbors
-function hexagonal_neighbors(R::T, circ_R::T) where T
-    n_max = floor(circ_R / R)
-    n = 1:n_max
-    num_circles = 1 + 6 * sum(n .- 1)
-    return Int(num_circles)
+function hexagonal_neighbors(; sigma::T, circ_R::T) where T
+    n_max = floor(Int,circ_R / sigma)
+    num_circles = 10 + 6 * sum(1:n_max)
+    return num_circles
 end 
 
 export rectangular_lattice
@@ -75,7 +74,6 @@ function triangular_lattice(Npart::Int, σ::T) where T
 end
 
 function triangular_lattice(Npart::Int, box::SVector{N,T}, σ::T) where {N,T}
-    lattice_const = σ
     positions = Array{SVector{2,T}, 1}()
     M_x = ceil(Int,box[1]/σ)
     M_y = ceil(Int,2box[2]/(sqrt(3)*σ))
@@ -145,7 +143,7 @@ function fcc_lattice(box::SVector{N,T},σ::T,M_x::Int64, M_y::Int64, M_z::Int64)
     """Calculates the positions of an fcc lattice with the lattice constant a
     in a cubic box with the given dimensions"""
     # initialize coordinates: time 4 since there are 4 atoms in each unit cell
-    positions = Array{SVector{3,Float32}, 1}()
+    positions = Array{SVector{3,T}, 1}()
     for i = 0:M_x-1
         for j = 0:M_y-1
             for k = 0:M_z-1
@@ -206,9 +204,9 @@ function isincircle(pos::SVector{2,T}, rad::T, r_margin::T) where T
 end
 
 export check_overlap
-function check_overlap(pos::SVector{N,T}, positions::Vector{SVector{N,T}}, R::T) where {N,T}
+function check_overlap(pos::SVector{N,T}, positions::Vector{SVector{N,T}}, sigma::T) where {N,T}
     for p in positions
-        if norm(pos - p) < 2R
+        if norm(pos - p) < sigma
             return true
         end
     end
@@ -289,7 +287,7 @@ abstract type Particle end
 
 
 export PassiveP
-mutable struct PassiveP{T<:AbstractFloat} <: Particle
+mutable struct PassiveP{T <: AbstractFloat} <: Particle
 	part_type::String
     part_id::Int
 	rad::T
@@ -304,9 +302,9 @@ end
 
 function PassiveP(; part_type::String = "Cold",
     part_id::Int = 0,
-    r::SVector=SVector{3,Float32}(ones(Float32,3)), 
-    v::SVector=SVector{3,Float32}(ones(Float32,3)), 
-    f::SVector=SVector{3,Float32}(ones(Float32,3)),
+    r::SVector=SVector{3,T}(ones(T,3)), 
+    v::SVector=SVector{3,T}(ones(T,3)), 
+    f::SVector=SVector{3,T}(ones(T,3)),
     density::T, η::T, Radii::T, α::T) where {T<:AbstractFloat}
     kB = T(1.380649*10^(-23))
     Temp = T(300.0)
@@ -394,12 +392,12 @@ mutable struct Simulation
     box::SVector
     particles::Array{Particle, 1}
     part_types::Vector{String}
-    ϵ::Float64
-    σ::Float64
-    neigh_cut_off::Float64
+    ϵ::Union{Float32,Float64}
+    σ::Union{Float32,Float64}
+    neigh_cut_off::Union{Float32,Float64}
     neigh_update::Int
     num_cold::Int
-    dt::Float64
+    dt::Union{Float32,Float64}
     integrator::String
     num_steps::Int
     save_interval::Int
@@ -408,15 +406,15 @@ mutable struct Simulation
 end
 
 function Simulation(; descriptor::String = "No description given...",
-    box::SVector=SVector{3,Float32}(ones(Float32,3)),
+    box::SVector=SVector{3,Union{Float32,Float64}}(ones(Float32,3)),
     particles::Array{Particle, 1} = Particle[],
     part_types::Vector{String}=["A","B"],
-    ϵ::Float64 = 5.0e6,
-    σ::Float64 = 2.0,
-    neigh_cut_off::Float64 = 5.0,
+    ϵ::Union{Float32,Float64} = 100.0f0,
+    σ::Union{Float32,Float64} = 1.0f0,
+    neigh_cut_off::Union{Float32,Float64} = 5.0f0,
     neigh_update::Int = 100000, 
     num_cold::Int = 1,
-    dt::Float64=0.0001,
+    dt::Union{Float32,Float64} = 0.00001f0,
     integrator::String = "vv",
     num_steps::Int = 0,
     save_interval::Int = 0,
@@ -424,3 +422,4 @@ function Simulation(; descriptor::String = "No description given...",
     output_file::String = "output")
     Simulation(descriptor,box, particles, part_types, ϵ, σ, neigh_cut_off, neigh_update, num_cold, dt,integrator, num_steps, save_interval, particles_to_save,output_file)
 end
+
