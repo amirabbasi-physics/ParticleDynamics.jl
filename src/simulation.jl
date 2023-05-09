@@ -151,7 +151,7 @@ function simulate!(
 	if simulation.integrator == "lf" || simulation.integrator == "em"
 		scale = T(1.0) .- c1 .* simulation.dt ./2
 	else
-		scale = ones(T,Npart)
+		scale = ones(Npart)
 	end
 	#println("check 4")
 	c3 = [T(sqrt(2*c1[i]*simulation.particles[i].α * scale[i] /simulation.dt)) for i=1:Npart]
