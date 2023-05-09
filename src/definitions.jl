@@ -87,38 +87,6 @@ function triangular_lattice(Npart::Int, box::SVector{N,T}, σ::T) where {N,T}
     return positions[1:Npart]
 end
 
-export circle_cut
-function circle_cut(r0::Array{SVector{N,T}}, rad::T,in::Bool) where {N,T}
-    new_pos = Array{SVector{2,T}, 1}()
-    if in
-        for i = 1:length(r0)
-            if norm(r0[i])/rad < 1.0
-                push!(new_pos , r0[i])
-            end
-        end
-    else
-        for i = 1:length(r0)
-            if norm(r0[i])/rad > 1.01
-                push!(new_pos , r0[i])
-            end
-        end
-    end
-
-    return new_pos
-end
-
-export sphere_cut
-function sphere_cut(r0::Array{SVector{N,T}}, rad::T) where {N,T}
-    r0_new = Array{SVector{3,T}, 1}()
-    #r_center = @SVector T[0.5*L_box,0.5*L_box,0.5*L_box]
-    for i = 1:length(r0)
-        if norm(r0[i])/rad <= 1
-            push!(r0_new , r0[i])
-        end
-    end
-    return r0_new
-end
-
 export simplecubic_lattice
 function simplecubic_lattice(Npart::Int, box::SVector{3,T}) where T
     positions = Array{SVector{3,T}, 1}()
@@ -219,19 +187,19 @@ function cut_circle_sphere!(box::SVector{N,T}, σ::T, Npart::Int, fraction::T,co
     dim = length(box)
     R = T(σ/2)
     if dim == 2
-        N_circle = Npart * fraction
-        rad = sqrt(N_circle)/(π/(1.0675*2sqrt(3)))
+        N_circle = Npart * fraction * cold_frac
+
+        rad = T(sqrt(N_circle)/(2π/(1.0675*2sqrt(3))))
         #rad = sqrt(N_circle)/(π/(2sqrt(3)))
         N_lattice = ceil(Int,2N_circle)
         r = triangular_lattice(N_lattice, σ)
         r_init  = circle_cut(r, rad, true)
-
     elseif dim == 3
 
         N_sphere = Int(ceil(Npart .* fraction))
         rad = T(cbrt(N_sphere))
         nn = Int(ceil(rad))
-        lattice_const = sqrt(2.0f0)*σ
+        lattice_const = T(sqrt(2)*σ)
         r = fcc_lattice(box,lattice_const, nn, nn, nn)
         
         r1  = sphere_cut(r, rad)
@@ -256,6 +224,38 @@ function cut_circle_sphere!(box::SVector{N,T}, σ::T, Npart::Int, fraction::T,co
         end
     end
     return r_init
+end
+
+export circle_cut
+function circle_cut(r0::Array{SVector{N,T}}, rad::T, in::Bool) where {N,T}
+    new_pos = Array{SVector{2,T}, 1}()
+    if in
+        for i = 1:length(r0)
+            if norm(r0[i])/rad < T(1.0)
+                push!(new_pos , r0[i])
+            end
+        end
+    else
+        for i = 1:length(r0)
+            if norm(r0[i])/rad > 1.01
+                push!(new_pos , r0[i])
+            end
+        end
+    end
+
+    return new_pos
+end
+
+export sphere_cut
+function sphere_cut(r0::Array{SVector{N,T}}, rad::T) where {N,T}
+    r0_new = Array{SVector{3,T}, 1}()
+    #r_center = @SVector T[0.5*L_box,0.5*L_box,0.5*L_box]
+    for i = 1:length(r0)
+        if norm(r0[i])/rad <= 1
+            push!(r0_new , r0[i])
+        end
+    end
+    return r0_new
 end
 
 export volume

@@ -63,11 +63,11 @@ function sim_run(;
         r_init = cut_circle_sphere!(box, sigma, Npart, fraction, cold_frac)
 		if length(r_init) <= num_cold
 			rr_remain = rectangular_lattice(2Npart,box)
-			rad = T(sqrt(ceil(Npart .* fraction))/(π/(1.0675*2sqrt(3))))
+			rad = T(sqrt(ceil(Npart .* fraction))/(2π/(1.0675*2sqrt(3))))
 			r_remain = circle_cut(rr_remain, rad, false)
 			shuffle!(r_remain)
 		else
-			println("Error!")
+			error("r_droplet size is more than cold particles size!")
 		end
 		n_remain = Npart - length(r_init)
 		r_init = append!(r_init, r_remain[1:n_remain])
