@@ -50,16 +50,16 @@ end
 
 # Append snapshot to GSD file
 function write_gsd(step::Int,simulation, part_id::Vector{Int},positions::Vector{SVector{N,T}}, velocities::Vector{SVector{N,T}}) where {N,T}
-
     gsdhoomd = pyimport("gsd.hoomd")
     output_file = simulation.output_file*".gsd"
+
     if isfile(output_file) && step !=0
         mode = "rb+"
     else 
         mode = "wb"
     end
     f = gsdhoomd.open(name = output_file, mode=mode)
-
+    
     box = simulation.box
     
     if length(box) == 2
@@ -67,8 +67,6 @@ function write_gsd(step::Int,simulation, part_id::Vector{Int},positions::Vector{
         velocities = [vcat(velocities[i],zero(T)) for i = 1:length(velocities)]       
     end
 
-    
-    
     s = gsdhoomd.Snapshot()
    
     s.configuration.step = step
@@ -83,6 +81,8 @@ function write_gsd(step::Int,simulation, part_id::Vector{Int},positions::Vector{
     elseif length(box) == 3
         s.configuration.box = vcat(box, zeros(eltype(box), 3))
     end
+
+
     f.append(s)
     f.close()
 end

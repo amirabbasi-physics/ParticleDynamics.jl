@@ -138,21 +138,22 @@ function simulate!(
 	
 	NN = hexagonal_neighbors(sigma = T(2^(1/6)), circ_R = simulation.neigh_cut_off)
 	Neighbors = CuArray(Matrix(zeros(Int,Npart,NN)))
-
+	#println("check 1")
 	if collision_calc
 		colls = CuVector(zeros(T,Npart))
 		coll_switch = CuArray(falses(Npart,NN))
 	end
-
+	
+	#println("check 2")
 	c1 = [T(sqrt(simulation.particles[i].τD/simulation.particles[i].τm)) for i=1:Npart]
 	scale = similar(c1)
-
+	#println("check 3")
 	if simulation.integrator == "lf" || simulation.integrator == "em"
 		scale = T(1.0) .- c1 .* simulation.dt ./2
 	else
 		scale = ones(T,Npart)
 	end
-
+	#println("check 4")
 	c3 = [T(sqrt(2*c1[i]*simulation.particles[i].α * scale[i] /simulation.dt)) for i=1:Npart]
 	c1 = CuVector(c1)
 	c3 = CuVector(c3)
@@ -165,7 +166,7 @@ function simulate!(
 	v = CuVector(v_c)
 	f_c = [simulation.particles[i].f for i=1:Npart]
 	f = CuVector(f_c)
-
+	#println("check 5")
 	dQ₀ = zeros(T,Npart)
 	Ekin = similar(dQ₀)
 	Epot = similar(dQ₀)
@@ -176,7 +177,9 @@ function simulate!(
 		f_r_c = zero(f_r_c)
 		f_r = CuVector(f_r_c)
 		f₀ = zero(f)
+		#println("check 6")
 		neighbor_list_new!(r,Neighbors,simulation.neigh_cut_off,simulation.box)
+		#println("check 7")
 		for step = 0:simulation.num_steps
 			if step % simulation.neigh_update == 0
 				neighbor_list_new!(r,Neighbors,simulation.neigh_cut_off,simulation.box)
@@ -193,7 +196,6 @@ function simulate!(
 
 			update_velocities_vv!(v, f₀, f, f_r, dQ, Eₖ, c1, simulation.dt, c3)
 			copyto!(f₀ , f)
-
 			if step % simulation.save_interval == 0
 				if collision_calc
 					copyto!(dQ₀,dQ)
@@ -214,7 +216,7 @@ function simulate!(
 					fill!(colls, zero(eltype(colls)))
 				end
 
-				@spawn begin
+				@async begin
 					if collision_calc
 						coll₀ ./= 2simulation.save_interval
 					end
@@ -222,15 +224,15 @@ function simulate!(
 					Ekin ./= simulation.save_interval
 					Epot ./= simulation.save_interval
 					if collision_calc
-						copyto!(r_c, Vector(r))
-						copyto!(v_c, Vector(v))
-						#r_c, v_c = Vector(r), Vector(v)
+						#copyto!(r_c, Vector(r))
+						#copyto!(v_c, Vector(v))
+						r_c, v_c = Vector(r), Vector(v)
 						write_gsd(step,simulation, part_id, r_c, v_c)
 						write_log(step, simulation, Ekin, Epot, dQ₀, coll₀)
 					else
-						copyto!(r_c, Vector(r))
-						copyto!(v_c, Vector(v))
-						#r_c, v_c = Vector(r), Vector(v)
+						#copyto!(r_c, Vector(r))
+						#copyto!(v_c, Vector(v))
+						r_c, v_c = Vector(r), Vector(v)
 						write_gsd(step,simulation, part_id, r_c, v_c)
 						write_log(step, simulation, Ekin, Epot, dQ₀)
 					end
