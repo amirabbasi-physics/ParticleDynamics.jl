@@ -86,6 +86,7 @@ function forces!(
 end
 
 #checked!
+
 function forces_kernel!(
     r::CuDeviceVector{T},
     f::CuDeviceVector{T},
@@ -174,6 +175,7 @@ function forces!(
     return nothing
 end
 
+
 #checked!
 function forces_kernel!(
     r::CuDeviceVector{T},
@@ -192,64 +194,54 @@ function forces_kernel!(
     gtid = (blockIdx().x - 1) * blockDim().x + tid  # global thread id
     NNeigh = size(Neighbors,2)
 
-
     cut_off = T1(2^(1/6))*σ
     cut_off² = cut_off^2
-    acc = zero(T)
-    epot= zero(T1)
-    coll = zero(T1)
+
     @inbounds begin
         if gtid <= Npart
             pos₁ = r[gtid]
-        else
-            pos₁ = zero(T)
-        end
-        acc = zero(T)
-        epot= zero(T1)
-        coll = zero(T1)
+            acc = zero(T)
+            epot= zero(T1)
+            coll = zero(T1)
 
-        @inbounds for j = 1:NNeigh
-            idx = Neighbors[gtid,j]
-            if idx != 0 
-                pos₂  = r[idx]
-            else
-                break
-            end
-            dx  = pos₁[1] - pos₂[1]
-            dy  = pos₁[2] - pos₂[2]
+            @inbounds for j = 1:NNeigh
+                idx = Neighbors[gtid,j]
+                if idx != 0 
+                    pos₂  = r[idx]
+                else
+                    break
+                end
 
-            dx = (2abs(dx) > box[1] ) ? dx - sign(dx) * box[1] : dx
-            dy = (2abs(dy) > box[2] ) ? dy - sign(dy) * box[2] : dy
+                dx  = pos₁[1] - pos₂[1]
+                dy  = pos₁[2] - pos₂[2]
 
-            dr² = dx*dx + dy*dy
+                dx = (2abs(dx) > box[1] ) ? dx - sign(dx) * box[1] : dx
+                dy = (2abs(dy) > box[2] ) ? dy - sign(dy) * box[2] : dy
 
-            if dr² > cut_off²
-                coll_switch[gtid,j] = false
-                frc = zero(T)
-                ep = zero(T1)
-                acc = acc .+ frc
-                epot = epot + ep          
-            else
-                if !coll_switch[gtid,j]                    
-                    if gtid <= num_cold
-                        if idx > num_cold
-                            coll += one(T1)
-                            coll_switch[gtid,j] = true
-                        end
-                    else
-                        if idx <= num_cold
-                            coll += one(T1)
-                            coll_switch[gtid,j] = true
+                dr² = dx*dx + dy*dy
+
+                if dr² > cut_off²
+                    coll_switch[gtid,j] = false
+                else
+                    if !coll_switch[gtid,j]                    
+                        if gtid <= num_cold
+                            if idx > num_cold
+                                coll += one(T1)
+                                coll_switch[gtid,j] = true
+                            end
+                        else
+                            if idx <= num_cold
+                                coll += one(T1)
+                                coll_switch[gtid,j] = true
+                            end
                         end
                     end
+                    frc, ep = WCA(dx, dy, dr², ϵ, σ)
+                    acc = acc .+ frc
+                    epot = epot + ep
                 end
-                frc, ep = WCA(dx, dy, dr², ϵ, σ)
-                acc = acc .+ frc
-                epot = epot + ep
             end
-        end
               
-        if gtid <= Npart
             f[gtid] = acc
             Epot[gtid] += epot
             colls[gtid] += coll 
@@ -257,6 +249,7 @@ function forces_kernel!(
     end
     return nothing
 end
+
 
 
 # NOT CHECKED!!!!!!!
