@@ -43,30 +43,16 @@ function em_kernel!(
     gtid = (blockIdx().x - 1) * blockDim().x + tid  # global thread id
     dt = c2
     @inbounds begin
-        if length(box) == 2
-            if gtid <= Npart
-                pos = r[gtid]
-                v_prev = v[gtid]
-                frc = f[gtid]
-                c1  = c1s[gtid]
-                c3  = c3s[gtid]
-                dQ  = dq[gtid]
-                Eₖ   = eₖ[gtid]
-                rnd = @SVector randn(T,2)
-            end
-        elseif length(box) == 3
-            if gtid <= Npart
-                pos = r[gtid]
-                v_prev = v[gtid]
-                frc = f[gtid]
-                c1  = c1s[gtid]
-                c3  = c3s[gtid]
-                dQ  = dq[gtid]
-                Eₖ   = eₖ[gtid]
-                rnd = @SVector randn(T,3)
-            end
-        end
         if gtid <= Npart
+            pos = r[gtid]
+            v_prev = v[gtid]
+            frc = f[gtid]
+            c1  = c1s[gtid]
+            c3  = c3s[gtid]
+            dQ  = dq[gtid]
+            Eₖ   = eₖ[gtid]
+            rnd = @SVector randn(T,N)
+
             rnd_force = c3 .* rnd
             a = c1*dt
             v_next = (1-a) .* v_prev .+ dt .* (frc .+ rnd_force)
@@ -78,15 +64,11 @@ function em_kernel!(
 
             dQ += -(injected_energy + dissipated_energy)                 # Minus sign indicates the dQ of the heat bath
             Eₖ += dot(v_next,v_next)/2
-        end
-        #sync_threads()
-        if gtid <= Npart
             r[gtid] = pos
             v[gtid] = v_next
             dq[gtid] = dQ
             eₖ[gtid] = Eₖ
         end
-       #sync_threads()
     end
     return nothing
 end
@@ -117,6 +99,7 @@ end
 
 export update_positions_kernel_vv!
 
+"""
 function update_positions_kernel_vv!(
     r::CuDeviceVector{SVector{N,T}},
     v::CuDeviceVector{SVector{N,T}},
@@ -162,6 +145,46 @@ function update_positions_kernel_vv!(
             pos = mod.(pos .+ box ./ 2, box) .- box ./ 2                    # Applying PBC!
         end
         if gtid <= Npart
+            r[gtid] = pos
+            f_r[gtid] = rnd
+        end
+
+     end
+     return nothing
+end
+"""
+
+function update_positions_kernel_vv!(
+    r::CuDeviceVector{SVector{N,T}},
+    v::CuDeviceVector{SVector{N,T}},
+    f::CuDeviceVector{SVector{N,T}},
+    f_r::CuDeviceVector{SVector{N,T}},
+    c1s::CuDeviceVector{T},
+    c2::T,
+    c3s::CuDeviceVector{T},
+    box::SVector{N,T}) where {N,T}
+
+    Npart = length(r)
+    tid = threadIdx().x
+    gtid = (blockIdx().x - 1) * blockDim().x + tid  # global thread id
+    dt  = c2
+    @inbounds begin
+        if gtid <= Npart
+            pos = r[gtid]
+            vel = v[gtid]
+            frc = f[gtid]
+            c1  = c1s[gtid]
+            c3  = c3s[gtid]
+            rnd = @SVector randn(T,N)
+
+            rnd_force = c3 .* rnd
+            a = c1*dt
+            bb = (1 / (1 + a/2))
+            bbdt = bb*dt
+            d_pos = bbdt .* vel .+ (bbdt*dt/2) .* (frc .+ rnd_force)
+            pos = pos .+ d_pos
+            pos = mod.(pos .+ box ./ 2, box) .- box ./ 2                    # Applying PBC!
+
             r[gtid] = pos
             f_r[gtid] = rnd
         end
@@ -225,10 +248,7 @@ function update_velocities_kernel_vv!(
             dQ  = dq[gtid]
             Eₖ   = eₖ[gtid]
             rnd = f_r[gtid]
-        end
 
-
-        if gtid <= Npart
             rnd_force = c3 .* rnd
             a = c1*dt
             bb = 1 / (1 + a/2)
@@ -241,9 +261,6 @@ function update_velocities_kernel_vv!(
 
             dQ += -(injected_energy + dissipated_energy)                 # Minus sign indicates the dQ of the heat bath
             Eₖ += dot(v_next,v_next)/2
-        end
-
-        if gtid <= Npart
             v[gtid]  = v_next
             dq[gtid] = dQ
             eₖ[gtid] = Eₖ
@@ -295,9 +312,6 @@ function update_positions_kernel_lf!(
             vel = v[gtid]
             pos = pos .+ (dt/2) .* vel
             pos = mod.(pos .+ box ./ 2, box) .- box ./ 2 
-        end
-
-        if gtid <= Npart
             r[gtid] = pos
         end
     end
@@ -343,29 +357,14 @@ function update_velocities_kernel_lf!(
 
     dt = c2
     @inbounds begin
-        if length(box) == 2
-            if gtid <= Npart
-                v_prev = v[gtid]
-                frc = f[gtid]
-                c1  = c1s[gtid]
-                c3  = c3s[gtid]
-                dQ  = dq[gtid]
-                Eₖ   = eₖ[gtid]
-                rnd = @SVector randn(T,2)
-            end
-        elseif length(box) == 3
-            if gtid <= Npart
-                v_prev = v[gtid]
-                frc = f[gtid]
-                c1  = c1s[gtid]
-                c3  = c3s[gtid]
-                dQ  = dq[gtid]
-                Eₖ   = eₖ[gtid]
-                rnd = @SVector randn(T,3)
-            end
-        end
-
         if gtid <= Npart
+            v_prev = v[gtid]
+            frc = f[gtid]
+            c1  = c1s[gtid]
+            c3  = c3s[gtid]
+            dQ  = dq[gtid]
+            Eₖ   = eₖ[gtid]
+            rnd = @SVector randn(T,N)
             rnd_force = c3 .* rnd
             a = c1*dt
             v_next = (1-a) .* v_prev .+ dt .* (frc .+ rnd_force)
@@ -375,8 +374,6 @@ function update_velocities_kernel_lf!(
 
             dQ += -(injected_energy + dissipated_energy)                 # Minus sign indicates the dQ of the heat bath
             Eₖ += dot(v_next,v_next)/2
-        end
-        if gtid <= Npart
             v[gtid]  = v_next
             dq[gtid] = dQ
             eₖ[gtid] = Eₖ

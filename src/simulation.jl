@@ -35,14 +35,14 @@ function sim_run(;
 	sigma = T(2^(1/6))*σ
 	neigh_cut_off *= sigma
     if homogeneous
-		if random_positions
+		if random_positions && (Npart <= 100000)
 			box = Box(dim = dim, Npart = Npart, ϕ = ϕ, sigma = sigma )
     		num_cold = ceil(Int, Npart*fraction)
 			r_init = [random_pos(box)]
 			for _ in 1:Npart-1
 				pos = random_pos(box)    
 				# Check for overlap with other particles
-				while check_overlap(pos, r_init, sigma + (1e-5))
+				while check_overlap(pos, r_init, box, sigma * T(1.05))
 					pos = random_pos(box)
 				end        
 				# Append the position to the list of positions
@@ -132,7 +132,7 @@ function simulate!(
 
 	Npart = length(simulation.particles)
 
-	dQ = CuVector(zeros(T,Npart))
+	dQ = CUDA.zeros(T,Npart)
 	Eₖ = similar(dQ)
 	Eₚ = similar(dQ)
 	
@@ -149,9 +149,9 @@ function simulate!(
 	scale = similar(c1)
 	#println("check 3")
 	if simulation.integrator == "lf" || simulation.integrator == "em"
-		scale = T(1.0) .- c1 .* simulation.dt ./2
+		scale .= T(1.0) .- c1 .* simulation.dt ./2
 	else
-		scale = ones(Npart)
+		scale = fill!(scale,T(1.0))
 	end
 	#println("check 4")
 	c3 = [T(sqrt(2*c1[i]*simulation.particles[i].α * scale[i] /simulation.dt)) for i=1:Npart]
@@ -171,43 +171,43 @@ function simulate!(
 	Ekin = similar(dQ₀)
 	Epot = similar(dQ₀)
 	coll₀ = similar(dQ₀)
-
+	
 	if simulation.integrator == "vv"
-		f_r_c = [simulation.particles[i].f for i=1:Npart]
-		f_r_c = zero(f_r_c)
-		f_r = CuVector(f_r_c)
-		f₀ = zero(f)
-		#println("check 6")
-		neighbor_list_new!(r,Neighbors,simulation.neigh_cut_off,simulation.box)
-		#println("check 7")
+		f_r = CUDA.zeros(eltype(f), size(f))
+		f₀ = CUDA.zeros(eltype(f), size(f))
+		neighbor_list!(r, Neighbors, simulation.neigh_cut_off, simulation.box)
+	
 		for step = 0:simulation.num_steps
 			if step % simulation.neigh_update == 0
-				neighbor_list_new!(r,Neighbors,simulation.neigh_cut_off,simulation.box)
+				neighbor_list!(r, Neighbors, simulation.neigh_cut_off, simulation.box)
 			end
-			copyto!(f , f₀)
-			update_positions_vv!(r, v, f₀, f_r, c1, simulation.dt, c3,simulation.box)
-
+			
+			update_positions_vv!(r, v, f₀, f_r, c1, simulation.dt, c3, simulation.box)
+	
 			if collision_calc
 				forces!(r, f, Eₚ, Neighbors, simulation.num_cold, colls, coll_switch, simulation.box, simulation.ϵ, simulation.σ)
 			else
 				forces!(r, f, Eₚ, Neighbors, simulation.box, simulation.ϵ, simulation.σ)
 			end
-
-
+	
 			update_velocities_vv!(v, f₀, f, f_r, dQ, Eₖ, c1, simulation.dt, c3)
-			copyto!(f₀ , f)
+	
 			if step % simulation.save_interval == 0
 				if collision_calc
-					copyto!(dQ₀,dQ)
-					copyto!(Epot,Eₚ)
-					copyto!(Ekin,Eₖ)
-					copyto!(coll₀,colls)
-				else
-					copyto!(dQ₀,dQ)
-					copyto!(Epot,Eₚ)
-					copyto!(Ekin,Eₖ)
+					colls ./= 2simulation.save_interval
 				end
+				dQ ./= simulation.save_interval
+				Eₖ ./= simulation.save_interval
+				Eₚ ./= simulation.save_interval
 
+				dQ₀ .= Array(dQ) 
+				Ekin .= Array(Eₖ)
+				Epot .= Array(Eₚ)
+	
+				if collision_calc
+					coll₀ .= Array(colls)
+				end
+	
 				fill!(dQ, zero(eltype(dQ)))
 				fill!(Eₖ, zero(eltype(Eₖ)))
 				fill!(Eₚ, zero(eltype(Eₚ)))
@@ -215,35 +215,23 @@ function simulate!(
 				if collision_calc
 					fill!(colls, zero(eltype(colls)))
 				end
-
+	
 				@async begin
+					r_c, v_c = Vector(r), Vector(v)
+					write_gsd(step, simulation, part_id, r_c, v_c)
 					if collision_calc
-						coll₀ ./= 2simulation.save_interval
-					end
-					dQ₀ ./= simulation.save_interval
-					Ekin ./= simulation.save_interval
-					Epot ./= simulation.save_interval
-					if collision_calc
-						#copyto!(r_c, Vector(r))
-						#copyto!(v_c, Vector(v))
-						r_c, v_c = Vector(r), Vector(v)
-						write_gsd(step,simulation, part_id, r_c, v_c)
 						write_log(step, simulation, Ekin, Epot, dQ₀, coll₀)
 					else
-						#copyto!(r_c, Vector(r))
-						#copyto!(v_c, Vector(v))
-						r_c, v_c = Vector(r), Vector(v)
-						write_gsd(step,simulation, part_id, r_c, v_c)
 						write_log(step, simulation, Ekin, Epot, dQ₀)
 					end
-				end		
+				end
 			end
-		end
+		end	
 	elseif simulation.integrator == "em"
-		neighbor_list_new!(r,Neighbors,simulation.neigh_cut_off,simulation.box)
+		neighbor_list!(r,Neighbors,simulation.neigh_cut_off,simulation.box)
 		for step = 0:simulation.num_steps
 			if step % simulation.neigh_update == 0
-				neighbor_list_new!(r,Neighbors,simulation.neigh_cut_off,simulation.box)
+				neighbor_list!(r,Neighbors,simulation.neigh_cut_off,simulation.box)
 			end
 
 			if collision_calc
@@ -255,18 +243,20 @@ function simulate!(
 			update_particles_em!(r, v, f, dQ, Eₖ, c1, simulation.dt, c3,simulation.box)
 			if step % simulation.save_interval == 0
 				if collision_calc
-					copyto!(dQ₀,dQ)
-					copyto!(Epot,Eₚ)
-					copyto!(Ekin,Eₖ)
-					copyto!(coll₀,colls)
-					#dQ₀, Epot, Ekin, coll₀ = Vector(dQ), Vector(Eₚ), Vector(Eₖ), Vector{Float64}(colls)
-				else
-					#dQ₀, Epot, Ekin = Vector(dQ), Vector(Eₚ), Vector(Eₖ)
-					copyto!(dQ₀,dQ)
-					copyto!(Epot,Eₚ)
-					copyto!(Ekin,Eₖ)
+					colls ./= 2simulation.save_interval
 				end
+				dQ ./= simulation.save_interval
+				Eₖ ./= simulation.save_interval
+				Eₚ ./= simulation.save_interval
 
+				dQ₀ .= Array(dQ) 
+				Ekin .= Array(Eₖ)
+				Epot .= Array(Eₚ)
+	
+				if collision_calc
+					coll₀ .= Array(colls)
+				end
+	
 				fill!(dQ, zero(eltype(dQ)))
 				fill!(Eₖ, zero(eltype(Eₖ)))
 				fill!(Eₚ, zero(eltype(Eₚ)))
@@ -274,35 +264,23 @@ function simulate!(
 				if collision_calc
 					fill!(colls, zero(eltype(colls)))
 				end
-
-				@spawn begin
+	
+				@async begin
+					r_c, v_c = Vector(r), Vector(v)
+					write_gsd(step, simulation, part_id, r_c, v_c)
 					if collision_calc
-						coll₀ ./= 2simulation.save_interval
-					end
-					dQ₀ ./= simulation.save_interval
-					Ekin ./= simulation.save_interval
-					Epot ./= simulation.save_interval
-					if collision_calc
-						copyto!(r_c, Vector(r))
-						copyto!(v_c, Vector(v))
-						#r_c, v_c = Vector(r), Vector(v)
-						write_gsd(step,simulation, part_id, r_c, v_c)
 						write_log(step, simulation, Ekin, Epot, dQ₀, coll₀)
 					else
-						copyto!(r_c, Vector(r))
-						copyto!(v_c, Vector(v))
-						#r_c, v_c = Vector(r), Vector(v)
-						write_gsd(step,simulation, part_id, r_c, v_c)
 						write_log(step, simulation, Ekin, Epot, dQ₀)
 					end
-				end		
+				end
 			end
 		end
 	elseif simulation.integrator == "lf"
-		neighbor_list_new!(r,Neighbors,simulation.neigh_cut_off,simulation.box)
+		neighbor_list!(r,Neighbors,simulation.neigh_cut_off,simulation.box)
 		for step = 0:simulation.num_steps
 			if step % simulation.neigh_update == 0
-				neighbor_list_new!(r,Neighbors,simulation.neigh_cut_off,simulation.box)
+				neighbor_list!(r,Neighbors,simulation.neigh_cut_off,simulation.box)
 			end
 			update_positions_lf!(r, v, simulation.dt, simulation.box)
 
@@ -319,16 +297,20 @@ function simulate!(
 
 			if step % simulation.save_interval == 0
 				if collision_calc
-					copyto!(dQ₀,dQ)
-					copyto!(Epot,Eₚ)
-					copyto!(Ekin,Eₖ)
-					copyto!(coll₀,colls)
-				else
-					copyto!(dQ₀,dQ)
-					copyto!(Epot,Eₚ)
-					copyto!(Ekin,Eₖ)
+					colls ./= 2simulation.save_interval
 				end
+				dQ ./= simulation.save_interval
+				Eₖ ./= simulation.save_interval
+				Eₚ ./= simulation.save_interval
 
+				dQ₀ .= Array(dQ) 
+				Ekin .= Array(Eₖ)
+				Epot .= Array(Eₚ)
+	
+				if collision_calc
+					coll₀ .= Array(colls)
+				end
+	
 				fill!(dQ, zero(eltype(dQ)))
 				fill!(Eₖ, zero(eltype(Eₖ)))
 				fill!(Eₚ, zero(eltype(Eₚ)))
@@ -336,28 +318,16 @@ function simulate!(
 				if collision_calc
 					fill!(colls, zero(eltype(colls)))
 				end
-
-				@spawn begin
+	
+				@async begin
+					r_c, v_c = Vector(r), Vector(v)
+					write_gsd(step, simulation, part_id, r_c, v_c)
 					if collision_calc
-						coll₀ ./= 2simulation.save_interval
-					end
-					dQ₀ ./= simulation.save_interval
-					Ekin ./= simulation.save_interval
-					Epot ./= simulation.save_interval
-					if collision_calc
-						copyto!(r_c, Vector(r))
-						copyto!(v_c, Vector(v))
-						#r_c, v_c = Vector(r), Vector(v)
-						write_gsd(step,simulation, part_id, r_c, v_c)
 						write_log(step, simulation, Ekin, Epot, dQ₀, coll₀)
 					else
-						copyto!(r_c, Vector(r))
-						copyto!(v_c, Vector(v))
-						#r_c, v_c = Vector(r), Vector(v)
-						write_gsd(step,simulation, part_id, r_c, v_c)
 						write_log(step, simulation, Ekin, Epot, dQ₀)
 					end
-				end		
+				end
 			end
 		end
 	end

@@ -172,13 +172,42 @@ function isincircle(pos::SVector{2,T}, rad::T, r_margin::T) where T
 end
 
 export check_overlap
-function check_overlap(pos::SVector{N,T}, positions::Vector{SVector{N,T}}, sigma::T) where {N,T}
-    for p in positions
-        if norm(pos - p) < sigma
-            return true
+function check_overlap(pos::SVector{N,T}, positions::Vector{SVector{N,T}}, box::SVector{N,T}, sigma::T) where {N,T}
+    dim = length(box)
+
+    if dim == 2
+        for p in positions
+
+            dx  = pos[1] - p[1]
+            dy  = pos[2] - p[2]
+    
+            dx = (2abs(dx) > box[1] ) ? dx - sign(dx) * box[1] : dx
+            dy = (2abs(dy) > box[2] ) ? dy - sign(dy) * box[2] : dy
+    
+            dr² = dx*dx + dy*dy
+            if dr² <= sigma^2
+                return true
+            end
         end
+        return false
+    elseif dim == 3
+        for p in positions
+
+            dx  = pos[1] - p[1]
+            dy  = pos[2] - p[2]
+            dz  = pos[3] - p[3]
+    
+            dx = (2abs(dx) > box[1] ) ? dx - sign(dx) * box[1] : dx
+            dy = (2abs(dy) > box[2] ) ? dy - sign(dy) * box[2] : dy
+            dz = (2abs(dz) > box[2] ) ? dz - sign(dz) * box[2] : dz
+    
+            dr² = dx*dx + dy*dy + dz*dz
+            if dr² <= sigma^2
+                return true
+            end
+        end
+        return false
     end
-    return false
 end
 
 export cut_circle_sphere
