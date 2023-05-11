@@ -133,23 +133,24 @@ function simulate!(
 	Npart = length(simulation.particles)
 
 	dQ = CUDA.zeros(T,Npart)
-	Eₖ = similar(dQ)
+	Eₖ = CUDA.zeros(Float64,Npart)
 	Eₚ = similar(dQ)
 	
 	NN = hexagonal_neighbors(sigma = T(2^(1/6)), circ_R = simulation.neigh_cut_off)
 	Neighbors = CuArray(Matrix(zeros(Int,Npart,NN)))
 	#println("check 1")
 	if collision_calc
-		colls = CuVector(zeros(T,Npart))
+		colls = CUDA.zeros(T,Npart)
 		coll_switch = CuArray(falses(Npart,NN))
 	end
 	
 	#println("check 2")
 	c1 = [T(sqrt(simulation.particles[i].τD/simulation.particles[i].τm)) for i=1:Npart]
+	alpha_list = [Float64(simulation.particles[i].α) for i=1:Npart]
 	scale = similar(c1)
 	#println("check 3")
 	if simulation.integrator == "lf" || simulation.integrator == "em"
-		scale .= T(1.0) .- c1 .* simulation.dt ./2
+		scale .= T.(1.0 .- c1 .* simulation.dt ./2)
 	else
 		scale = fill!(scale,T(1.0))
 	end
@@ -157,6 +158,7 @@ function simulate!(
 	c3 = [T(sqrt(2*c1[i]*simulation.particles[i].α * scale[i] /simulation.dt)) for i=1:Npart]
 	c1 = CuVector(c1)
 	c3 = CuVector(c3)
+	alpha_d = CuVector(alpha_list)
 
 	part_id = [simulation.particles[i].part_id for i=1:Npart]
 
@@ -167,11 +169,20 @@ function simulate!(
 	f_c = [simulation.particles[i].f for i=1:Npart]
 	f = CuVector(f_c)
 	#println("check 5")
+	"""
 	dQ₀ = zeros(T,Npart)
 	Ekin = similar(dQ₀)
 	Epot = similar(dQ₀)
 	coll₀ = similar(dQ₀)
-	
+	"""
+
+	dQ₀ = zeros(Float64)
+	Ekin = similar(dQ₀)
+	Ekin_alpha = similar(dQ₀)
+	Epot = similar(dQ₀)
+	coll₀ = similar(dQ₀)
+
+"""	
 	if simulation.integrator == "vv"
 		f_r = CUDA.zeros(eltype(f), size(f))
 		f₀ = CUDA.zeros(eltype(f), size(f))
@@ -224,6 +235,68 @@ function simulate!(
 					else
 						write_log(step, simulation, Ekin, Epot, dQ₀)
 					end
+				end
+			end
+		end	
+	"""
+	if simulation.integrator == "vv"
+		f_r = CUDA.zeros(eltype(f), size(f))
+		f₀ = CUDA.zeros(eltype(f), size(f))
+		neighbor_list!(r, Neighbors, simulation.neigh_cut_off, simulation.box)
+	
+		for step = 0:simulation.num_steps
+			if step % simulation.neigh_update == 0
+				neighbor_list!(r, Neighbors, simulation.neigh_cut_off, simulation.box)
+			end
+			
+			update_positions_vv!(r, v, f₀, f_r, c1, simulation.dt, c3, simulation.box)
+	
+			if collision_calc
+				forces!(r, f, Eₚ, Neighbors, simulation.num_cold, colls, coll_switch, simulation.box, simulation.ϵ, simulation.σ)
+			else
+				forces!(r, f, Eₚ, Neighbors, simulation.box, simulation.ϵ, simulation.σ)
+			end
+	
+			update_velocities_vv!(v, f₀, f, f_r, dQ, Eₖ, c1, simulation.dt, c3)
+	
+			if step % simulation.save_interval == 0
+				if collision_calc
+					coll₀ = Float64.(sum(colls)) / (2 * simulation.save_interval)
+				end
+				
+				# Pre-allocate
+				c1_d = Float64.(c1)
+				
+				@. dQ = dQ ./ alpha_d
+				dQ₀ = Float64.(sum(dQ)) / simulation.save_interval
+				
+				Ekin = sum(Eₖ) / simulation.save_interval
+				
+				@. Eₖ = 2 * c1_d * Eₖ ./ alpha_d
+				Ekin_alpha_numerator = sum(Eₖ)
+				Ekin_alpha = (Ekin_alpha_numerator / simulation.save_interval) - Float64.(sum(c1_d .* length(simulation.box)))
+				
+				Epot = Float64(sum(Eₚ)) / simulation.save_interval
+	
+				fill!(dQ, zero(eltype(dQ)))
+				fill!(Eₖ, zero(eltype(Eₖ)))
+				fill!(Eₚ, zero(eltype(Eₚ)))
+				
+				if collision_calc
+					fill!(colls, zero(eltype(colls)))
+				end
+	
+				begin
+					r_c, v_c = Vector(r), Vector(v)
+					write_gsd(step, simulation, part_id, r_c, v_c)
+					write_log(step, simulation, Ekin, Epot, dQ₀, Ekin_alpha, coll₀)
+					"""
+					if collision_calc
+						write_log(step, simulation, Ekin, Epot, dQ₀, Ekin_alpha, coll₀)
+					else
+						write_log(step, simulation, Ekin, Epot, dQ₀)
+					end
+					"""
 				end
 			end
 		end	
