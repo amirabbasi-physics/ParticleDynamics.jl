@@ -452,3 +452,79 @@ function Simulation(; descriptor::String = "No description given...",
     Simulation(descriptor,box, particles, part_types, ϵ, σ, neigh_cut_off, neigh_update, num_cold, dt,integrator, num_steps, save_interval, particles_to_save,output_file)
 end
 
+
+"""
+
+mutable struct Simulation
+    descriptor::String
+    box::SVector
+    particles::Array{Particle, 1}
+    part_types::Vector{String}
+    ϵ::Union{Float32,Float64}
+    σ::Union{Float32,Float64}
+    neigh_cut_off::Union{Float32,Float64}
+    neigh_update::Int
+    num_cold::Int
+    dt::Union{Float32,Float64}
+    integrator::String
+    num_steps::Int
+    save_interval::Int
+    particles_to_save::Array{Particle, 1}
+    output_file::String
+    num_runs::Int
+    homogeneous::Bool
+    collision_calc::Bool
+    ϕ::Union{Float32,Float64}
+    fraction::Union{Float32,Float64}
+    cold_frac::Union{Float32,Float64}
+    R::Union{Float32,Float64}
+    α₁::Union{Float32,Float64}
+    α₂::Union{Float32,Float64}
+    random_positions::Bool
+end
+
+function Simulation(; descriptor::String = "No description given...",
+    box::SVector=SVector{3,Union{Float32,Float64}}(ones(Float32,3)),
+    particles::Array{Particle, 1} = Particle[],
+    part_types::Vector{String}=["A","B"],
+    ϵ::Union{Float32,Float64} = 100.0f0,
+    σ::Union{Float32,Float64} = 1.0f0,
+    neigh_cut_off::Union{Float32,Float64} = 5.0f0,
+    neigh_update::Int = 100000, 
+    num_cold::Int = 1,
+    dt::Union{Float32,Float64} = 0.00001f0,
+    integrator::String = "vv",
+    num_steps::Int = 0,
+    save_interval::Int = 0,
+    particles_to_save::Array{Particle, 1} =  Particle[],
+    output_file::String = "output",
+    num_runs::Int = 1,
+    homogeneous::Bool = true,
+    collision_calc::Bool = true,
+    Npart::Int = 1,
+    p_ids::Vector{Int} = [1],
+    dim::Int = 3,
+    ϕ::Union{Float32,Float64} = 1.0f0,
+    fraction::Union{Float32,Float64} = 0.5f0,
+    cold_frac::Union{Float32,Float64} = 0.5f0,
+    R::Union{Float32,Float64} = 1.0f0,
+    α₁::Union{Float32,Float64} = 1.0f0,
+    α₂::Union{Float32,Float64} = 1.0f0,
+    Δt_prod::Union{Float32,Float64} = 0.00001f0,
+    random_positions::Bool = true)
+    Simulation(descriptor,box, particles, part_types, ϵ, σ, neigh_cut_off, neigh_update, num_cold, dt,integrator, num_steps, save_interval, particles_to_save,output_file)
+end   
+
+descriptor, box,particles,part_types,ϵ,σ,neigh_cut_off,neigh_update, num_cold,dt,integrator,num_steps,save_interval,particles_to_save,output_file,num_runs,homogeneous, collision_calc,Npart,
+    p_ids::Vector{Int} = [1],
+    dim::Int = 3,
+    ϕ::Union{Float32,Float64} = 1.0f0,
+    fraction::Union{Float32,Float64} = 0.5f0,
+    cold_frac::Union{Float32,Float64} = 0.5f0,
+    R::Union{Float32,Float64} = 1.0f0,
+    α₁::Union{Float32,Float64} = 1.0f0,
+    α₂::Union{Float32,Float64} = 1.0f0,
+    Δt_prod::Union{Float32,Float64} = 0.00001f0,
+    random_positions::Bool = true
+
+"""

@@ -145,9 +145,9 @@ function write_log(
 
     output_file = simulation.output_file*".log"
     sdot = sum(dQ ./ α_list)
-    sdotpp = sdot/length(simulation.particles)
-    Ekin = sum(Eₖ)
-    Epot = sum(Eₚ)
+    sdotpp = sdot/(simulation.save_interval*length(simulation.particles))
+    Ekin = sum(Eₖ)./simulation.save_interval
+    Epot = sum(Eₚ)./simulation.save_interval
 
     c1 = [sqrt(simulation.particles[i].τD/simulation.particles[i].τm) for i=1:length(simulation.particles)]
 
@@ -177,3 +177,179 @@ function write_log(
     end
 end
 
+function write_log(
+    step::Int,
+    simulation,
+    Eₖ::Float64,
+    Eₚ::Float64,
+    sdot::Float64,
+    Eₖ_α::Float64,
+    colls::Float64) 
+
+    coll_cold_hot   = colls / simulation.dt
+
+    output_file = simulation.output_file*".log"
+
+    sdotpp = sdot/length(simulation.particles)
+    Ekin = Eₖ
+    Epot = Eₚ
+
+    sdotpp_ave = Eₖ_α/length(simulation.particles)
+
+
+    step_str = @sprintf("%+.5e", step)
+    Ekin_str = @sprintf("%+.5e", Ekin)
+    Epot_str = @sprintf("%+.5e", Epot)
+    sdot_str = @sprintf("%+.5e", sdot)
+    sdotpp_str = @sprintf("%+.5e", sdotpp)
+    sdotpp_ave_str = @sprintf("%+.5e", sdotpp_ave)
+    coll_cold_hot_str = @sprintf("%+.5e", coll_cold_hot)
+    data = join([step_str, Ekin_str, Epot_str, sdot_str, sdotpp_str, sdotpp_ave_str, coll_cold_hot_str], "\t")
+
+    if step == 0
+       open(output_file,"w") do file
+        println(file,"     Time     |     E_kin     |     E_pot     |      EPR      |  EPR / part  | EPR / part Ave | cold/hot coll rate ")
+        #writedlm(file,data)
+        end
+    else
+        open(output_file,"a+") do file
+            println("Time = ",step_str, " | E_kin = ", Ekin_str," | E_pot = ", Epot_str, " | EPR = " ,sdot_str, " | EPR per particle = " ,sdotpp_str, "  |  EPR per particle averaged = " ,sdotpp_ave_str,"  |  cold/hot coll rate = " ,coll_cold_hot_str)
+            #println(coll_tot - coll_hot_hot -coll_cold_hot - coll_cold_cold)
+            println(file,data)
+        end
+    end
+end
+
+
+
+
+"""
+
+
+function write_log(
+    step::Int,
+    simulation,
+    Eₖ::Vector{T},
+    Eₚ::Vector{T},
+    dQ::Vector{T}) where T
+
+    c1 = [sqrt(simulation.particles[i].τD/simulation.particles[i].τm) for i=1:length(simulation.particles)]
+    α_list = [simulation.particles[i].α for i = 1:length(simulation.particles)]
+
+    output_file = simulation.output_file*".log"
+    sdot = sum(dQ ./ α_list)
+    sdotpp = sdot/length(simulation.particles)
+    Ekin = sum(Eₖ)
+    Epot = sum(Eₚ)
+
+    
+    c1_64 = Float64.(c1)
+    Eₖ_64 = Float64.(Eₖ)
+    α_list_64 = Float64.(α_list)
+
+    sdotpp_ave = sum(sort(c1_64 .* ( 2 .* Eₖ_64 ./ α_list_64 .- length(simulation.box))))/length(simulation.particles)
+
+
+    step_str = @sprintf("%+.5e", step)
+    Ekin_str = @sprintf("%+.5e", Ekin)
+    Epot_str = @sprintf("%+.5e", Epot)
+    sdot_str = @sprintf("%+.5e", sdot)
+    sdotpp_str = @sprintf("%+.5e", sdotpp)
+    sdotpp_ave_str = @sprintf("%+.5e", sdotpp_ave)
+    data = join([step_str, Ekin_str, Epot_str, sdot_str, sdotpp_str, sdotpp_ave_str], "\t")
+
+    if step == 0
+       open(output_file,"w") do file
+        # Print simulation details
+        println(file, "Simulation Details:")
+        println(file, "Descriptor: ", simulation.descriptor)
+        println(file, "Box: ", simulation.box)
+        println(file, "Part types: ", simulation.part_types)
+        println(file, "ϵ: ", simulation.ϵ)
+        println(file, "σ: ", simulation.σ)
+        println(file, "Neighbour cut-off: ", simulation.neigh_cut_off)
+        println(file, "Neighbour update: ", simulation.neigh_update)
+        println(file, "Number of cold particles: ", simulation.num_cold)
+        println(file, "dt: ", simulation.dt)
+        println(file, "Integrator: ", simulation.integrator)
+        println(file, "Number of steps: ", simulation.num_steps)
+        println(file, "Save interval: ", simulation.save_interval)
+        println(file,"     Time     |     E_kin     |     E_pot     |     EPR    | EPR per part | EPR per part ave ")
+        #writedlm(file,data)
+        end
+    else
+        open(output_file,"a+") do file
+            println("Time = ",step_str, " | E_kin = ", Ekin_str," | E_pot = ", Epot_str, " | EPR = " ,sdot_str, " | EPR per particle = " ,sdotpp_str, "  |  EPR per particle averaged = " ,sdotpp_ave_str)
+            println(file,data)
+        end
+    end
+end
+
+
+
+function write_log(
+    step::Int,
+    simulation,
+    Eₖ::Vector{T},
+    Eₚ::Vector{T},
+    dQ::Vector{T},
+    colls::Vector{T}) where T
+
+    coll_cold_hot   = sum(colls) / simulation.dt
+
+    α_list = [simulation.particles[i].α for i = 1:length(simulation.particles)]
+
+    output_file = simulation.output_file*".log"
+    sdot = sum(dQ ./ α_list)
+    sdotpp = sdot/length(simulation.particles)
+    Ekin = sum(Eₖ)
+    Epot = sum(Eₚ)
+
+    c1 = [sqrt(simulation.particles[i].τD/simulation.particles[i].τm) for i=1:length(simulation.particles)]
+
+    c1_64 = Float64.(c1)
+    Eₖ_64 = Float64.(Eₖ)
+    α_list_64 = Float64.(α_list)
+
+    
+    ssdotpp_ave = sum(sort(c1_64 .* ( 2 .* Eₖ_64 ./ α_list_64 .- length(simulation.box))))/length(simulation.particles)
+
+
+    step_str = @sprintf("%+.5e", step)
+    Ekin_str = @sprintf("%+.5e", Ekin)
+    Epot_str = @sprintf("%+.5e", Epot)
+    sdot_str = @sprintf("%+.5e", sdot)
+    sdotpp_str = @sprintf("%+.5e", sdotpp)
+    sdotpp_ave_str = @sprintf("%+.5e", sdotpp_ave)
+    coll_cold_hot_str = @sprintf("%+.5e", coll_cold_hot)
+    data = join([step_str, Ekin_str, Epot_str, sdot_str, sdotpp_str, sdotpp_ave_str, coll_cold_hot_str], "\t")
+
+    if step == 0
+       open(output_file,"w") do file
+                # Print simulation details
+        println(file, "Simulation Details:")
+        println(file, "Descriptor: ", simulation.descriptor)
+        println(file, "Box: ", simulation.box)
+        println(file, "Part types: ", simulation.part_types)
+        println(file, "ϵ: ", simulation.ϵ)
+        println(file, "σ: ", simulation.σ)
+        println(file, "Neighbour cut-off: ", simulation.neigh_cut_off)
+        println(file, "Neighbour update: ", simulation.neigh_update)
+        println(file, "Number of cold particles: ", simulation.num_cold)
+        println(file, "dt: ", simulation.dt)
+        println(file, "Integrator: ", simulation.integrator)
+        println(file, "Number of steps: ", simulation.num_steps)
+        println(file, "Save interval: ", simulation.save_interval)
+        println(file,"     Time     |     E_kin     |     E_pot     |      EPR      |  EPR / part  | EPR / part Ave | cold/hot coll rate ")
+        #writedlm(file,data)
+        end
+    else
+        open(output_file,"a+") do file
+            println("Time = ",step_str, " | E_kin = ", Ekin_str," | E_pot = ", Epot_str, " | EPR = " ,sdot_str, " | EPR per particle = " ,sdotpp_str, "  |  EPR per particle averaged = " ,sdotpp_ave_str,"  |  cold/hot coll rate = " ,coll_cold_hot_str)
+            #println(coll_tot - coll_hot_hot -coll_cold_hot - coll_cold_cold)
+            println(file,data)
+        end
+    end
+end
+
+"""
