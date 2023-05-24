@@ -10,19 +10,19 @@ function update_particles_em!(
     v::CuVector{SVector{N,T}}, 
     f::CuVector{SVector{N,T}},
     dq::CuVector{T},
-    eₖ::CuVector{T},
+    eₖ::CuVector{T1},
     c1s::CuVector{T},
-    c2::T,
+    dt::T,
     c3s::CuVector{T},
-    box::SVector{N,T}) where {N,T}
+    box::SVector{N,T}) where {N,T,T1}
 
-    kernel = @cuda launch=false em_kernel!(r, v, f, dq, eₖ, c1s, c2, c3s, box)
+    kernel = @cuda launch=false em_kernel!(r, v, f, dq, eₖ, c1s, dt, c3s, box)
 
     Npart = length(r)
     config = launch_configuration(kernel.fun)
     nthreads = Base.min(Npart, config.threads)
     nblocks = cld(Npart, nthreads)
-    CUDA.@sync kernel(r, v, f, dq, eₖ, c1s, c2, c3s, box; threads=nthreads, blocks=nblocks)
+    CUDA.@sync kernel(r, v, f, dq, eₖ, c1s, dt, c3s, box; threads=nthreads, blocks=nblocks)
     return nothing
 end
 
@@ -33,15 +33,14 @@ function em_kernel!(
     v::CuDeviceVector{SVector{N,T}}, 
     f::CuDeviceVector{SVector{N,T}},
     dq::CuDeviceVector{T},
-    eₖ::CuDeviceVector{T}, 
+    eₖ::CuDeviceVector{T1}, 
     c1s::CuDeviceVector{T},
-    c2::T,
+    dt::T,
     c3s::CuDeviceVector{T}, 
-    box::SVector{N,T}) where {N,T}
+    box::SVector{N,T}) where {N,T,T1}
     Npart = length(r)
     tid = threadIdx().x
     gtid = (blockIdx().x - 1) * blockDim().x + tid  # global thread id
-    dt = c2
     @inbounds begin
         if gtid <= Npart
             pos = r[gtid]
@@ -57,10 +56,11 @@ function em_kernel!(
             a = c1*dt
             v_next = (1-a) .* v_prev .+ dt .* (frc .+ rnd_force)
             pos = pos .+ dt .* v_next
+
             pos = mod.(pos .+ box ./ 2, box) .- box ./ 2                    # Applying PBC!
 
             injected_energy = dot((v_prev .+ v_next), rnd_force)/2
-            dissipated_energy = - c1*dot(v_prev ,v_prev)*(1.0-a/2)
+            dissipated_energy = - c1*dot(v_prev ,v_prev)*(1-a/2)
 
             dQ += -(injected_energy + dissipated_energy)                 # Minus sign indicates the dQ of the heat bath
             Eₖ += dot(v_next,v_next)/2
@@ -72,6 +72,8 @@ function em_kernel!(
     end
     return nothing
 end
+
+
 #####################################################################################
 #               Positions and velocities update for Verlet-type algorithm           #
 #####################################################################################
@@ -83,76 +85,22 @@ function update_positions_vv!(
     f::CuVector{SVector{N,T}},
     f_r::CuVector{SVector{N,T}},
     c1s::CuVector{T},
-    c2::T,
+    dt::T,
     c3s::CuVector{T},
     box::SVector{N,T}) where {N,T}
 
-    kernel = @cuda launch=false update_positions_kernel_vv!(r, v, f,f_r, c1s, c2, c3s, box)
+    kernel = @cuda launch=false update_positions_kernel_vv!(r, v, f,f_r, c1s, dt, c3s, box)
 
     Npart = length(r)
     config = launch_configuration(kernel.fun)
     nthreads = Base.min(Npart, config.threads)
     nblocks = cld(Npart, nthreads)
-    CUDA.@sync kernel(r, v, f, f_r, c1s, c2, c3s, box; threads=nthreads, blocks=nblocks)
+    CUDA.@sync kernel(r, v, f, f_r, c1s, dt, c3s, box; threads=nthreads, blocks=nblocks)
     return nothing
 end
 
 export update_positions_kernel_vv!
 
-"""
-function update_positions_kernel_vv!(
-    r::CuDeviceVector{SVector{N,T}},
-    v::CuDeviceVector{SVector{N,T}},
-    f::CuDeviceVector{SVector{N,T}},
-    f_r::CuDeviceVector{SVector{N,T}},
-    c1s::CuDeviceVector{T},
-    c2::T,
-    c3s::CuDeviceVector{T},
-    box::SVector{N,T}) where {N,T}
-
-    Npart = length(r)
-    tid = threadIdx().x
-    gtid = (blockIdx().x - 1) * blockDim().x + tid  # global thread id
-    dt  = c2
-    @inbounds begin
-        if length(box) == 2
-            if gtid <= Npart
-                pos = r[gtid]
-                vel = v[gtid]
-                frc = f[gtid]
-                c1  = c1s[gtid]
-                c3  = c3s[gtid]
-                rnd = @SVector randn(T,2)
-            end
-        elseif length(box) == 3
-            if gtid <= Npart
-                pos = r[gtid]
-                vel = v[gtid]
-                frc = f[gtid]
-                c1  = c1s[gtid]
-                c3  = c3s[gtid]
-                rnd = @SVector randn(T,3)
-            end
-        end
-
-        if gtid <= Npart    
-            rnd_force = c3 .* rnd
-            a = c1*dt
-            bb = (1 / (1 + a/2))
-            bbdt = bb*dt
-            d_pos = bbdt .* vel .+ (bbdt*dt/2) .* (frc .+ rnd_force)
-            pos = pos .+ d_pos
-            pos = mod.(pos .+ box ./ 2, box) .- box ./ 2                    # Applying PBC!
-        end
-        if gtid <= Npart
-            r[gtid] = pos
-            f_r[gtid] = rnd
-        end
-
-     end
-     return nothing
-end
-"""
 
 function update_positions_kernel_vv!(
     r::CuDeviceVector{SVector{N,T}},
@@ -160,14 +108,13 @@ function update_positions_kernel_vv!(
     f::CuDeviceVector{SVector{N,T}},
     f_r::CuDeviceVector{SVector{N,T}},
     c1s::CuDeviceVector{T},
-    c2::T,
+    dt::T,
     c3s::CuDeviceVector{T},
     box::SVector{N,T}) where {N,T}
 
     Npart = length(r)
     tid = threadIdx().x
     gtid = (blockIdx().x - 1) * blockDim().x + tid  # global thread id
-    dt  = c2
     @inbounds begin
         if gtid <= Npart
             pos = r[gtid]
@@ -205,16 +152,16 @@ function update_velocities_vv!(
     dq::CuVector{T},
     eₖ::CuVector{T1},
     c1s::CuVector{T},
-    c2::T,
+    dt::T,
     c3s::CuVector{T}) where {N,T,T1}
 
-    kernel = @cuda launch=false update_velocities_kernel_vv!(v, f₀, f, f_r, dq, eₖ, c1s, c2, c3s)
+    kernel = @cuda launch=false update_velocities_kernel_vv!(v, f₀, f, f_r, dq, eₖ, c1s, dt, c3s)
 
     Npart = length(v)
     config = launch_configuration(kernel.fun)
     nthreads = Base.min(Npart, config.threads)
     nblocks = cld(Npart, nthreads)
-    CUDA.@sync kernel(v, f₀, f, f_r, dq, eₖ, c1s, c2, c3s; threads=nthreads, blocks=nblocks)
+    CUDA.@sync kernel(v, f₀, f, f_r, dq, eₖ, c1s, dt, c3s; threads=nthreads, blocks=nblocks)
     return nothing
 end
 
@@ -229,14 +176,12 @@ function update_velocities_kernel_vv!(
     dq::CuDeviceVector{T},
     eₖ::CuDeviceVector{T1},
     c1s::CuDeviceVector{T},
-    c2::T,
+    dt::T,
     c3s::CuDeviceVector{T}) where {N,T,T1}
 
     Npart = length(v)
     tid = threadIdx().x
     gtid = (blockIdx().x - 1) * blockDim().x + tid  # global thread id
-
-    dt  = c2
 
     @inbounds begin
         if gtid <= Npart
@@ -255,13 +200,13 @@ function update_velocities_kernel_vv!(
             aa = (1 - a/2) * bb
             
             v_next = aa .* v_prev + (dt*aa/2) .* frc_prev + (dt/2) .* frc + (bb*dt) .* rnd_force
-
+            v[gtid]  = v_next
             injected_energy = dot((v_prev .+ v_next), rnd_force)/(2bb)
             dissipated_energy = - c1*dot(v_prev ,v_prev)
 
             dQ += -(injected_energy + dissipated_energy)                 # Minus sign indicates the dQ of the heat bath
             Eₖ += dot(T1.(v_next),T1.(v_next))/2
-            v[gtid]  = v_next
+            
             dq[gtid] = dQ
             eₖ[gtid] = Eₖ
         end
@@ -270,76 +215,6 @@ function update_velocities_kernel_vv!(
      return nothing
 end
 
-
-
-
-function update_velocities_vv!(
-    v::CuVector{SVector{N,T}},
-    f₀::CuVector{SVector{N,T}},
-    f::CuVector{SVector{N,T}},
-    f_r::CuVector{SVector{N,T}},
-    dq::CuVector{T},
-    c1s::CuVector{T},
-    c2::T,
-    c3s::CuVector{T}) where {N,T}
-
-    kernel = @cuda launch=false update_velocities_kernel_vv!(v, f₀, f, f_r, dq, c1s, c2, c3s)
-
-    Npart = length(v)
-    config = launch_configuration(kernel.fun)
-    nthreads = Base.min(Npart, config.threads)
-    nblocks = cld(Npart, nthreads)
-    CUDA.@sync kernel(v, f₀, f, f_r, dq, c1s, c2, c3s; threads=nthreads, blocks=nblocks)
-    return nothing
-end
-
-
-export update_velocities_kernel_vv!
-
-function update_velocities_kernel_vv!(
-    v::CuDeviceVector{SVector{N,T}},
-    f₀::CuDeviceVector{SVector{N,T}},
-    f::CuDeviceVector{SVector{N,T}},
-    f_r::CuDeviceVector{SVector{N,T}},
-    dq::CuDeviceVector{T},
-    c1s::CuDeviceVector{T},
-    c2::T,
-    c3s::CuDeviceVector{T}) where {N,T}
-
-    Npart = length(v)
-    tid = threadIdx().x
-    gtid = (blockIdx().x - 1) * blockDim().x + tid  # global thread id
-
-    dt  = c2
-
-    @inbounds begin
-        if gtid <= Npart
-            v_prev = v[gtid]
-            frc_prev = f₀[gtid]
-            frc = f[gtid]
-            c1  = c1s[gtid]
-            c3  = c3s[gtid]
-            dQ  = dq[gtid]
-            rnd = f_r[gtid]
-
-            rnd_force = c3 .* rnd
-            a = c1*dt
-            bb = 1 / (1 + a/2)
-            aa = (1 - a/2) * bb
-            
-            v_next = aa .* v_prev + (dt*aa/2) .* frc_prev + (dt/2) .* frc + (bb*dt) .* rnd_force
-
-            injected_energy = dot((v_prev .+ v_next), rnd_force)/(2bb)
-            dissipated_energy = - c1*dot(v_prev ,v_prev)
-
-            dQ += -(injected_energy + dissipated_energy)                 # Minus sign indicates the dQ of the heat bath
-            v[gtid]  = v_next
-            dq[gtid] = dQ
-        end
-
-     end
-     return nothing
-end
 #####################################################################################
 #####################################################################################
 #               Positions and velocities update for leap-frog algorithm             #
@@ -352,16 +227,16 @@ export update_positions_lf!
 function update_positions_lf!(
     r::CuVector{SVector{N,T}},
     v::CuVector{SVector{N,T}},
-    c2::T,
+    dt::T,
     box::SVector{N,T}) where {N,T}
 
-    kernel = @cuda launch=false update_positions_kernel_lf!(r, v, c2, box)
+    kernel = @cuda launch=false update_positions_kernel_lf!(r, v, dt, box)
 
     Npart = length(r)
     config = launch_configuration(kernel.fun)
     nthreads = Base.min(Npart, config.threads)
     nblocks = cld(Npart, nthreads)
-    CUDA.@sync kernel(r, v, c2, box; threads=nthreads, blocks=nblocks)
+    CUDA.@sync kernel(r, v, dt, box; threads=nthreads, blocks=nblocks)
     return nothing
 end
 
@@ -369,13 +244,12 @@ export update_positions_kernel_lf!
 function update_positions_kernel_lf!(
     r::CuDeviceVector{SVector{N,T}},
     v::CuDeviceVector{SVector{N,T}},
-    c2::T,
+    dt::T,
     box::SVector{N,T}) where {N,T}
 
     Npart = length(r)
     tid = threadIdx().x
     gtid = (blockIdx().x - 1) * blockDim().x + tid  # global thread id
-    dt = c2
     @inbounds begin
         if gtid <= Npart
             pos = r[gtid]
@@ -389,43 +263,41 @@ function update_positions_kernel_lf!(
 end
 
 export update_velocities_lf!
+export update_velocities_kernel_lf!
+
 function update_velocities_lf!(
     v::CuVector{SVector{N,T}},
     f::CuVector{SVector{N,T}},
     dq::CuVector{T},
     eₖ::CuVector{T},
     c1s::CuVector{T},
-    c2::T,
-    c3s::CuVector{T},
-    box::SVector{N,T}) where {N,T}
+    dt::T,
+    c3s::CuVector{T}) where {N,T}
 
-    kernel = @cuda launch=false update_velocities_kernel_lf!(v, f, dq, eₖ, c1s, c2, c3s, box)
+    kernel = @cuda launch=false update_velocities_kernel_lf!(v, f, dq, eₖ, c1s, dt, c3s)
 
     Npart = length(v)
     config = launch_configuration(kernel.fun)
     nthreads = Base.min(Npart, config.threads)
     nblocks = cld(Npart, nthreads)
-    CUDA.@sync kernel(v, f, dq, eₖ, c1s, c2, c3s, box; threads=nthreads, blocks=nblocks)
+    CUDA.@sync kernel(v, f, dq, eₖ, c1s, dt, c3s; threads=nthreads, blocks=nblocks)
     return nothing
 end
 
 
-export update_velocities_kernel_lf!
+
 function update_velocities_kernel_lf!(
     v::CuDeviceVector{SVector{N,T}},
     f::CuDeviceVector{SVector{N,T}},
     dq::CuDeviceVector{T},
     eₖ::CuDeviceVector{T},
     c1s::CuDeviceVector{T},
-    c2::T,
-    c3s::CuDeviceVector{T},
-    box::SVector{N,T}) where {N,T}
+    dt::T,
+    c3s::CuDeviceVector{T}) where {N,T}
 
     Npart = length(v)
     tid = threadIdx().x
     gtid = (blockIdx().x - 1) * blockDim().x + tid  # global thread id
-
-    dt = c2
     @inbounds begin
         if gtid <= Npart
             v_prev = v[gtid]
@@ -440,7 +312,7 @@ function update_velocities_kernel_lf!(
             v_next = (1-a) .* v_prev .+ dt .* (frc .+ rnd_force)
 
             injected_energy = dot((v_prev .+ v_next), rnd_force)/2
-            dissipated_energy = - c1*dot(v_prev ,v_prev)*(1.0-a/2)
+            dissipated_energy = - c1*dot(v_prev ,v_prev)*(1-a/2)
 
             dQ += -(injected_energy + dissipated_energy)                 # Minus sign indicates the dQ of the heat bath
             Eₖ += dot(v_next,v_next)/2
@@ -486,9 +358,9 @@ function update_positions_ml_kernel!(
          if gtid <= Npart
              pos = r[gtid]
              vel = v[gtid]
-             c2  = c₂[gtid]
+             dt  = c₂[gtid]
 
-             pos = pos + c2 .* vel
+             pos = pos + dt .* vel
          end
          sync_threads()
 
@@ -605,7 +477,7 @@ function update_velocities_ml₂_kernel!(
              frc_prev = f₀[gtid]
              rnd = noise[gtid]
              c1  = c₁[gtid]
-             c2  = c₂[gtid]
+             dt  = c₂[gtid]
              c3  = c₃[gtid]
              aa  = a[gtid]
 
@@ -640,11 +512,11 @@ function update_parts_BD!(
     f::CuVector{SVector{N,T}},
     noise::CuVector{SVector{N,T}},
     c1s::CuVector{T},
-    c2s::CuVector{T};
+    dts::CuVector{T};
     nthreads=128) where {N,T}
 
     Npart = UInt32(length(r))
-    CUDA.@sync @cuda blocks=ceil(Int, Npart/nthreads) threads=nthreads Brownian!(r, f, noises, sdot, c1s, c2s, αs)
+    CUDA.@sync @cuda blocks=ceil(Int, Npart/nthreads) threads=nthreads Brownian!(r, f, noises, sdot, c1s, dts, αs)
     return nothing
 end
 
@@ -655,7 +527,7 @@ function Brownian!(
     f::CuDeviceVector{SVector{N,T}},
     noise::CuDeviceVector{SVector{N,T}},
     c1s::CuDeviceVector{T},
-    c2s::CuDeviceVector{T}) where {N,T}
+    dts::CuDeviceVector{T}) where {N,T}
 
      Npart = length(r)
      tid = threadIdx().x
@@ -668,9 +540,9 @@ function Brownian!(
              frc = f[gtid]
              rnd = noise[gtid]
              c1  = c1s[gtid]
-             c2  = c2s[gtid]
+             dt  = dts[gtid]
              α   = αs[gtid]
-             pos = pos_tmp .+ c1 .* frc + c2 .* rnd
+             pos = pos_tmp .+ c1 .* frc + dt .* rnd
              vel = (pos .- pos_tmp) ./ c1
          end
          sync_threads()
@@ -775,9 +647,9 @@ function update_positions_bp_kernel!(
              pos        = r[gtid]
              vs         = vˢ[gtid]
              frc_prev   = f[gtid]
-             c2         = c₂[gtid]
+             dt         = c₂[gtid]
 
-             pos = pos + c2 .* vs + (0.5f0*c2*c2) .* frc_prev
+             pos = pos + dt .* vs + (0.5f0*dt*dt) .* frc_prev
 
          end
          sync_threads()
@@ -840,12 +712,12 @@ function update_velocities_bp₂_kernel!(
              frc = f[gtid]
              rnd = noise[gtid]
              c1  = c₁[gtid]
-             c2  = c₂[gtid]
+             dt  = c₂[gtid]
              c3  = c₃[gtid]
              aa  = a[gtid]
 
              rnd_force = c3 .* rnd
-             v_m = vs .+ (0.5f0*c2) .* (frc .+ frc_prev)
+             v_m = vs .+ (0.5f0*dt) .* (frc .+ frc_prev)
              v_next = c1 .* v_m .+ rnd_force
 
              injected_energy   = 0.50f0 * dot((v_prev .+ v_next), rnd_force)

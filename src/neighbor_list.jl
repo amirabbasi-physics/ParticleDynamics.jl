@@ -1,4 +1,6 @@
 export neighbor_list!
+export neighbor_list_kernel!
+
 
 function neighbor_list!(
     r::CuVector{SVector{N,T}},
@@ -15,7 +17,7 @@ function neighbor_list!(
     return nothing
 end
 
-export neighbor_list_kernel!
+
 
 function neighbor_list_kernel!(
     r::CuDeviceVector{SVector{N,T}},
