@@ -146,16 +146,14 @@ function simulate!(
 		coll_switch = CuArray(falses(Npart,NN))
 	end
 
-	c1 = [T(sqrt(simulation.particles[i].τD/simulation.particles[i].τm)) for i=1:Npart]
+	c1 = Float64(sqrt(simulation.particles[1].τD/simulation.particles[1].τm))
 	alpha_list = [Float64(simulation.particles[i].α) for i=1:Npart]
-	scale = similar(c1)
 	if simulation.integrator == "lf" || simulation.integrator == "em"
-		scale .= T.(1.0 .- c1 .* simulation.dt ./2)
+		scale = T(1.0 - c1 * simulation.dt /2)
 	else
-		scale = fill!(scale,T(1.0))
+		scale = T(1.0)
 	end
-	c3 = [T(sqrt(2*c1[i]*simulation.particles[i].α * scale[i] /simulation.dt)) for i=1:Npart]
-	c1 = CuVector(c1)
+	c3 = [T(sqrt(2*c1*simulation.particles[i].α * scale /simulation.dt)) for i=1:Npart]
 	c3 = CuVector(c3)
 	alpha_d = CuVector(alpha_list)
 
@@ -183,7 +181,7 @@ function simulate!(
 				neighbor_list!(r, Neighbors, simulation.neigh_cut_off, simulation.box)
 			end
 			
-			update_positions_vv!(r, v, f₀, f_r, c1, simulation.dt, c3, simulation.box)
+			update_positions_vv!(r, v, f₀, f_r, c1, Float64(simulation.dt), c3, simulation.box)
 	
 			
 			if collision_calc
@@ -193,7 +191,7 @@ function simulate!(
 			end
 			
 	
-			update_velocities_vv!(v, f₀, f, f_r, dQ, Eₖ, c1, simulation.dt, c3)
+			update_velocities_vv!(v, f₀, f, f_r, dQ, Eₖ, c1, Float64(simulation.dt), c3)
 	
 			if step % simulation.save_interval == 0
 				if collision_calc
@@ -201,7 +199,7 @@ function simulate!(
 				end
 				
 				# Pre-allocate
-				c1_d = Float64.(c1)
+				c1_d = Float64(c1)
 				
 				@. dQ = dQ ./ alpha_d
 				dQ₀ = Float64.(sum(dQ)) / simulation.save_interval
@@ -210,7 +208,7 @@ function simulate!(
 				
 				@. Eₖ = 2 * c1_d * Eₖ ./ alpha_d
 				Ekin_alpha_numerator = sum(Eₖ)
-				Ekin_alpha = (Ekin_alpha_numerator / simulation.save_interval) - Float64.(sum(c1_d .* length(simulation.box)))
+				Ekin_alpha = (Ekin_alpha_numerator / simulation.save_interval) - length(simulation.particles)*Float64.(sum(c1_d .* length(simulation.box)))
 				
 				Epot = Float64(sum(Eₚ)) / simulation.save_interval
 	
@@ -237,7 +235,6 @@ function simulate!(
 		neighbor_list!(r,Neighbors,simulation.neigh_cut_off,simulation.box)
 		for step = 0:simulation.num_steps
 
-			
 			if step % simulation.neigh_update == 0
 				neighbor_list!(r,Neighbors,simulation.neigh_cut_off,simulation.box)
 			end
@@ -247,9 +244,8 @@ function simulate!(
 			else
 				forces!(r, f, Eₚ, Neighbors, simulation.box, simulation.ϵ, simulation.σ)
 			end
-			
 
-			update_particles_em!(r, v, f, dQ, Eₖ, c1, simulation.dt, c3,simulation.box)
+			update_particles_em!(r, v, f, dQ, Eₖ, c1, Float64(simulation.dt), c3,simulation.box)
 
 			if step % simulation.save_interval == 0
 				if collision_calc
@@ -257,7 +253,7 @@ function simulate!(
 				end
 				
 				# Pre-allocate
-				c1_d = Float64.(c1)
+				c1_d = Float64(c1)
 				
 				@. dQ = dQ ./ alpha_d
 				dQ₀ = Float64.(sum(dQ)) / simulation.save_interval
@@ -266,7 +262,7 @@ function simulate!(
 				
 				@. Eₖ = 2 * c1_d * Eₖ ./ alpha_d
 				Ekin_alpha_numerator = sum(Eₖ)
-				Ekin_alpha = (Ekin_alpha_numerator / simulation.save_interval) - Float64.(sum(c1_d .* length(simulation.box)))
+				Ekin_alpha = (Ekin_alpha_numerator / simulation.save_interval) - length(simulation.particles)*Float64.(sum(c1_d * length(simulation.box)))
 				
 				Epot = Float64(sum(Eₚ)) / simulation.save_interval
 	
@@ -295,7 +291,7 @@ function simulate!(
 			if step % simulation.neigh_update == 0
 				neighbor_list!(r,Neighbors,simulation.neigh_cut_off,simulation.box)
 			end
-			update_positions_lf!(r, v, simulation.dt, simulation.box)
+			update_positions_lf!(r, v, Float64(simulation.dt), simulation.box)
 
 
 			if collision_calc
@@ -304,9 +300,9 @@ function simulate!(
 				forces!(r, f, Eₚ, Neighbors, simulation.box, simulation.ϵ, simulation.σ)
 			end
 
-			update_velocities_lf!(v, f, dQ, Eₖ, c1, simulation.dt, c3, simulation.box)
+			update_velocities_lf!(v, f, dQ, Eₖ, c1, Float64(simulation.dt), c3)
 			
-			update_positions_lf!(r, v, simulation.dt, simulation.box)
+			update_positions_lf!(r, v, Float64(simulation.dt), simulation.box)
 
 			if step % simulation.save_interval == 0
 				if collision_calc
@@ -314,7 +310,7 @@ function simulate!(
 				end
 				
 				# Pre-allocate
-				c1_d = Float64.(c1)
+				c1_d = Float64(c1)
 				
 				@. dQ = dQ ./ alpha_d
 				dQ₀ = Float64.(sum(dQ)) / simulation.save_interval
@@ -323,7 +319,7 @@ function simulate!(
 				
 				@. Eₖ = 2 * c1_d * Eₖ ./ alpha_d
 				Ekin_alpha_numerator = sum(Eₖ)
-				Ekin_alpha = (Ekin_alpha_numerator / simulation.save_interval) - Float64.(sum(c1_d .* length(simulation.box)))
+				Ekin_alpha = (Ekin_alpha_numerator / simulation.save_interval) - length(simulation.particles)*Float64.(sum(c1_d * length(simulation.box)))
 				
 				Epot = Float64(sum(Eₚ)) / simulation.save_interval
 	
