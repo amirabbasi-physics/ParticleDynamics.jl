@@ -51,7 +51,7 @@ function em_kernel!(
             Eₖ   = eₖ[gtid]
             rnd = @SVector randn(T1,N)
 
-            rnd_force = T1(c3) .* rnd
+            rnd_force = T1(c3) .* T1.(rnd)
             a = T1(c1*dt)
             v_next = (1-a) .* v_prev .+ dt .* (frc .+ rnd_force)
             pos = pos .+ dt .* v_next
@@ -60,8 +60,8 @@ function em_kernel!(
             r[gtid] = T.(pos)
             v[gtid] = T.(v_next)
 
-            injected_energy = dot((v_prev .+ v_next), rnd_force)/2
-            dissipated_energy = - c1*dot(v_prev ,v_prev)*(1-a/2)
+            injected_energy = dot((T1.(v_prev) .+ T1.(v_next)), rnd_force)/2
+            dissipated_energy = - c1*dot(T1.(v_prev) ,T1.(v_prev))*(1-a/2)
 
             dQ += -(injected_energy + dissipated_energy)                 # Minus sign indicates the dQ of the heat bath
             Eₖ += dot(T1.(v_next),T1.(v_next))/2
@@ -197,10 +197,10 @@ function update_velocities_kernel_vv!(
             bb = 1 / (1 + a/2)
             aa = (1 - a/2) * bb
             
-            v_next = aa .* v_prev + (dt*aa/2) .* frc_prev + (dt/2) .* frc + (bb*dt) .* rnd_force
+            v_next = aa .* T1.(v_prev) + (dt*aa/2) .* frc_prev + (dt/2) .* frc + (bb*dt) .* rnd_force
             v[gtid]  = T.(v_next)
-            injected_energy = dot((v_prev .+ v_next), rnd_force)/(2bb)
-            dissipated_energy = - c1*dot(v_prev ,v_prev)
+            injected_energy = dot((T1.(v_prev) .+ v_next), rnd_force)/(2bb)
+            dissipated_energy = - c1*dot(T1.(v_prev) ,T1.(v_prev))
 
             dQ += -(injected_energy + dissipated_energy)                 # Minus sign indicates the dQ of the heat bath
             Eₖ += dot(T1.(v_next),T1.(v_next))/2
@@ -252,7 +252,7 @@ function update_positions_kernel_lf!(
         if gtid <= Npart
             pos = r[gtid]
             vel = v[gtid]
-            pos = pos .+ (dt/2) .* T1.(vel)
+            pos = T1.(pos) .+ (dt/2) .* T1.(vel)
             pos = mod.(pos .+ box ./ 2, box) .- box ./ 2 
             r[gtid] = T.(pos)
         end
@@ -306,10 +306,10 @@ function update_velocities_kernel_lf!(
             rnd = @SVector randn(T1,N)
             rnd_force = T1(c3) .* rnd
             a = c1*dt
-            v_next = (1-a) .* v_prev .+ dt .* (frc .+ rnd_force)
+            v_next = (1-a) .* T1.(v_prev) .+ dt .* (frc .+ rnd_force)
             v[gtid]  = T.(v_next)
-            injected_energy = dot((v_prev .+ v_next), rnd_force)/2
-            dissipated_energy = - c1*dot(v_prev ,v_prev)*(1-a/2)
+            injected_energy = dot((T1.(v_prev) .+ T1.(v_next)), rnd_force)/2
+            dissipated_energy = - c1*dot(T1.(v_prev) ,T1.(v_prev))*(1-a/2)
 
             dQ += -(injected_energy + dissipated_energy)                 # Minus sign indicates the dQ of the heat bath
             Eₖ += dot(T1.(v_next),T1.(v_next))/2
