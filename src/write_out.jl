@@ -220,9 +220,74 @@ function write_log(
     end
 end
 
+function write_log(
+    step::Int,
+    simulation,
+    Eₚ::Float64,
+    sdot::Float64,
+    colls::Float64) 
+
+    coll_cold_hot   = colls / simulation.dt
+
+    output_file = simulation.output_file*".log"
+
+    sdotpp = sdot/length(simulation.particles)
+    Epot = Eₚ
 
 
+    step_str = @sprintf("%+.5e", step)
+    Epot_str = @sprintf("%+.5e", Epot)
+    sdot_str = @sprintf("%+.5e", sdot)
+    sdotpp_str = @sprintf("%+.5e", sdotpp)
+    coll_cold_hot_str = @sprintf("%+.5e", coll_cold_hot)
+    data = join([step_str, Epot_str, sdot_str, sdotpp_str, coll_cold_hot_str], "\t")
 
+    if step == 0
+       open(output_file,"w") do file
+        println(file,"     Time     |     E_pot     |      EPR      |  EPR / part  | cold/hot coll rate ")
+        #writedlm(file,data)
+        end
+    else
+        open(output_file,"a+") do file
+            println("Time = ",step_str," | E_pot = ", Epot_str, " | EPR = " ,sdot_str, " | EPR per particle = " ,sdotpp_str, "  |  cold/hot coll rate = " ,coll_cold_hot_str)
+            #println(coll_tot - coll_hot_hot -coll_cold_hot - coll_cold_cold)
+            println(file,data)
+        end
+    end
+end
+
+function write_log(
+    step::Int,
+    simulation,
+    Eₚ::Float64,
+    sdot::Float64) 
+
+
+    output_file = simulation.output_file*".log"
+
+    sdotpp = sdot/length(simulation.particles)
+    Epot = Eₚ
+
+
+    step_str = @sprintf("%+.5e", step)
+    Epot_str = @sprintf("%+.5e", Epot)
+    sdot_str = @sprintf("%+.5e", sdot)
+    sdotpp_str = @sprintf("%+.5e", sdotpp)
+    data = join([step_str, Epot_str, sdot_str, sdotpp_str], "\t")
+
+    if step == 0
+       open(output_file,"w") do file
+        println(file,"     Time     |     E_pot     |      EPR      |  EPR / part  ")
+        #writedlm(file,data)
+        end
+    else
+        open(output_file,"a+") do file
+            println("Time = ",step_str," | E_pot = ", Epot_str, " | EPR = " ,sdot_str, " | EPR per particle = " ,sdotpp_str)
+            #println(coll_tot - coll_hot_hot -coll_cold_hot - coll_cold_cold)
+            println(file,data)
+        end
+    end
+end
 """
 
 
