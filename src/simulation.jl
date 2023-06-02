@@ -361,6 +361,276 @@ end
 
 
 
+export sim_runO
+
+function sim_runO(;
+    num_runs::N,
+    homogeneous::Bool,
+	collision_calc::Bool,
+    num_steps::N,
+	save_interval::N,
+    Npart::N,
+    ptypes::Vector{String},
+	p_ids::Vector{Int},
+    dim::N,
+    ϕ::T,
+    fraction::T,
+	cold_frac::T,
+    R::T,
+	neigh_cut_off::T,
+	neigh_update::I,
+	ϵ::T,
+    α₁::T,
+    α₂::T,
+    Δt_prod::T,
+    integ::String,
+	random_positions::Bool) where {N,I,T}
+
+    η		= T(8.9e-4)
+	σ = T(1.0)
+	
+
+		 
+    ###############################################################################
+    #   Initializing the system to get randomly distributed positions
+    ###############################################################################
+	sigma = T(2^(1/6))*σ
+	neigh_cut_off *= sigma
+    if homogeneous
+		if random_positions && (Npart <= 100000)
+			box = Box(dim = dim, Npart = Npart, ϕ = ϕ, sigma = sigma )
+    		num_cold = ceil(Int, Npart*fraction)
+			r_init = [random_pos(box)]
+			for _ in 1:Npart-1
+				pos = random_pos(box)    
+				# Check for overlap with other particles
+				while check_overlap(pos, r_init, box, sigma * T(1.05))
+					pos = random_pos(box)
+				end        
+				# Append the position to the list of positions
+				push!(r_init,pos)
+			end
+		else
+			box = Box(dim = dim, Npart = Npart, ϕ = ϕ, sigma = sigma )
+    		num_cold = ceil(Int, Npart*fraction)
+			r_init = rectangular_lattice(Npart,box)
+			#r_init = triangular_lattice(Npart, box, σ)
+			r_init = sort_pos_by_dist(r_init, zero(T), zero(T))
+		end
+		shuffle!(r_init)
+		homog = "homogeneous"
+    else				
+		box = Box(dim = dim, Npart = Npart, ϕ = ϕ, sigma = sigma )
+		num_cold = ceil(Int, Npart*fraction)
+		r_init = cut_circle_sphere!(box, sigma, Npart, fraction, cold_frac)
+		if length(r_init) <= num_cold
+			rr_remain = rectangular_lattice(2Npart,box)
+			rad = T(sqrt(ceil(Npart .* fraction))/(2π/(1.0675*2sqrt(3))))
+			r_remain = circle_cut(rr_remain, rad, false)
+			shuffle!(r_remain)
+		else
+			error("r_droplet size is more than cold particles size!")
+		end
+		n_remain = Npart - length(r_init)
+		r_init = append!(r_init, r_remain[1:n_remain])
+		r_init = r_init[1:Npart]
+		if !random_positions
+			r_init = sort_pos_by_dist(r_init, zero(T), zero(T))
+		end
+		homog = "inhomogeneous"
+    end
+
+    Npart = length(r_init)
+
+    for run = 1:num_runs
+		simulation = Simulation()
+		simulation.neigh_update = neigh_update
+		simulation.neigh_cut_off = neigh_cut_off
+		simulation.num_cold = num_cold
+        output_file = "Overdamped_Npart,$Npart,deltat-$Δt_prod,epsilon-$ϵ,alpha_1-$α₁,alpha_2-$α₂,fraction-$ϕ,integ-$integ,run_num-$run,$homog"  # check this!
+		simulation.part_types = ptypes
+        simulation.output_file = output_file
+        
+		simulation.integrator = integ
+		simulation.ϵ = ϵ 
+		simulation.σ = σ 
+        simulation.box = box
+        r0 = r_init
+        for i = 1:num_cold
+            push!(simulation.particles, PassiveOP(part_type = ptypes[1], part_id = p_ids[1],r = r0[i], v = SVector{dim,T}(zeros(T,dim)), f = SVector{dim,T}(zeros(T,dim)), η = η, Radii = R, α = α₁))
+        end
+        for i = num_cold+1:Npart
+            push!(simulation.particles, PassiveOP(part_type = ptypes[2], part_id = p_ids[2],r = r0[i], v = SVector{dim,T}(zeros(T,dim)), f = SVector{dim,T}(zeros(T,dim)), η = η, Radii = R, α = α₂))
+        end
+		println("System initialized!")
+		for i = 1:num_cold
+			simulation.particles[i].α = α₁
+			simulation.particles[i].v = sqrt(simulation.particles[i].α) .* @SVector randn(T,dim)
+		end
+		for i = num_cold+1:Npart
+			simulation.particles[i].α = α₂
+			simulation.particles[i].v = sqrt(simulation.particles[i].α) .* @SVector randn(T,dim)
+		end
+
+
+		simulation.dt = Δt_prod / simulation.particles[1].τD
+		simulation.num_steps = num_steps
+		simulation.save_interval = save_interval
+		println("Simulation starts!")
+		simulateO!(simulation, collision_calc,box)
+		yield()
+    end
+    return nothing
+end
+#####################################################################################
+#####################################################################################
+#        Simulation scheme for Verlet-type and Euler-Maruyama algorithms            #
+#####################################################################################
+#####################################################################################
+export simulateO!
+
+function simulateO!(
+	simulation::Simulation,
+	collision_calc::Bool,
+	box::SVector{N,T}) where {N,T}
+
+
+	Npart = length(simulation.particles)
+
+	dQ = CUDA.zeros(T,Npart)
+	Eₚ = similar(dQ)
+	
+	NN = hexagonal_neighbors(sigma = T(2^(1/6)), circ_R = simulation.neigh_cut_off)
+	Neighbors = CuArray(Matrix(zeros(Int,Npart,NN)))
+	if collision_calc
+		colls = CUDA.zeros(T,Npart)
+		coll_switch = CuArray(falses(Npart,NN))
+	end
+
+	alpha_list = [Float64(simulation.particles[i].α) for i=1:Npart]
+	if simulation.integrator == "Sk" || simulation.integrator == "em"
+		scale = T(1.0)
+	end
+	c3 = [T(sqrt(2*simulation.particles[i].α * scale /simulation.dt)) for i=1:Npart]
+	c3 = CuVector(c3)
+	alpha_d = CuVector(alpha_list)
+
+	part_id = [simulation.particles[i].part_id for i=1:Npart]
+
+	r_c = [simulation.particles[i].r for i=1:Npart]
+	r = CuVector(r_c)
+	v_c = [simulation.particles[i].v for i=1:Npart]
+	v = CuVector(v_c)
+	f_c = [simulation.particles[i].f for i=1:Npart]
+	f = CuVector(f_c)
+
+	dQ₀ = zeros(Float64)
+	Epot = similar(dQ₀)
+	coll₀ = similar(dQ₀)
+	if simulation.integrator == "em"
+		neighbor_list!(r,Neighbors,simulation.neigh_cut_off,simulation.box)
+		for step = 0:simulation.num_steps
+
+			if step % simulation.neigh_update == 0
+				neighbor_list!(r,Neighbors,simulation.neigh_cut_off,simulation.box)
+			end
+
+			if collision_calc
+				forces!(r, f, Eₚ, Neighbors, simulation.num_cold, colls, coll_switch, simulation.box, simulation.ϵ, simulation.σ)
+			else
+				forces!(r, f, Eₚ, Neighbors, simulation.box, simulation.ϵ, simulation.σ)
+			end
+
+			update_particles_em!(r, v, f, dQ, Float64(simulation.dt), c3, simulation.box)
+
+			if step % simulation.save_interval == 0
+				if collision_calc
+					coll₀ = Float64.(sum(colls)) / (2 * simulation.save_interval)
+				end
+				
+				@. dQ = dQ ./ alpha_d
+				dQ₀ = Float64.(sum(dQ)) / simulation.save_interval
+				Epot = Float64(sum(Eₚ)) / simulation.save_interval
+	
+				fill!(dQ, zero(eltype(dQ)))
+				fill!(Eₚ, zero(eltype(Eₚ)))
+				
+				if collision_calc
+					fill!(colls, zero(eltype(colls)))
+				end
+	
+				@async begin
+					r_c, v_c = Vector(r), Vector(v)
+					write_gsd(step, simulation, part_id, r_c, v_c)
+					if collision_calc
+						write_log(step, simulation, Epot, dQ₀, coll₀)
+					else
+						write_log(step, simulation, Epot, dQ₀)
+					end
+				end
+			end
+		end
+	elseif simulation.integrator == "Sk"
+		r₀ = CUDA.zeros(eltype(r), size(r))
+		neighbor_list!(r,Neighbors,simulation.neigh_cut_off,simulation.box)
+		for step = 0:simulation.num_steps
+			if step % simulation.neigh_update == 0
+				neighbor_list!(r,Neighbors,simulation.neigh_cut_off,simulation.box)
+			end
+			copyto!(r₀, r)
+			update_positions_Sk!(r₀, v, Float64(simulation.dt), simulation.box)
+
+
+			if collision_calc
+				forces!(r₀, f, Eₚ, Neighbors, simulation.num_cold, colls, coll_switch, simulation.box, simulation.ϵ, simulation.σ)
+			else
+				forces!(r₀, f, Eₚ, Neighbors, simulation.box, simulation.ϵ, simulation.σ)
+			end
+
+			update_velocities_Sk!(r, v, f, dQ, Float64(simulation.dt), c3, simulation.box)
+
+			if step % simulation.save_interval == 0
+				if collision_calc
+					coll₀ = Float64.(sum(colls)) / (2 * simulation.save_interval)
+				end
+				
+				@. dQ = dQ ./ alpha_d
+				dQ₀ = Float64.(sum(dQ)) / simulation.save_interval
+				Epot = Float64(sum(Eₚ)) / simulation.save_interval
+	
+				fill!(dQ, zero(eltype(dQ)))
+				fill!(Eₚ, zero(eltype(Eₚ)))
+				
+				if collision_calc
+					fill!(colls, zero(eltype(colls)))
+				end
+	
+				@async begin
+					r_c, v_c = Vector(r), Vector(v)
+					write_gsd(step, simulation, part_id, r_c, v_c)
+					if collision_calc
+						write_log(step, simulation, Epot, dQ₀, coll₀)
+					else
+						write_log(step, simulation, Epot, dQ₀)
+					end
+				end
+			end
+		end
+	end
+	
+
+	copyto!(r_c,r)
+	copyto!(v_c,v)
+	copyto!(f_c,f)
+	# After finishing the simulation it saves the positions, velocities and forces back into the simulation structure! 
+	[simulation.particles[i].r = r_c[i] for i=1:Npart]
+	[simulation.particles[i].v = v_c[i] for i=1:Npart]
+	[simulation.particles[i].f = f_c[i] for i=1:Npart]
+    return nothing
+end
+
+
+
 
 
 

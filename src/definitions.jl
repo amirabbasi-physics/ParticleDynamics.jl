@@ -346,6 +346,32 @@ function PassiveP(; part_type::String = "Cold",
     PassiveP{T}(part_type,part_id, rad,α,τm, τD,r,v,f)
 end
 
+export PassiveOP
+mutable struct PassiveOP{T <: AbstractFloat} <: Particle
+	part_type::String
+    part_id::Int
+	rad::T
+	α::T
+	τD::T
+    r::SVector
+	v::SVector
+	f::SVector
+end
+
+
+function PassiveOP(; part_type::String = "Cold",
+    part_id::Int = 0,
+    r::SVector=SVector{3,T}(ones(T,3)), 
+    v::SVector=SVector{3,T}(ones(T,3)),  
+    f::SVector=SVector{3,T}(ones(T,3)), η::T, Radii::T, α::T) where {T<:AbstractFloat}
+    kB = T(1.380649*10^(-23))
+    Temp = T(300.0)
+    rad = T(1.0)               # Needs to be modified for polydispersed systems
+    γ = friction(η,Radii)
+    τD = γ*(2Radii)^2/(kB*Temp)
+
+    PassiveOP{T}(part_type,part_id, rad, α, τD, r, v, f)
+end
 
 """
 export APM
