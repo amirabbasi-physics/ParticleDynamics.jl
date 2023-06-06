@@ -473,7 +473,7 @@ function sim_runO(;
 		end
 
 
-		simulation.dt = Δt_prod / simulation.particles[1].τD
+		simulation.dt = Δt_prod
 		simulation.num_steps = num_steps
 		simulation.save_interval = save_interval
 		println("Simulation starts!")
