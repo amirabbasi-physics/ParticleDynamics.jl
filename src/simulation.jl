@@ -384,7 +384,8 @@ function sim_runO(;
     α₂::T,
     Δt_prod::T,
     integ::String,
-	random_positions::Bool) where {N,I,T}
+	random_positions::Bool,
+	force_func::Function) where {N,I,T}
 
     η		= T(8.9e-4)
 	σ = T(1.0)
@@ -394,7 +395,12 @@ function sim_runO(;
     ###############################################################################
     #   Initializing the system to get randomly distributed positions
     ###############################################################################
-	sigma = T(2^(1/6))*σ
+	if force_func == WCA
+		sigma = T(2^(1/6))*σ
+	elseif force_func == harm_rep
+		sigma = σ
+	end
+
 	neigh_cut_off *= sigma
     if homogeneous
 		if random_positions && (Npart <= 100000)
@@ -452,6 +458,7 @@ function sim_runO(;
         simulation.output_file = output_file
         
 		simulation.integrator = integ
+		simulation.force_func = force_func
 		simulation.ϵ = ϵ 
 		simulation.σ = σ 
         simulation.box = box
@@ -500,7 +507,12 @@ function simulateO!(
 	dQ = CUDA.zeros(T,Npart)
 	Eₚ = similar(dQ)
 	
-	NN = hexagonal_neighbors(sigma = T(2^(1/6)), circ_R = simulation.neigh_cut_off)
+	if simulation.force_func == WCA
+		NN = hexagonal_neighbors(sigma = T(2^(1/6)), circ_R = simulation.neigh_cut_off)
+	elseif simulation.force_func == harm_rep
+		NN = hexagonal_neighbors(sigma = T(1.0), circ_R = simulation.neigh_cut_off)
+	end
+
 	Neighbors = CuArray(Matrix(zeros(Int,Npart,NN)))
 	if collision_calc
 		colls = CUDA.zeros(T,Npart)
@@ -536,9 +548,9 @@ function simulateO!(
 			end
 
 			if collision_calc
-				forces!(r, f, Eₚ, Neighbors, simulation.num_cold, colls, coll_switch, simulation.box, simulation.ϵ, simulation.σ)
+				forces!(r, f, Eₚ, Neighbors, simulation.num_cold, colls, coll_switch, simulation.box, simulation.ϵ, simulation.σ, simulation.force_func)
 			else
-				forces!(r, f, Eₚ, Neighbors, simulation.box, simulation.ϵ, simulation.σ)
+				forces!(r, f, Eₚ, Neighbors, simulation.box, simulation.ϵ, simulation.σ, simulation.force_func)
 			end
 
 			update_particles_em!(r, v, f, dQ, Float64(simulation.dt), c3, simulation.box)
