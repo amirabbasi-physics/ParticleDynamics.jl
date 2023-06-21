@@ -63,7 +63,7 @@ function em_kernel!(
             injected_energy = dot((T1.(v_prev) .+ T1.(v_next)), rnd_force)/2
             dissipated_energy = - c1*dot(T1.(v_prev) ,T1.(v_prev))*(1-a/2)
 
-            dQ += -(injected_energy + dissipated_energy)                 # Minus sign indicates the dQ of the heat bath
+            dQ += -(injected_energy + dissipated_energy)               # Minus sign indicates the dQ of the heat bath
             Eₖ += dot(T1.(v_next),T1.(v_next))/2
             
             dq[gtid] = T(dQ)
@@ -354,7 +354,6 @@ function em_kernel!(
     @inbounds begin
         if gtid <= Npart
             pos = r[gtid]
-            v_prev = v[gtid]
             frc = f[gtid]
             c3  = c3s[gtid]
             dQ  = dq[gtid]
@@ -362,13 +361,14 @@ function em_kernel!(
 
             rnd_force = T1(c3) .* T1.(rnd)
             v_next = (frc .+ rnd_force)
+            
             pos = pos .+ dt .* v_next
 
             pos = mod.(pos .+ box ./ 2, box) .- box ./ 2                    # Applying PBC!
             r[gtid] = T.(pos)
             v[gtid] = T.(v_next)
 
-            injected_energy = dot((T1.(v_prev) .+ T1.(v_next)), rnd_force)/2
+            injected_energy = dot( T1.(v_next), rnd_force)
             dissipated_energy = -dot(T1.(v_next) ,T1.(v_next))
 
             dQ += -(injected_energy + dissipated_energy)                 # Minus sign indicates the dQ of the heat bath
@@ -464,15 +464,12 @@ function update_velocities_kernel_Sk!(
             rnd_force = T1(c3) .* rnd
             v_next = (frc .+ rnd_force)
             v[gtid]  = T.(v_next)
-            dpos = dt .* v_next
-            
-            
-            injected_energy = dot((T1.(pos) .+ T1.(dpos) ./2), rnd_force)
-            dissipated_energy = - dot(T1.(dpos) ,T1.(dpos)) ./ dt
-
-            pos = pos .+ dpos
+            pos = pos .+ dt .* v_next
             pos = mod.(pos .+ box ./ 2, box) .- box ./ 2
             r[gtid] = pos
+
+            injected_energy = dot( T1.(v_next), rnd_force)
+            dissipated_energy = -dot(T1.(v_next) ,T1.(v_next))
 
             dQ += -(injected_energy + dissipated_energy)                 # Minus sign indicates the dQ of the heat bath
             

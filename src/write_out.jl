@@ -87,6 +87,7 @@ function write_gsd(step::Int,simulation, part_id::Vector{Int},positions::Vector{
     f.close()
 end
 
+"""
 function write_log(
     step::Int,
     simulation,
@@ -128,8 +129,6 @@ function write_log(
         end
     end
 end
-
-
 
 function write_log(
     step::Int,
@@ -176,6 +175,7 @@ function write_log(
         end
     end
 end
+"""
 
 function write_log(
     step::Int,
@@ -245,12 +245,12 @@ function write_log(
     if step == 0
        open(output_file,"w") do file
         println(file,"     Time     |     E_pot     |      EPR      |  EPR / part  | cold/hot coll rate ")
-        #writedlm(file,data)
+        # writedlm(file,data)
         end
     else
         open(output_file,"a+") do file
             println("Time = ",step_str," | E_pot = ", Epot_str, " | EPR = " ,sdot_str, " | EPR per particle = " ,sdotpp_str, "  |  cold/hot coll rate = " ,coll_cold_hot_str)
-            #println(coll_tot - coll_hot_hot -coll_cold_hot - coll_cold_cold)
+            # println(coll_tot - coll_hot_hot -coll_cold_hot - coll_cold_cold)
             println(file,data)
         end
     end
