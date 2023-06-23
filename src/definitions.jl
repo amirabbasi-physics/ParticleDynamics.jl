@@ -217,8 +217,11 @@ function cut_circle_sphere!(box::SVector{N,T}, σ::T, Npart::Int, fraction::T,co
     R = T(σ/2)
     if dim == 2
         N_circle = Npart * fraction * cold_frac
-
-        rad = T(sqrt(N_circle)/(2π/(1.0675*2sqrt(3))))
+        if σ == T(1.0)
+            rad = T(sqrt(N_circle)/(1.055*π/(sqrt(3))))
+        else
+            rad = T(sqrt(N_circle)/(2π/(1.0675*2sqrt(3))))
+        end
         #rad = sqrt(N_circle)/(π/(2sqrt(3)))
         N_lattice = ceil(Int,2N_circle)
         r = triangular_lattice(N_lattice, σ)
