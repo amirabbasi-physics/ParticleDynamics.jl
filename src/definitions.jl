@@ -29,8 +29,8 @@ end
 
 export hexagonal_neighbors
 function hexagonal_neighbors(; sigma::T, circ_R::T) where T
-    n_max = floor(Int,circ_R / sigma)
-    num_circles = 10 + 6 * sum(1:n_max)
+    n_max = ceil(Int,circ_R / sigma)
+    num_circles = 7 * sum(1:n_max)
     return num_circles
 end 
 
