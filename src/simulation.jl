@@ -21,7 +21,8 @@ function sim_run(;
     α₂::T,
     Δt_prod::T,
     integ::String,
-	random_positions::Bool) where {N,I,T}
+	random_positions::Bool,
+	force_func::Function) where {N,I,T}
 
     η		= T(8.9e-4)
     density = T(1.0e3) # mass density of particles (kg/m³)
@@ -32,7 +33,12 @@ function sim_run(;
     ###############################################################################
     #   Initializing the system to get randomly distributed positions
     ###############################################################################
-	sigma = T(2^(1/6))*σ
+	if force_func == WCA
+		sigma = T(2^(1/6))*σ
+	elseif force_func == harm_rep
+		sigma = σ
+	end
+
 	neigh_cut_off *= sigma
     if homogeneous
 		if random_positions && (Npart <= 100000)
@@ -90,6 +96,7 @@ function sim_run(;
         simulation.output_file = output_file
         
 		simulation.integrator = integ
+		simulation.force_func = force_func
 		simulation.ϵ = ϵ 
 		simulation.σ = σ 
         simulation.box = box
@@ -139,7 +146,12 @@ function simulate!(
 	Eₖ = CUDA.zeros(Float64,Npart)
 	Eₚ = similar(dQ)
 	
-	NN = hexagonal_neighbors(sigma = T(2^(1/6)), circ_R = simulation.neigh_cut_off)
+	if simulation.force_func == WCA
+		NN = hexagonal_neighbors(sigma = T(2^(1/6)), circ_R = simulation.neigh_cut_off)
+	elseif simulation.force_func == harm_rep
+		NN = hexagonal_neighbors(sigma = T(1.0), circ_R = simulation.neigh_cut_off)
+	end
+
 	Neighbors = CuArray(Matrix(zeros(Int,Npart,NN)))
 	if collision_calc
 		colls = CUDA.zeros(T,Npart)
@@ -185,14 +197,14 @@ function simulate!(
 	
 			
 			if collision_calc
-				forces!(r, f, Eₚ, Neighbors, simulation.num_cold, colls, coll_switch, simulation.box, simulation.ϵ, simulation.σ)
+				forces!(r, f, Eₚ, Neighbors, simulation.num_cold, colls, coll_switch, simulation.box, simulation.ϵ, simulation.σ, simulation.force_func)
 			else
-				forces!(r, f, Eₚ, Neighbors, simulation.box, simulation.ϵ, simulation.σ)
+				forces!(r, f, Eₚ, Neighbors, simulation.box, simulation.ϵ, simulation.σ, simulation.force_func)
 			end
 			
 	
 			update_velocities_vv!(v, f₀, f, f_r, dQ, Eₖ, c1, Float64(simulation.dt), c3)
-	
+			copyto!(f₀,f)
 			if step % simulation.save_interval == 0
 				if collision_calc
 					coll₀ = Float64.(sum(colls)) / (2 * simulation.save_interval)
@@ -240,9 +252,9 @@ function simulate!(
 			end
 
 			if collision_calc
-				forces!(r, f, Eₚ, Neighbors, simulation.num_cold, colls, coll_switch, simulation.box, simulation.ϵ, simulation.σ)
+				forces!(r, f, Eₚ, Neighbors, simulation.num_cold, colls, coll_switch, simulation.box, simulation.ϵ, simulation.σ, simulation.force_func)
 			else
-				forces!(r, f, Eₚ, Neighbors, simulation.box, simulation.ϵ, simulation.σ)
+				forces!(r, f, Eₚ, Neighbors, simulation.box, simulation.ϵ, simulation.σ, simulation.force_func)
 			end
 
 			update_particles_em!(r, v, f, dQ, Eₖ, c1, Float64(simulation.dt), c3,simulation.box)
@@ -295,9 +307,9 @@ function simulate!(
 
 
 			if collision_calc
-				forces!(r, f, Eₚ, Neighbors, simulation.num_cold, colls, coll_switch, simulation.box, simulation.ϵ, simulation.σ)
+				forces!(r, f, Eₚ, Neighbors, simulation.num_cold, colls, coll_switch, simulation.box, simulation.ϵ, simulation.σ, simulation.force_func)
 			else
-				forces!(r, f, Eₚ, Neighbors, simulation.box, simulation.ϵ, simulation.σ)
+				forces!(r, f, Eₚ, Neighbors, simulation.box, simulation.ϵ, simulation.σ, simulation.force_func)
 			end
 
 			update_velocities_lf!(v, f, dQ, Eₖ, c1, Float64(simulation.dt), c3)
@@ -521,9 +533,11 @@ function simulateO!(
 	end
 
 	alpha_list = [Float64(simulation.particles[i].α) for i=1:Npart]
-	if simulation.integrator == "Sk" || simulation.integrator == "em"
+
+	if simulation.integrator == "em" || simulation.integrator == "Heun"
 		scale = T(1.0)
 	end
+
 	c3 = [T(sqrt(2*simulation.particles[i].α * scale /simulation.dt)) for i=1:Npart]
 	c3 = CuVector(c3)
 	alpha_d = CuVector(alpha_list)
@@ -583,24 +597,34 @@ function simulateO!(
 				end
 			end
 		end
-	elseif simulation.integrator == "Sk"
-		r₀ = CUDA.zeros(eltype(r), size(r))
+	elseif simulation.integrator == "Heun"
+		f_r = CUDA.zeros(eltype(f), size(f))
+		f₀ = CUDA.zeros(eltype(f), size(f))
+		r₀ = CUDA.zeros(eltype(f), size(f))
 		neighbor_list!(r,Neighbors,simulation.neigh_cut_off,simulation.box)
 		for step = 0:simulation.num_steps
+
 			if step % simulation.neigh_update == 0
 				neighbor_list!(r,Neighbors,simulation.neigh_cut_off,simulation.box)
 			end
-			copyto!(r₀, r)
-			update_positions_Sk!(r₀, v, Float64(simulation.dt), simulation.box)
+
+			copyto!(r₀,r)
+			if collision_calc
+				forces!(r, f₀, Eₚ, Neighbors, simulation.num_cold, colls, coll_switch, simulation.box, simulation.ϵ, simulation.σ, simulation.force_func)
+			else
+				forces!(r, f₀, Eₚ, Neighbors, simulation.box, simulation.ϵ, simulation.σ, simulation.force_func)
+			end
+			predictor_Heun!(r, v, f₀, f_r, Float64(simulation.dt), c3, simulation.box)
 
 
 			if collision_calc
-				forces!(r₀, f, Eₚ, Neighbors, simulation.num_cold, colls, coll_switch, simulation.box, simulation.ϵ, simulation.σ)
+				forces!(r, f, Eₚ, Neighbors, simulation.num_cold, colls, coll_switch, simulation.box, simulation.ϵ, simulation.σ, simulation.force_func)
 			else
-				forces!(r₀, f, Eₚ, Neighbors, simulation.box, simulation.ϵ, simulation.σ)
+				forces!(r, f, Eₚ, Neighbors, simulation.box, simulation.ϵ, simulation.σ, simulation.force_func)
 			end
+			
+			corrector_Heun!(r₀, r, v, f₀, f, f_r, dQ, Float64(simulation.dt), c3, simulation.box)
 
-			update_velocities_Sk!(r, v, f, dQ, Float64(simulation.dt), c3, simulation.box)
 
 			if step % simulation.save_interval == 0
 				if collision_calc
@@ -608,7 +632,7 @@ function simulateO!(
 				end
 				
 				@. dQ = dQ ./ alpha_d
-				dQ₀ = Float64.(sum(dQ)) / simulation.save_interval
+				dQ₀ = Float64(sum(dQ)) / simulation.save_interval
 				Epot = Float64(sum(Eₚ)) / simulation.save_interval
 	
 				fill!(dQ, zero(eltype(dQ)))
