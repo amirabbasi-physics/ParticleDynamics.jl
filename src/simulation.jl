@@ -143,6 +143,7 @@ function simulate!(
 	Npart = length(simulation.particles)
 
 	dQ = CUDA.zeros(T,Npart)
+	dU = CUDA.zeros(T,Npart)
 	Eₖ = CUDA.zeros(Float64,Npart)
 	Eₚ = similar(dQ)
 	
@@ -179,6 +180,7 @@ function simulate!(
 	f = CuVector(f_c)
 
 	dQ₀ = zeros(Float64)
+	dU₀	= zeros(Float64)
 	Ekin = similar(dQ₀)
 	Ekin_alpha = similar(dQ₀)
 	Epot = similar(dQ₀)
@@ -203,7 +205,8 @@ function simulate!(
 			end
 			
 	
-			update_velocities_vv!(v, f₀, f, f_r, dQ, Eₖ, c1, Float64(simulation.dt), c3)
+			#update_velocities_vv!(v, f₀, f, f_r, dQ, Eₖ, c1, Float64(simulation.dt), c3)
+			update_velocities_vv!(v, f₀, f, f_r, dQ, dU, Eₖ, c1, Float64(simulation.dt), c3)
 			copyto!(f₀,f)
 			if step % simulation.save_interval == 0
 				if collision_calc
@@ -215,7 +218,12 @@ function simulate!(
 				
 				@. dQ = dQ ./ alpha_d
 				dQ₀ = Float64.(sum(dQ)) / simulation.save_interval
-				
+
+				# Naive way to define dU/T
+				@. dU = dU ./ alpha_d
+				dU₀ = Float64.(sum(dU)) / simulation.save_interval
+
+
 				Ekin = sum(Eₖ) / simulation.save_interval
 				
 				@. Eₖ = 2 * c1_d * Eₖ ./ alpha_d
@@ -225,6 +233,7 @@ function simulate!(
 				Epot = Float64(sum(Eₚ)) / simulation.save_interval
 	
 				fill!(dQ, zero(eltype(dQ)))
+				fill!(dU, zero(eltype(dU)))
 				fill!(Eₖ, zero(eltype(Eₖ)))
 				fill!(Eₚ, zero(eltype(Eₚ)))
 				
@@ -236,7 +245,8 @@ function simulate!(
 					r_c, v_c = Vector(r), Vector(v)
 					write_gsd(step, simulation, part_id, r_c, v_c)
 					if collision_calc
-						write_log(step, simulation, Ekin, Epot, dQ₀, Ekin_alpha, coll₀)
+						#write_log(step, simulation, Ekin, Epot, dQ₀, Ekin_alpha, coll₀)
+						write_log(step, simulation, Ekin, Epot, dQ₀, dU₀, Ekin_alpha, coll₀)
 					else
 						write_log(step, simulation, Ekin, Epot, dQ₀)
 					end

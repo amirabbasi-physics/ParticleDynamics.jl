@@ -212,6 +212,87 @@ function update_velocities_kernel_vv!(
      return nothing
 end
 
+
+
+function update_velocities_vv!(
+    v::CuVector{SVector{N,T}},
+    f₀::CuVector{SVector{N,T}},
+    f::CuVector{SVector{N,T}},
+    f_r::CuVector{SVector{N,T}},
+    dq::CuVector{T},
+    du::CuVector{T},
+    eₖ::CuVector{T1},
+    c1::T1,
+    dt::T1,
+    c3s::CuVector{T}) where {N,T,T1}
+
+    kernel = @cuda launch=false update_velocities_kernel_vv!(v, f₀, f, f_r, dq, du, eₖ, c1, dt, c3s)
+
+    Npart = length(v)
+    config = launch_configuration(kernel.fun)
+    nthreads = Base.min(Npart, config.threads)
+    nblocks = cld(Npart, nthreads)
+    CUDA.@sync kernel(v, f₀, f, f_r, dq, du, eₖ, c1, dt, c3s; threads=nthreads, blocks=nblocks)
+    return nothing
+end
+
+
+
+
+function update_velocities_kernel_vv!(
+    v::CuDeviceVector{SVector{N,T}},
+    f₀::CuDeviceVector{SVector{N,T}},
+    f::CuDeviceVector{SVector{N,T}},
+    f_r::CuDeviceVector{SVector{N,T}},
+    dq::CuDeviceVector{T},
+    du::CuDeviceVector{T},
+    eₖ::CuDeviceVector{T1},
+    c1::T1,
+    dt::T1,
+    c3s::CuDeviceVector{T}) where {N,T,T1}
+
+    Npart = length(v)
+    tid = threadIdx().x
+    gtid = (blockIdx().x - 1) * blockDim().x + tid  # global thread id
+
+    @inbounds begin
+        if gtid <= Npart
+            v_prev = v[gtid]
+            frc_prev = f₀[gtid]
+            frc = f[gtid]
+            c3  = c3s[gtid]
+            dQ  = dq[gtid]
+            dU  = du[gtid]
+            Eₖ   = eₖ[gtid]
+            rnd = f_r[gtid]
+
+            rnd_force = T1(c3) .* T1.(rnd)
+            a = c1*dt
+            bb = 1 / (1 + a/2)
+            aa = (1 - a/2) * bb
+            
+            v_next = aa .* T1.(v_prev) + (dt*aa/2) .* frc_prev + (dt/2) .* frc + (bb*dt) .* rnd_force
+            v[gtid]  = T.(v_next)
+            injected_energy = dot((T1.(v_prev) .+ v_next), rnd_force)/(2bb)
+            dissipated_energy = - c1*dot(T1.(v_prev) ,T1.(v_prev))
+
+            dQ += -(injected_energy + dissipated_energy)                 # Minus sign indicates the dQ of the heat bath
+            dU += dot(v_next, T1.(frc))
+            Eₖ += dot(T1.(v_next),T1.(v_next))/2
+            
+            dq[gtid] = T(dQ)
+            du[gtid] = T(dU)
+            eₖ[gtid] = Eₖ
+        end
+
+     end
+     return nothing
+end
+
+
+
+
+
 #####################################################################################
 #####################################################################################
 #               Positions and velocities update for leap-frog algorithm             #
