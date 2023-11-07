@@ -49,7 +49,7 @@ end
 #Pkg.build("PyCall")
 
 # Append snapshot to GSD file
-function write_gsd(step::Int,simulation, part_id::Vector{Int},positions::Vector{SVector{N,T}}, velocities::Vector{SVector{N,T}}) where {N,T}
+function write_gsd(step::Int,simulation, part_ids::Vector{Int},positions::Vector{SVector{N,T}}, velocities::Vector{SVector{N,T}}) where {N,T}
     gsdhoomd = pyimport("gsd.hoomd")
     output_file = simulation.output_file*".gsd"
 
@@ -70,10 +70,9 @@ function write_gsd(step::Int,simulation, part_id::Vector{Int},positions::Vector{
     s = gsdhoomd.Snapshot()
    
     s.configuration.step = step
-    
     s.particles.N = length(positions)
     s.particles.types = simulation.part_types
-    s.particles.typeid = part_id
+    s.particles.typeid = part_ids
     s.particles.position = positions
     s.particles.velocity = velocities
     if length(box) == 2
