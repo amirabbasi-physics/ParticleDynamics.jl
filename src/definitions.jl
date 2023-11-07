@@ -362,11 +362,14 @@ mutable struct PassiveOP{T <: AbstractFloat} <: Particle
 end
 
 
-function PassiveOP(; part_type::String = "Cold",
+function PassiveOP(; part_type::String = "C",
     part_id::Int = 0,
     r::SVector=SVector{3,T}(ones(T,3)), 
     v::SVector=SVector{3,T}(ones(T,3)),  
-    f::SVector=SVector{3,T}(ones(T,3)), η::T, Radii::T, α::T) where {T<:AbstractFloat}
+    f::SVector=SVector{3,T}(ones(T,3)), 
+    η::T, 
+    Radii::T,
+    α::T) where {T<:AbstractFloat}
     kB = T(1.380649*10^(-23))
     Temp = T(300.0)
     rad = T(1.0)               # Needs to be modified for polydispersed systems
@@ -374,6 +377,42 @@ function PassiveOP(; part_type::String = "Cold",
     τD = γ*(2Radii)^2/(kB*Temp)
 
     PassiveOP{T}(part_type,part_id, rad, α, τD, r, v, f)
+end
+
+
+export APMO
+mutable struct APMO{T <: AbstractFloat} <: Particle
+	part_type::String
+    part_id::Int
+	rad::T
+	α::T
+	τD::T
+    r::SVector
+	v::SVector
+	f::SVector
+    τΓ::T
+	r_pseu::SVector
+	v_pseu::SVector
+end
+
+function APMO(; part_type::String = "H",
+    part_id::Int = 1,
+    r::SVector=SVector{3,T}(ones(T,3)), 
+    v::SVector=SVector{3,T}(ones(T,3)),  
+    f::SVector=SVector{3,T}(ones(T,3)),
+    η::T, 
+    Radii::T, 
+    α::T, 
+    r_pseu::SVector=SVector{3,T}(ones(T,3)),
+    v_pseu::SVector=SVector{3,T}(ones(T,3)),
+    τΓ::T) where {T <: AbstractFloat}
+    kB = T(1.380649*10^(-23))
+    Temp = T(300.0)
+    rad = T(1.0)               # Needs to be modified for polydispersed systems
+    γ = friction(η,Radii)
+    τD = γ*(2Radii)^2/(kB*Temp)
+    τΓ = τΓ
+    APMO{T}(part_type, part_id, rad, α, τD, r, v, f, τΓ, r_pseu, v_pseu)
 end
 
 """
@@ -445,9 +484,6 @@ end
 
 export Simulation
 
-# Import required modules
-import CUDA
-
 # Add force_func field to Simulation struct
 mutable struct Simulation
     descriptor::String
@@ -471,12 +507,12 @@ end
 function Simulation(; descriptor::String = "No description given...",
     box::SVector=SVector{3,Union{Float32,Float64}}(ones(Float32,3)),
     particles::Array{Particle, 1} = Particle[],
-    part_types::Vector{String}=["A","B"],
+    part_types::Vector{String}=["H"],
     ϵ::Union{Float32,Float64} = 100.0f0,
     σ::Union{Float32,Float64} = 1.0f0,
     neigh_cut_off::Union{Float32,Float64} = 5.0f0,
     neigh_update::Int = 100000, 
-    num_cold::Int = 1,
+    num_cold::Int = 0,
     dt::Union{Float32,Float64} = 0.00001f0,
     integrator::String = "vv",
     num_steps::Int = 0,
@@ -486,6 +522,46 @@ function Simulation(; descriptor::String = "No description given...",
     force_func::Function = WCA)  
     Simulation(descriptor,box, particles, part_types, ϵ, σ, neigh_cut_off, neigh_update, num_cold, dt,integrator, num_steps, save_interval, particles_to_save,output_file, force_func)  # Add force_func argument here
 end
+
+export SimulationActive
+
+# Add force_func field to Simulation struct
+mutable struct SimulationActive
+    descriptor::String
+    box::SVector
+    particles::Array{Particle, 1}
+    part_types::Vector{String}
+    ϵ::Union{Float32,Float64}
+    σ::Union{Float32,Float64}
+    neigh_cut_off::Union{Float32,Float64}
+    neigh_update::Int
+    dt::Union{Float32,Float64}
+    integrator::String
+    num_steps::Int
+    save_interval::Int
+    particles_to_save::Array{Particle, 1}
+    output_file::String
+    force_func::Function 
+end
+
+function SimulationActive(; descriptor::String = "No description given...",
+    box::SVector=SVector{3,Union{Float32,Float64}}(ones(Float32,3)),
+    particles::Array{Particle, 1} = Particle[],
+    part_types::Vector{String}=["A","B"],
+    ϵ::Union{Float32,Float64} = 100.0f0,
+    σ::Union{Float32,Float64} = 1.0f0,
+    neigh_cut_off::Union{Float32,Float64} = 5.0f0,
+    neigh_update::Int = 100000, 
+    dt::Union{Float32,Float64} = 0.00001f0,
+    integrator::String = "vv",
+    num_steps::Int = 0,
+    save_interval::Int = 0,
+    particles_to_save::Array{Particle, 1} =  Particle[],
+    output_file::String = "output",
+    force_func::Function = WCA)  
+    SimulationActive(descriptor,box, particles, part_types, ϵ, σ, neigh_cut_off, neigh_update, dt,integrator, num_steps, save_interval, particles_to_save,output_file, force_func)  # Add force_func argument here
+end
+
 
 """
 mutable struct Simulation
