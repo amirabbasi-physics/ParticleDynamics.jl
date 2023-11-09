@@ -1,6 +1,7 @@
 export sim_run
 
 function sim_run(;
+	regime::String,
     num_runs::N,
     homogeneous::Bool,
 	collision_calc::Bool,
@@ -88,6 +89,7 @@ function sim_run(;
 
     for run = 1:num_runs
 		simulation = Simulation()
+		simulation.regime = regime
 		simulation.neigh_update = neigh_update
 		simulation.neigh_cut_off = neigh_cut_off
 		simulation.num_cold = num_cold
@@ -101,12 +103,23 @@ function sim_run(;
 		simulation.σ = σ 
         simulation.box = box
         r0 = r_init
-        for i = 1:num_cold
-            push!(simulation.particles, PassiveP(part_type = ptypes[1], part_id = p_ids[1],r = r0[i], v = SVector{dim,T}(zeros(T,dim)), f = SVector{dim,T}(zeros(T,dim)), density = density, η = η, Radii = R, α = α₁))
-        end
-        for i = num_cold+1:Npart
-            push!(simulation.particles, PassiveP(part_type = ptypes[2], part_id = p_ids[2],r = r0[i], v = SVector{dim,T}(zeros(T,dim)), f = SVector{dim,T}(zeros(T,dim)), density = density, η = η, Radii = R, α = α₂))
-        end
+
+		if simulation.regime == "Overdamped"
+			for i = 1:num_cold
+				push!(simulation.particles, PassiveOP(part_type = ptypes[1], part_id = p_ids[1],r = r0[i], v = SVector{dim,T}(zeros(T,dim)), f = SVector{dim,T}(zeros(T,dim)), η = η, Radii = R, α = α₁))
+			end
+			for i = num_cold+1:Npart
+				push!(simulation.particles, PassiveOP(part_type = ptypes[2], part_id = p_ids[2],r = r0[i], v = SVector{dim,T}(zeros(T,dim)), f = SVector{dim,T}(zeros(T,dim)), η = η, Radii = R, α = α₂))
+			end
+		elseif simulation.regime == "Underdamped"	
+			for i = 1:num_cold
+				push!(simulation.particles, PassiveP(part_type = ptypes[1], part_id = p_ids[1],r = r0[i], v = SVector{dim,T}(zeros(T,dim)), f = SVector{dim,T}(zeros(T,dim)), density = density, η = η, Radii = R, α = α₁))
+			end
+			for i = num_cold+1:Npart
+				push!(simulation.particles, PassiveP(part_type = ptypes[2], part_id = p_ids[2],r = r0[i], v = SVector{dim,T}(zeros(T,dim)), f = SVector{dim,T}(zeros(T,dim)), density = density, η = η, Radii = R, α = α₂))
+			end
+		end
+
 		println("System initialized!")
 		for i = 1:num_cold
 			simulation.particles[i].α = α₁
@@ -122,11 +135,21 @@ function sim_run(;
 		simulation.num_steps = num_steps
 		simulation.save_interval = save_interval
 		println("Simulation starts!")
-		simulate!(simulation, collision_calc,box)
+
+		if simulation.regime == "Overdamped"
+			simulateO!(simulation, collision_calc,box)
+		elseif simulation.regime == "Underdamped"
+			simulate!(simulation, collision_calc,box)
+		end
 		yield()
     end
     return nothing
 end
+
+
+
+
+
 #####################################################################################
 #####################################################################################
 #        Simulation scheme for Verlet-type and Euler-Maruyama algorithms            #
@@ -381,137 +404,6 @@ function simulate!(
 end
 
 
-
-
-export sim_runO
-
-function sim_runO(;
-    num_runs::N,
-    homogeneous::Bool,
-	collision_calc::Bool,
-    num_steps::N,
-	save_interval::N,
-    Npart::N,
-    ptypes::Vector{String},
-	p_ids::Vector{Int},
-    dim::N,
-    ϕ::T,
-    fraction::T,
-	cold_frac::T,
-    R::T,
-	neigh_cut_off::T,
-	neigh_update::I,
-	ϵ::T,
-    α₁::T,
-    α₂::T,
-    Δt_prod::T,
-    integ::String,
-	random_positions::Bool,
-	force_func::Function) where {N,I,T}
-
-    η		= T(8.9e-4)
-	σ = T(1.0)
-	
-
-		 
-    ###############################################################################
-    #   Initializing the system to get randomly distributed positions
-    ###############################################################################
-	if force_func == WCA
-		sigma = T(2^(1/6))*σ
-	elseif force_func == harm_rep
-		sigma = σ
-	end
-
-	neigh_cut_off *= sigma
-    if homogeneous
-		if random_positions && (Npart <= 100000)
-			box = Box(dim = dim, Npart = Npart, ϕ = ϕ, sigma = sigma )
-    		num_cold = ceil(Int, Npart*fraction)
-			r_init = [random_pos(box)]
-			for _ in 1:Npart-1
-				pos = random_pos(box)    
-				# Check for overlap with other particles
-				while check_overlap(pos, r_init, box, sigma * T(1.05))
-					pos = random_pos(box)
-				end        
-				# Append the position to the list of positions
-				push!(r_init,pos)
-			end
-		else
-			box = Box(dim = dim, Npart = Npart, ϕ = ϕ, sigma = sigma )
-    		num_cold = ceil(Int, Npart*fraction)
-			r_init = rectangular_lattice(Npart,box)
-			#r_init = triangular_lattice(Npart, box, σ)
-			r_init = sort_pos_by_dist(r_init, zero(T), zero(T))
-		end
-		shuffle!(r_init)
-		homog = "homogeneous"
-    else				
-		box = Box(dim = dim, Npart = Npart, ϕ = ϕ, sigma = sigma )
-		num_cold = floor(Int, Npart*fraction)
-		r_init = cut_circle_sphere!(box, sigma, Npart, fraction, cold_frac)
-		println(length(r_init))
-		if length(r_init) <= num_cold
-			rr_remain = rectangular_lattice(2Npart,box)
-			rad = T(sqrt(ceil(Npart .* fraction))/(2π/(1.0675*2sqrt(3))))
-			r_remain = circle_cut(rr_remain, rad, false)
-			shuffle!(r_remain)
-		else
-			error("droplet size is more than cold particles size!")
-		end
-		n_remain = Npart - length(r_init)
-		r_init = append!(r_init, r_remain[1:n_remain])
-		r_init = r_init[1:Npart]
-		if !random_positions
-			r_init = sort_pos_by_dist(r_init, zero(T), zero(T))
-		end
-		homog = "inhomogeneous"
-    end
-
-    Npart = length(r_init)
-
-    for run = 1:num_runs
-		simulation = Simulation()
-		simulation.neigh_update = neigh_update
-		simulation.neigh_cut_off = neigh_cut_off
-		simulation.num_cold = num_cold
-        output_file = "Overdamped_Npart,$Npart,deltat-$Δt_prod,epsilon-$ϵ,alpha_1-$α₁,alpha_2-$α₂,fraction-$ϕ,integ-$integ,run_num-$run,$homog"  # check this!
-		simulation.part_types = ptypes
-        simulation.output_file = output_file
-        
-		simulation.integrator = integ
-		simulation.force_func = force_func
-		simulation.ϵ = ϵ 
-		simulation.σ = σ 
-        simulation.box = box
-        r0 = r_init
-        for i = 1:num_cold
-            push!(simulation.particles, PassiveOP(part_type = ptypes[1], part_id = p_ids[1],r = r0[i], v = SVector{dim,T}(zeros(T,dim)), f = SVector{dim,T}(zeros(T,dim)), η = η, Radii = R, α = α₁))
-        end
-        for i = num_cold+1:Npart
-            push!(simulation.particles, PassiveOP(part_type = ptypes[2], part_id = p_ids[2],r = r0[i], v = SVector{dim,T}(zeros(T,dim)), f = SVector{dim,T}(zeros(T,dim)), η = η, Radii = R, α = α₂))
-        end
-		println("System initialized!")
-		for i = 1:num_cold
-			simulation.particles[i].α = α₁
-			simulation.particles[i].v = sqrt(simulation.particles[i].α) .* @SVector randn(T,dim)
-		end
-		for i = num_cold+1:Npart
-			simulation.particles[i].α = α₂
-			simulation.particles[i].v = sqrt(simulation.particles[i].α) .* @SVector randn(T,dim)
-		end
-
-
-		simulation.dt = Δt_prod
-		simulation.num_steps = num_steps
-		simulation.save_interval = save_interval
-		println("Simulation starts!")
-		simulateO!(simulation, collision_calc,box)
-		yield()
-    end
-    return nothing
-end
 #####################################################################################
 #####################################################################################
 #        Simulation scheme for Verlet-type and Euler-Maruyama algorithms            #
@@ -719,7 +611,7 @@ function simulateO!(
 	copyto!(r_c,r)
 	copyto!(v_c,v)
 	copyto!(f_c,f)
-	# After finishing the simulation it saves the positions, velocities and forces back into the simulation structure! 
+	
 	[simulation.particles[i].r = r_c[i] for i=1:Npart]
 	[simulation.particles[i].v = v_c[i] for i=1:Npart]
 	[simulation.particles[i].f = f_c[i] for i=1:Npart]
