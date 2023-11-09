@@ -135,22 +135,6 @@ function pos_fcc(a::T) where T
     return p₁, p₂, p₃, p₄
 end
 
-"""
-export fcc_lattice
-function fcc_lattice(box::SVector{N,T},a::T,M_x::Int, M_y::Int, M_z::Int) where {N,T}
-    positions = Array{SVector{3,T}, 1}()
-    for i = 0:M_x-1, j = 0:M_y-1, k = 0:M_z-1
-        x = i*a
-        y = j*a
-        z = k*a
-        push!(positions, SVector{3,T}([x, y, z]) .- box ./ 2)
-        push!(positions, SVector{3,T}([x+a/2, y+a/2, z]) .- box ./ 2)
-        push!(positions, SVector{3,T}([x+a/2, y, z+a/2]) .- box ./ 2)
-        push!(positions, SVector{3,T}([x, y+a/2, z+a/2]) .- box ./ 2)
-    end
-    return positions
-end
-"""
 
 export isinsphere
 function isinsphere(pos::SVector{3,T}, rad::T, r_margin::T) where T
@@ -307,6 +291,36 @@ function random_pos(box::SVector{N,T}) where {N,T}
 	return SVector{dim,T}((rand(dim)) .-T(0.5) ) .* box
 end
 
+export random_positions_init
+function random_positions_init(Npart, box, sigma, float_precision)
+    r_init = Vector{SVector{box.dim, float_precision}}()
+    for _ in 1:Npart
+        pos = random_pos(box)
+        while check_overlap(pos, r_init, box, sigma * float_precision(1.05))
+            pos = random_pos(box)
+        end
+        push!(r_init, pos)
+    end
+    return r_init
+end
+
+export regular_positions_init
+function regular_positions_init(Npart, box, sigma, float_precision)
+	r_init = rectangular_lattice(Npart,box)
+	r_init = sort_pos_by_dist(r_init, zero(float_precision), zero(float_precision))
+end
+
+export initialize_velocities
+function initialize_velocities(Npart, dim, α₁, α₂, fraction, float_precision)
+    num_cold = ceil(Int, Npart * fraction)
+    v_init = Vector{SVector{dim, float_precision}}()
+    for i in 1:Npart
+        α = i <= num_cold ? α₁ : α₂
+        velocity = sqrt(α) .* SVector{dim, float_precision}(randn(dim))
+        push!(v_init, velocity)
+    end
+    return v_init
+end
 
 ################################################################################
 ################################################################################
@@ -415,66 +429,6 @@ function APMO(; part_type::String = "H",
     APMO{T}(part_type, part_id, rad, α, τD, r, v, f, τΓ, r_pseu, v_pseu)
 end
 
-"""
-export APM
-mutable struct APM{T <: AbstractFloat, N <: Int} <: Particle
-	part_type::String
-	rad::T
-	α::T
-	τm::T
-	τD::T
-    τΓ::T
-    r::SVector{N,T}
-	v::SVector{N,T}
-	f::SVector{N,T}
-	r_pseu::SVector{N,T}
-	v_pseu::SVector{N,T}
-end
-
-function APM(; part_type::String = "APM",r::SVector{N,T}, v::SVector{N,T}, f::SVector{N,T},
-    density::T, η::T, Radii::T, α::T, Temp::T, k::T, r_pseu::SVector{N,T}, v_pseu::SVector{N,T}) where {T <: AbstractFloat, N <: Int}
-    kB = T(1.380649*10^(-23))
-    rad = Radii/1.0e-6
-    m = density*volume(Radii)
-    γ = friction(η,Radii)
-    τm = m/γ
-    τD = γ*(Radii)^2/(kB*Temp)
-    τΓ = γ/k
-    APM{T,N}(part_type, rad, α, τm, τD, τΓ, r, v, f, r_pseu, v_pseu)
-end
-"""
-################################################################################
-#
-#           			Interactions definition
-#
-################################################################################
-
-"""
-export WCA
-export Harmonic_Repulsive
-
-abstract type Interaction end
-
-struct WCA{T <: AbstractFloat} <: Interaction
-    ϵ::T
-    σ::T
-    r_cut::T
-end
-
-function WCA(; ϵ::T, σ::T, r_cut::T) where T<:AbstractFloat
-    WCA{T}(ϵ, σ, r_cut, particles)
-end
-
-
-struct Harmonic_Repulsive{T <: AbstractFloat} <: Interaction
-    k::T
-    r_cut::T
-end
-
-function Harmonic_Repulsive(;k::T, r_cut::T) where T<:AbstractFloat
-    Harmonic_Repulsive{T}(k, r_cut, particles)
-end
-"""
 
 ################################################################################
 ################################################################################
@@ -487,6 +441,7 @@ export Simulation
 # Add force_func field to Simulation struct
 mutable struct Simulation
     descriptor::String
+    regime::String
     box::SVector
     particles::Array{Particle, 1}
     part_types::Vector{String}
@@ -505,6 +460,7 @@ mutable struct Simulation
 end
 
 function Simulation(; descriptor::String = "No description given...",
+    regime::String = "Underdamped",
     box::SVector=SVector{3,Union{Float32,Float64}}(ones(Float32,3)),
     particles::Array{Particle, 1} = Particle[],
     part_types::Vector{String}=["H"],
@@ -520,7 +476,7 @@ function Simulation(; descriptor::String = "No description given...",
     particles_to_save::Array{Particle, 1} =  Particle[],
     output_file::String = "output",
     force_func::Function = WCA)  
-    Simulation(descriptor,box, particles, part_types, ϵ, σ, neigh_cut_off, neigh_update, num_cold, dt,integrator, num_steps, save_interval, particles_to_save,output_file, force_func)  # Add force_func argument here
+    Simulation(descriptor, regime, box, particles, part_types, ϵ, σ, neigh_cut_off, neigh_update, num_cold, dt,integrator, num_steps, save_interval, particles_to_save,output_file, force_func)  # Add force_func argument here
 end
 
 export SimulationActive
@@ -561,118 +517,3 @@ function SimulationActive(; descriptor::String = "No description given...",
     force_func::Function = WCA)  
     SimulationActive(descriptor,box, particles, part_types, ϵ, σ, neigh_cut_off, neigh_update, dt,integrator, num_steps, save_interval, particles_to_save,output_file, force_func)  # Add force_func argument here
 end
-
-
-"""
-mutable struct Simulation
-    descriptor::String
-    box::SVector
-    particles::Array{Particle, 1}
-    part_types::Vector{String}
-    ϵ::Union{Float32,Float64}
-    σ::Union{Float32,Float64}
-    neigh_cut_off::Union{Float32,Float64}
-    neigh_update::Int
-    num_cold::Int
-    dt::Union{Float32,Float64}
-    integrator::String
-    num_steps::Int
-    save_interval::Int
-    particles_to_save::Array{Particle, 1}
-	output_file::String
-end
-
-function Simulation(; descriptor::String = "No description given...",
-    box::SVector=SVector{3,Union{Float32,Float64}}(ones(Float32,3)),
-    particles::Array{Particle, 1} = Particle[],
-    part_types::Vector{String}=["A","B"],
-    ϵ::Union{Float32,Float64} = 100.0f0,
-    σ::Union{Float32,Float64} = 1.0f0,
-    neigh_cut_off::Union{Float32,Float64} = 5.0f0,
-    neigh_update::Int = 100000, 
-    num_cold::Int = 1,
-    dt::Union{Float32,Float64} = 0.00001f0,
-    integrator::String = "vv",
-    num_steps::Int = 0,
-    save_interval::Int = 0,
-    particles_to_save::Array{Particle, 1} =  Particle[],
-    output_file::String = "output")
-    Simulation(descriptor,box, particles, part_types, ϵ, σ, neigh_cut_off, neigh_update, num_cold, dt,integrator, num_steps, save_interval, particles_to_save,output_file)
-end
-"""
-
-"""
-
-mutable struct Simulation
-    descriptor::String
-    box::SVector
-    particles::Array{Particle, 1}
-    part_types::Vector{String}
-    ϵ::Union{Float32,Float64}
-    σ::Union{Float32,Float64}
-    neigh_cut_off::Union{Float32,Float64}
-    neigh_update::Int
-    num_cold::Int
-    dt::Union{Float32,Float64}
-    integrator::String
-    num_steps::Int
-    save_interval::Int
-    particles_to_save::Array{Particle, 1}
-    output_file::String
-    num_runs::Int
-    homogeneous::Bool
-    collision_calc::Bool
-    ϕ::Union{Float32,Float64}
-    fraction::Union{Float32,Float64}
-    cold_frac::Union{Float32,Float64}
-    R::Union{Float32,Float64}
-    α₁::Union{Float32,Float64}
-    α₂::Union{Float32,Float64}
-    random_positions::Bool
-end
-
-function Simulation(; descriptor::String = "No description given...",
-    box::SVector=SVector{3,Union{Float32,Float64}}(ones(Float32,3)),
-    particles::Array{Particle, 1} = Particle[],
-    part_types::Vector{String}=["A","B"],
-    ϵ::Union{Float32,Float64} = 100.0f0,
-    σ::Union{Float32,Float64} = 1.0f0,
-    neigh_cut_off::Union{Float32,Float64} = 5.0f0,
-    neigh_update::Int = 100000, 
-    num_cold::Int = 1,
-    dt::Union{Float32,Float64} = 0.00001f0,
-    integrator::String = "vv",
-    num_steps::Int = 0,
-    save_interval::Int = 0,
-    particles_to_save::Array{Particle, 1} =  Particle[],
-    output_file::String = "output",
-    num_runs::Int = 1,
-    homogeneous::Bool = true,
-    collision_calc::Bool = true,
-    Npart::Int = 1,
-    p_ids::Vector{Int} = [1],
-    dim::Int = 3,
-    ϕ::Union{Float32,Float64} = 1.0f0,
-    fraction::Union{Float32,Float64} = 0.5f0,
-    cold_frac::Union{Float32,Float64} = 0.5f0,
-    R::Union{Float32,Float64} = 1.0f0,
-    α₁::Union{Float32,Float64} = 1.0f0,
-    α₂::Union{Float32,Float64} = 1.0f0,
-    Δt_prod::Union{Float32,Float64} = 0.00001f0,
-    random_positions::Bool = true)
-    Simulation(descriptor,box, particles, part_types, ϵ, σ, neigh_cut_off, neigh_update, num_cold, dt,integrator, num_steps, save_interval, particles_to_save,output_file)
-end   
-
-descriptor, box,particles,part_types,ϵ,σ,neigh_cut_off,neigh_update, num_cold,dt,integrator,num_steps,save_interval,particles_to_save,output_file,num_runs,homogeneous, collision_calc,Npart,
-    p_ids::Vector{Int} = [1],
-    dim::Int = 3,
-    ϕ::Union{Float32,Float64} = 1.0f0,
-    fraction::Union{Float32,Float64} = 0.5f0,
-    cold_frac::Union{Float32,Float64} = 0.5f0,
-    R::Union{Float32,Float64} = 1.0f0,
-    α₁::Union{Float32,Float64} = 1.0f0,
-    α₂::Union{Float32,Float64} = 1.0f0,
-    Δt_prod::Union{Float32,Float64} = 0.00001f0,
-    random_positions::Bool = true
-
-"""
