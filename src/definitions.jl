@@ -441,7 +441,7 @@ export Simulation
 # Add force_func field to Simulation struct
 mutable struct Simulation
     descriptor::String
-    regime::String
+    type::String
     box::SVector
     particles::Array{Particle, 1}
     part_types::Vector{String}
@@ -460,7 +460,7 @@ mutable struct Simulation
 end
 
 function Simulation(; descriptor::String = "No description given...",
-    regime::String = "Underdamped",
+    type::String = "Langevin",
     box::SVector=SVector{3,Union{Float32,Float64}}(ones(Float32,3)),
     particles::Array{Particle, 1} = Particle[],
     part_types::Vector{String}=["H"],
@@ -476,7 +476,7 @@ function Simulation(; descriptor::String = "No description given...",
     particles_to_save::Array{Particle, 1} =  Particle[],
     output_file::String = "output",
     force_func::Function = WCA)  
-    Simulation(descriptor, regime, box, particles, part_types, ϵ, σ, neigh_cut_off, neigh_update, num_cold, dt,integrator, num_steps, save_interval, particles_to_save,output_file, force_func)  # Add force_func argument here
+    Simulation(descriptor, type, box, particles, part_types, ϵ, σ, neigh_cut_off, neigh_update, num_cold, dt,integrator, num_steps, save_interval, particles_to_save,output_file, force_func)  # Add force_func argument here
 end
 
 export SimulationActive

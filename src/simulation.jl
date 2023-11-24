@@ -1,7 +1,7 @@
 export sim_run
 
 function sim_run(;
-	regime::String,
+	type::String,
     num_runs::N,
     homogeneous::Bool,
 	collision_calc::Bool,
@@ -89,11 +89,12 @@ function sim_run(;
 
     for run = 1:num_runs
 		simulation = Simulation()
-		simulation.regime = regime
+		simulation.type = type
 		simulation.neigh_update = neigh_update
 		simulation.neigh_cut_off = neigh_cut_off
 		simulation.num_cold = num_cold
-        output_file = "Npart,$Npart,deltat-$Δt_prod,epsilon-$ϵ,alpha_1-$α₁,alpha_2-$α₂,fraction-$ϕ,integ-$integ,run_num-$run,$homog"  # check this!
+		alpha = α₂/α₁
+        output_file = "$type,Npart,$Npart,deltat-$Δt_prod,epsilon-$ϵ,alpha-$alpha,fraction-$ϕ,integ-$integ,run_num-$run,$homog"  # check this!
 		simulation.part_types = ptypes
         simulation.output_file = output_file
         
@@ -104,14 +105,14 @@ function sim_run(;
         simulation.box = box
         r0 = r_init
 
-		if simulation.regime == "Overdamped"
+		if simulation.type == "Brownian"
 			for i = 1:num_cold
 				push!(simulation.particles, PassiveOP(part_type = ptypes[1], part_id = p_ids[1],r = r0[i], v = SVector{dim,T}(zeros(T,dim)), f = SVector{dim,T}(zeros(T,dim)), η = η, Radii = R, α = α₁))
 			end
 			for i = num_cold+1:Npart
 				push!(simulation.particles, PassiveOP(part_type = ptypes[2], part_id = p_ids[2],r = r0[i], v = SVector{dim,T}(zeros(T,dim)), f = SVector{dim,T}(zeros(T,dim)), η = η, Radii = R, α = α₂))
 			end
-		elseif simulation.regime == "Underdamped"	
+		elseif simulation.type == "Langevin"	
 			for i = 1:num_cold
 				push!(simulation.particles, PassiveP(part_type = ptypes[1], part_id = p_ids[1],r = r0[i], v = SVector{dim,T}(zeros(T,dim)), f = SVector{dim,T}(zeros(T,dim)), density = density, η = η, Radii = R, α = α₁))
 			end
@@ -136,9 +137,9 @@ function sim_run(;
 		simulation.save_interval = save_interval
 		println("Simulation starts!")
 
-		if simulation.regime == "Overdamped"
+		if simulation.type == "Brownian"
 			simulateO!(simulation, collision_calc,box)
-		elseif simulation.regime == "Underdamped"
+		elseif simulation.type == "Langevin"
 			simulate!(simulation, collision_calc,box)
 		end
 		yield()
@@ -741,7 +742,7 @@ function sim_runActiveO(;
 		simulation.neigh_update = neigh_update
 		simulation.neigh_cut_off = neigh_cut_off
 		#simulation.num_cold = num_cold
-        output_file = "Overdamped_APM_Npart,$Npart,deltat-$Δt_prod,epsilon-$ϵ,alpha-$α,memory-$τΓ,fraction-$ϕ,integ-$integ,run_num-$run"  # check this!
+        output_file = "Brownian_APM_Npart,$Npart,deltat-$Δt_prod,epsilon-$ϵ,alpha-$α,memory-$τΓ,fraction-$ϕ,integ-$integ,run_num-$run"  # check this!
 		simulation.part_types = ptypes
         simulation.output_file = output_file
         
