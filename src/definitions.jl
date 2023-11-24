@@ -429,6 +429,61 @@ function APMO(; part_type::String = "H",
     APMO{T}(part_type, part_id, rad, α, τD, r, v, f, τΓ, r_pseu, v_pseu)
 end
 
+export initialization
+
+function initialization(;
+    homogeneous::Bool = true,
+    dim::Int = 2,
+    Npart::Int = 10000,
+    ϕ::T = 0.5f0,
+    fraction::T = 0.5f0,
+    sigma::T = 1.0f0,
+    random_positions::Bool = true,
+    cold_frac::T = 0.5
+    ) where T
+    if homogeneous
+		if random_positions && (Npart <= 100000)
+			box = Box(dim = dim, Npart = Npart, ϕ = ϕ, sigma = sigma )
+    		num_cold = ceil(Int, Npart*fraction)
+			r_init = [random_pos(box)]
+			for _ in 1:Npart-1
+				pos = random_pos(box)    
+				# Check for overlap with other particles
+				while check_overlap(pos, r_init, box, sigma * T(1.05))
+					pos = random_pos(box)
+				end        
+				# Append the position to the list of positions
+				push!(r_init,pos)
+			end
+		else
+			box = Box(dim = dim, Npart = Npart, ϕ = ϕ, sigma = sigma )
+    		num_cold = ceil(Int, Npart*fraction)
+			r_init = rectangular_lattice(Npart,box)
+			#r_init = triangular_lattice(Npart, box, σ)
+			r_init = sort_pos_by_dist(r_init, zero(T), zero(T))
+		end
+		shuffle!(r_init)
+    else				
+		box = Box(dim = dim, Npart = Npart, ϕ = ϕ, sigma = sigma )
+		num_cold = ceil(Int, Npart*fraction)
+		r_init = cut_circle_sphere!(box, sigma, Npart, fraction, cold_frac)
+		if length(r_init) <= num_cold
+			rr_remain = rectangular_lattice(2Npart,box)
+			rad = T(sqrt(ceil(Npart .* fraction))/(2π/(1.0675*2sqrt(3))))
+			r_remain = circle_cut(rr_remain, rad, false)
+			shuffle!(r_remain)
+		else
+			error("r_droplet size is more than cold particles size!")
+		end
+		n_remain = Npart - length(r_init)
+		r_init = append!(r_init, r_remain[1:n_remain])
+		r_init = r_init[1:Npart]
+		if !random_positions
+			r_init = sort_pos_by_dist(r_init, zero(T), zero(T))
+		end
+    end
+    return box, r_init, num_cold
+end
 
 ################################################################################
 ################################################################################
