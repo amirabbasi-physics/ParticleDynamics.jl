@@ -11,7 +11,7 @@ export WCA
     return SVector{2,T}(f_x,f_y), e_int
 end
 
-
+"""
 #Newly added!
 @inline function harm_rep(dx::T, dy::T, dr²::T, ϵ::T, σ::T, alpha::T1) where {T, T1}
     dist = dr²^(1/2)
@@ -23,12 +23,12 @@ end
     return SVector{2,T}(f_x,f_y), e_int, dqt
 end
 #Newly added finished
-
+"""
 
 
 # uncomment for 3D case
 
-"""
+
 @inline function harm_rep(dx::T, dy::T, dz::T, dr²::T, ϵ::T, σ::T) where T
     dist = dr²^(1/2)
     f_int = ϵ*(1/dist - 1/σ)
@@ -38,7 +38,7 @@ end
     f_z = f_int*dz
     return SVector{3,T}(f_x,f_y, f_z), e_int
 end
-"""
+
 
 @inline function WCA(dx::T, dy::T, dr²::T, ϵ::T, σ::T) where T
     inv_dr² = 1/dr²
