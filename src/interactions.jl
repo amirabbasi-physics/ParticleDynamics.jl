@@ -64,7 +64,7 @@ end
     e_int = 4ϵ*(2σ12_inv_dr12 - σ6_inv_dr6) + ϵ
     f_x = f_int*dx
     f_y = f_int*dy
-    f_y = f_int*dz
+    f_z = f_int*dz
     return SVector{3,T}(f_x,f_y, f_z), e_int
 end
 
