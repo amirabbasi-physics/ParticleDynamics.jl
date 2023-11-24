@@ -20,13 +20,15 @@ function sim_run(;
 	ϵ::T,
     α₁::T,
     α₂::T,
+	density::T,
+	η::T,
     Δt_prod::T,
     integ::String,
 	random_positions::Bool,
 	force_func::Function) where {N,I,T}
 
-    η		= T(8.9e-4)
-    density = T(1.0e3) # mass density of particles (kg/m³)
+    #η		= T(8.9e-4)
+    #density = T(1.0e3) # mass density of particles (kg/m³)
 	σ = T(1.0)
 	
 
@@ -52,7 +54,7 @@ function sim_run(;
 		simulation.neigh_cut_off = neigh_cut_off
 		simulation.num_cold = num_cold
 		alpha = α₂/α₁
-        output_file = "$type,Npart,$Npart,deltat-$Δt_prod,epsilon-$ϵ,alpha-$alpha,fraction-$ϕ,integ-$integ,run_num-$run,homo_$homogeneous"  # check this!
+        output_file = "$type,Npart,$Npart,$dim-D,deltat-$Δt_prod,epsilon-$ϵ,alpha-$alpha,fraction-$ϕ,integ-$integ,run_num-$run,homo_$homogeneous"  # check this!
 		simulation.part_types = ptypes
         simulation.output_file = output_file
         
@@ -130,11 +132,11 @@ function simulate!(
 	Eₚ = similar(dQ)
 	
 	if simulation.force_func == WCA
-		NN = hexagonal_neighbors(sigma = T(2^(1/6)), circ_R = simulation.neigh_cut_off)
+		NN = max_neighbors(sigma = T(2^(1/6)), R = simulation.neigh_cut_off, box = box)
 	elseif simulation.force_func == harm_rep
-		NN = hexagonal_neighbors(sigma = T(1.0), circ_R = simulation.neigh_cut_off)
+		NN = max_neighbors(sigma = T(1.0), R = simulation.neigh_cut_off, box = box)
 	end
-
+	
 	Neighbors = CuArray(Matrix(zeros(Int,Npart,NN)))
 	if collision_calc
 		colls = CUDA.zeros(T,Npart)
@@ -181,8 +183,10 @@ function simulate!(
 	
 			
 			if collision_calc
-				forces!(r, f, Eₚ, Neighbors, simulation.num_cold, colls, coll_switch, simulation.box, simulation.ϵ, simulation.σ, simulation.force_func)
+				#forces!(r, f, Eₚ, Neighbors, simulation.num_cold, colls, coll_switch, simulation.box, simulation.ϵ, simulation.σ, simulation.force_func)
+				forces!(r, f, Eₚ, Neighbors, simulation.num_cold, colls, simulation.box, simulation.ϵ, simulation.σ, simulation.force_func)
 			else
+				#forces!(r, f, Eₚ, Neighbors, simulation.box, simulation.ϵ, simulation.σ, simulation.force_func)
 				forces!(r, f, Eₚ, Neighbors, simulation.box, simulation.ϵ, simulation.σ, simulation.force_func)
 			end
 			
@@ -381,11 +385,28 @@ function simulateO!(
 	dQ = CUDA.zeros(T,Npart)
 	Eₚ = similar(dQ)
 	
+
 	if simulation.force_func == WCA
-		NN = hexagonal_neighbors(sigma = T(2^(1/6)), circ_R = simulation.neigh_cut_off)
+		NN = max_neighbors(sigma = T(2^(1/6)), R = simulation.neigh_cut_off, box = box)
 	elseif simulation.force_func == harm_rep
-		NN = hexagonal_neighbors(sigma = T(1.0), circ_R = simulation.neigh_cut_off)
+		NN = max_neighbors(sigma = T(1.0), R = simulation.neigh_cut_off, box = box)
 	end
+
+	"""
+	if length(box) == 2
+		if simulation.force_func == WCA
+			NN = hexagonal_neighbors(sigma = T(2^(1/6)), circ_R = simulation.neigh_cut_off)
+		elseif simulation.force_func == harm_rep
+			NN = hexagonal_neighbors(sigma = T(1.0), circ_R = simulation.neigh_cut_off)
+		end
+	elseif length(box) == 3
+		if simulation.force_func == WCA
+			NN = hcp_neighbors(sigma = T(2^(1/6)), circ_R = simulation.neigh_cut_off)
+		elseif simulation.force_func == harm_rep
+			NN = hcp_neighbors(sigma = T(1.0), circ_R = simulation.neigh_cut_off)
+		end
+	end
+	"""
 
 	Neighbors = CuArray(Matrix(zeros(Int,Npart,NN)))
 	if collision_calc

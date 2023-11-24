@@ -10,6 +10,68 @@ function Box(; dim::Int, Npart::Int, ϕ::T, sigma::T) where T <: AbstractFloat
     end
 end
 
+
+export initialization
+
+function initialization(;
+    homogeneous::Bool = true,
+    dim::Int = 2,
+    Npart::Int = 10000,
+    ϕ::T = 0.5f0,
+    fraction::T = 0.5f0,
+    sigma::T = 1.0f0,
+    random_positions::Bool = true,
+    cold_frac::T = 0.5
+    ) where T
+    if homogeneous
+		if random_positions && (Npart <= 100000)
+			box = Box(dim = dim, Npart = Npart, ϕ = ϕ, sigma = sigma )
+    		num_cold = ceil(Int, Npart*fraction)
+			r_init = [random_pos(box)]
+			for _ in 1:Npart-1
+				pos = random_pos(box)    
+				# Check for overlap with other particles
+				while check_overlap(pos, r_init, box, sigma * T(1.05))
+					pos = random_pos(box)
+				end        
+				# Append the position to the list of positions
+				push!(r_init,pos)
+			end
+		else
+			box = Box(dim = dim, Npart = Npart, ϕ = ϕ, sigma = sigma )
+    		num_cold = ceil(Int, Npart*fraction)
+            if dim == 2
+                r_init = rectangular_lattice(Npart,box)
+                r_init = sort_pos_by_dist(r_init, zero(T), zero(T))
+            elseif dim == 3
+                r_init = simplecubic_lattice(Npart,box)
+                r_init = sort_pos_by_dist(r_init, zero(T), zero(T), zero(T))
+            end
+		end
+		shuffle!(r_init)
+    else
+        println("Warning! It is not modified for 3D systems!")				
+		box = Box(dim = dim, Npart = Npart, ϕ = ϕ, sigma = sigma )
+		num_cold = ceil(Int, Npart*fraction)
+		r_init = cut_circle_sphere!(box, sigma, Npart, fraction, cold_frac)
+		if length(r_init) <= num_cold
+			rr_remain = rectangular_lattice(2Npart,box)
+			rad = T(sqrt(ceil(Npart .* fraction))/(2π/(1.0675*2sqrt(3))))
+			r_remain = circle_cut(rr_remain, rad, false)
+			shuffle!(r_remain)
+		else
+			error("r_droplet size is more than cold particles size!")
+		end
+		n_remain = Npart - length(r_init)
+		r_init = append!(r_init, r_remain[1:n_remain])
+		r_init = r_init[1:Npart]
+		if !random_positions
+			r_init = sort_pos_by_dist(r_init, zero(T), zero(T))
+		end
+    end
+    return box, r_init, num_cold
+end
+
 export sort_pos_by_dist
 function sort_pos_by_dist(positions::Array{SVector{2,T},1}, x0::T, y0::T) where T
     distances = [(pos[1]-x0)^2 + (pos[2]-y0)^2 for pos in positions]
@@ -17,6 +79,11 @@ function sort_pos_by_dist(positions::Array{SVector{2,T},1}, x0::T, y0::T) where 
     return positions[sorted_indices]
 end
 
+function sort_pos_by_dist(positions::Array{SVector{3,T},1}, x0::T, y0::T, z0::T) where T
+    distances = [(pos[1]-x0)^2 + (pos[2]-y0)^2 + (pos[2]-z0)^2 for pos in positions]
+    sorted_indices = sortperm(distances)
+    return positions[sorted_indices]
+end
 
 export shuffle_pos!
 function shuffle_pos!(simulation)
@@ -33,6 +100,41 @@ function hexagonal_neighbors(; sigma::T, circ_R::T) where T
     num_circles = 7 * sum(1:n_max)
     return num_circles
 end 
+
+"""
+export hcp_neighbors
+function hcp_neighbors(; sigma::T, circ_R::T) where T
+    # Calculate the maximum number of layers that can fit within the given radius
+    # The factor sqrt(2/3) comes from the vertical distance between layers in HCP
+    layer_max = ceil(Int, circ_R / (sigma * sqrt(2/3)))
+
+    total_neighbors = 0
+    for layer in -layer_max:layer_max
+        # Calculate the vertical distance from the central layer
+        z_dist = abs(layer * sigma * sqrt(2/3))
+
+        # Ensure that the argument for sqrt is non-negative
+        if circ_R^2 >= z_dist^2
+            # Calculate the maximum radius in the horizontal plane for this layer
+            max_r = sqrt(circ_R^2 - z_dist^2)
+
+            # Estimate the number of neighbors in this horizontal layer
+            # This is an approximation, assuming a circular boundary
+            n_max = ceil(Int, max_r / sigma)
+            neighbors_in_layer = 1 + 3 * n_max * (n_max - 1)
+            total_neighbors += neighbors_in_layer
+        end
+    end
+    return total_neighbors
+end
+"""
+
+export max_neighbors
+function max_neighbors(; sigma::T, R::T, box::SVector{N,T}) where {N,T}
+    dim = length(box)
+    return ceil(Int, (2 * R/sigma)^dim)
+end
+
 
 export rectangular_lattice
 
@@ -88,6 +190,19 @@ function triangular_lattice(Npart::Int, box::SVector{N,T}, σ::T) where {N,T}
 end
 
 export simplecubic_lattice
+
+function simplecubic_lattice(Npart::Int, box::SVector{3, T}) where T
+    n_side = ceil(Int, cbrt(Npart))  # Cube root for 3D lattice
+    delta = box ./ n_side
+    x = range(delta[1]/2, stop=box[1]-delta[1]/2, length=n_side)
+    y = range(delta[2]/2, stop=box[2]-delta[2]/2, length=n_side)
+    z = range(delta[3]/2, stop=box[3]-delta[3]/2, length=n_side)
+    positions = [SVector{3, T}(xi, yj, zk) .- box/2 for xi in x, yj in y, zk in z]
+    return positions[1:Npart]
+end
+
+
+"""
 function simplecubic_lattice(Npart::Int, box::SVector{3,T}) where T
     positions = Array{SVector{3,T}, 1}()
     L_x = box[1]
@@ -103,8 +218,9 @@ function simplecubic_lattice(Npart::Int, box::SVector{3,T}) where T
     for i = 0 : M_x - 1, j = 0 : M_y - 1, k = 0 : M_z - 1
         push!(positions, SVector{3,T}([(i + 1/2) * s_x, (j + 1/2) * s_y, (k + 1/2) * s_z] .- [L_x/2, L_y/2, L_z/2]))
     end
-    return positions
+    return positions[1:Npart]
 end
+"""
 
 export fcc_lattice
 function fcc_lattice(box::SVector{N,T},σ::T,M_x::Int64, M_y::Int64, M_z::Int64) where {N,T}
@@ -429,61 +545,7 @@ function APMO(; part_type::String = "H",
     APMO{T}(part_type, part_id, rad, α, τD, r, v, f, τΓ, r_pseu, v_pseu)
 end
 
-export initialization
 
-function initialization(;
-    homogeneous::Bool = true,
-    dim::Int = 2,
-    Npart::Int = 10000,
-    ϕ::T = 0.5f0,
-    fraction::T = 0.5f0,
-    sigma::T = 1.0f0,
-    random_positions::Bool = true,
-    cold_frac::T = 0.5
-    ) where T
-    if homogeneous
-		if random_positions && (Npart <= 100000)
-			box = Box(dim = dim, Npart = Npart, ϕ = ϕ, sigma = sigma )
-    		num_cold = ceil(Int, Npart*fraction)
-			r_init = [random_pos(box)]
-			for _ in 1:Npart-1
-				pos = random_pos(box)    
-				# Check for overlap with other particles
-				while check_overlap(pos, r_init, box, sigma * T(1.05))
-					pos = random_pos(box)
-				end        
-				# Append the position to the list of positions
-				push!(r_init,pos)
-			end
-		else
-			box = Box(dim = dim, Npart = Npart, ϕ = ϕ, sigma = sigma )
-    		num_cold = ceil(Int, Npart*fraction)
-			r_init = rectangular_lattice(Npart,box)
-			#r_init = triangular_lattice(Npart, box, σ)
-			r_init = sort_pos_by_dist(r_init, zero(T), zero(T))
-		end
-		shuffle!(r_init)
-    else				
-		box = Box(dim = dim, Npart = Npart, ϕ = ϕ, sigma = sigma )
-		num_cold = ceil(Int, Npart*fraction)
-		r_init = cut_circle_sphere!(box, sigma, Npart, fraction, cold_frac)
-		if length(r_init) <= num_cold
-			rr_remain = rectangular_lattice(2Npart,box)
-			rad = T(sqrt(ceil(Npart .* fraction))/(2π/(1.0675*2sqrt(3))))
-			r_remain = circle_cut(rr_remain, rad, false)
-			shuffle!(r_remain)
-		else
-			error("r_droplet size is more than cold particles size!")
-		end
-		n_remain = Npart - length(r_init)
-		r_init = append!(r_init, r_remain[1:n_remain])
-		r_init = r_init[1:Npart]
-		if !random_positions
-			r_init = sort_pos_by_dist(r_init, zero(T), zero(T))
-		end
-    end
-    return box, r_init, num_cold
-end
 
 ################################################################################
 ################################################################################

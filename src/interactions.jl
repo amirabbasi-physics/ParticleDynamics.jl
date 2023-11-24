@@ -403,12 +403,10 @@ function forces!(
     threads = min(length(r), config.threads)
     blocks = cld(length(r), threads)
     CUDA.@sync kernel(r, f, Epot, Neighbors, cold_num, colls, box, ϵ, σ, force_func; threads, blocks)
-
     return nothing
 end
 
 
-"""
 
 function forces_kernel!(
     r::CuDeviceVector{T},
@@ -436,59 +434,105 @@ function forces_kernel!(
         cut_off = T1(σ)
         cut_off² = cut_off^2
     end
-
+    dim = length(box)
 
     @inbounds begin
-        if gtid <= Npart
-            pos₁ = r[gtid]
-            acc = zero(T)
-            epot= zero(T1)
-            coll = zero(T1)
-
-            @inbounds for j = 1:NNeigh
-                idx = Neighbors[gtid,j]
-                if idx != 0 
-                    pos₂  = r[idx]
-                else
-                    break
-                end
-
-                dx  = pos₁[1] - pos₂[1]
-                dy  = pos₁[2] - pos₂[2]
-
-                dx = (2abs(dx) > box[1] ) ? dx - sign(dx) * box[1] : dx
-                dy = (2abs(dy) > box[2] ) ? dy - sign(dy) * box[2] : dy
-
-                dr² = dx*dx + dy*dy
-
-                if dr² < cut_off²                  
-                    if gtid <= num_cold
-                        if idx > num_cold
-                            coll += one(T1)
-                        end
+        if dim == 2
+            if gtid <= Npart
+                pos₁ = r[gtid]
+                acc = zero(T)
+                epot= zero(T1)
+                coll = zero(T1)
+    
+                @inbounds for j = 1:NNeigh
+                    idx = Neighbors[gtid,j]
+                    if idx != 0 
+                        pos₂  = r[idx]
                     else
-                        if idx <= num_cold
-                            coll += one(T1)
-                        end
+                        break
                     end
-                    frc, ep = force_func(dx, dy, dr², ϵ, σ)
-                    acc = acc .+ frc
-                    epot = epot + ep
+    
+                    dx  = pos₁[1] - pos₂[1]
+                    dy  = pos₁[2] - pos₂[2]
+    
+                    dx = (2abs(dx) > box[1] ) ? dx - sign(dx) * box[1] : dx
+                    dy = (2abs(dy) > box[2] ) ? dy - sign(dy) * box[2] : dy
+    
+                    dr² = dx*dx + dy*dy
+    
+                    if dr² < cut_off²                  
+                        if gtid <= num_cold
+                            if idx > num_cold
+                                coll += one(T1)
+                            end
+                        else
+                            if idx <= num_cold
+                                coll += one(T1)
+                            end
+                        end
+                        frc, ep = force_func(dx, dy, dr², ϵ, σ)
+                        acc = acc .+ frc
+                        epot = epot + ep
+                    end
                 end
+                  
+                f[gtid] = acc
+                Epot[gtid] += epot
+                colls[gtid] += coll 
             end
-              
-            f[gtid] = acc
-            Epot[gtid] += epot
-            colls[gtid] += coll 
+        elseif dim == 3
+            if gtid <= Npart
+                pos₁ = r[gtid]
+                acc = zero(T)
+                epot= zero(T1)
+                coll = zero(T1)
+    
+                @inbounds for j = 1:NNeigh
+                    idx = Neighbors[gtid,j]
+                    if idx != 0 
+                        pos₂  = r[idx]
+                    else
+                        break
+                    end
+    
+                    dx  = pos₁[1] - pos₂[1]
+                    dy  = pos₁[2] - pos₂[2]
+                    dz  = pos₁[3] - pos₂[3]
+    
+                    dx = (2abs(dx) > box[1] ) ? dx - sign(dx) * box[1] : dx
+                    dy = (2abs(dy) > box[2] ) ? dy - sign(dy) * box[2] : dy
+                    dz = (2abs(dz) > box[3] ) ? dz - sign(dz) * box[3] : dz
+    
+                    dr² = dx*dx + dy*dy + dz*dz
+    
+                    if dr² < cut_off²                  
+                        if gtid <= num_cold
+                            if idx > num_cold
+                                coll += one(T1)
+                            end
+                        else
+                            if idx <= num_cold
+                                coll += one(T1)
+                            end
+                        end
+                        frc, ep = force_func(dx, dy, dz, dr², ϵ, σ)
+                        acc = acc .+ frc
+                        epot = epot + ep
+                    end
+                end
+                  
+                f[gtid] = acc
+                Epot[gtid] += epot
+                colls[gtid] += coll 
+            end
         end
     end
     return nothing
 end
 
 
+
 """
-
-
 function forces_kernel!(
     r::CuDeviceVector{T},
     f::CuDeviceVector{T},
@@ -555,3 +599,5 @@ function forces_kernel!(
     end
     return nothing
 end
+
+"""
