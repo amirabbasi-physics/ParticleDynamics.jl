@@ -437,7 +437,7 @@ function simulateO!(
 	alpha_list = [Float64(simulation.particles[i].α) for i=1:Npart]
 	sqrt_2alpha = Float64.(sqrt.(2 .* alpha_list))
 
-	if simulation.integrator == "em" || simulation.integrator == "mem" || simulation.integrator == "Heun"
+	if simulation.integrator == "em" || simulation.integrator == "mem" || simulation.integrator == "Heun" || simulation.integrator == "em-nocollswitch"
 		scale = T(1.0)
 	end
 
@@ -470,12 +470,62 @@ function simulateO!(
 
 			if collision_calc
 				forces!(r, f, Eₚ, Neighbors, simulation.num_cold, colls, coll_switch, simulation.box, simulation.ϵ, simulation.σ, simulation.force_func)
+				#forces!(r, f, alpha_d, dQ, Eₚ, Neighbors, simulation.num_cold, colls, coll_switch, simulation.box, simulation.ϵ, simulation.σ, simulation.force_func)
 			else
 				forces!(r, f, Eₚ, Neighbors, simulation.box, simulation.ϵ, simulation.σ, simulation.force_func)
+				#forces!(r, f, alpha_d, dQ, Eₚ, Neighbors, simulation.box, simulation.ϵ, simulation.σ, simulation.force_func)
+			
 			end
 
-			#update_particles_em!(r, v, f, dQ, Float64(simulation.dt), c3, simulation.box)
-			update_particles_em!(r, v, f, dQ, Float64(simulation.dt), c3, sqrt_2alpha_d, simulation.box)
+			update_particles_em!(r, v, f, dQ, Float64(simulation.dt), c3, simulation.box)
+			#update_particles_em!(r, v, f, dQ, Float64(simulation.dt), c3, sqrt_2alpha_d, simulation.box)
+
+			if step % simulation.save_interval == 0
+				if collision_calc
+					coll₀ = Float64.(sum(colls)) / (2 * simulation.save_interval)
+				end
+				
+				@. dQ = dQ ./ alpha_d
+				dQ₀ = Float64.(sum(dQ)) / simulation.save_interval
+				Epot = Float64(sum(Eₚ)) / simulation.save_interval
+	
+				fill!(dQ, zero(eltype(dQ)))
+				fill!(Eₚ, zero(eltype(Eₚ)))
+				
+				if collision_calc
+					fill!(colls, zero(eltype(colls)))
+				end
+	
+				@async begin
+					r_c, v_c = Vector(r), Vector(v)
+					write_gsd(step, simulation, part_id, r_c, v_c)
+					if collision_calc
+						write_log(step, simulation, Epot, dQ₀, coll₀)
+					else
+						write_log(step, simulation, Epot, dQ₀)
+					end
+				end
+			end
+		end
+	elseif simulation.integrator == "em-nocollswitch"
+		neighbor_list!(r,Neighbors,simulation.neigh_cut_off,simulation.box)
+		for step = 0:simulation.num_steps
+
+			if step % simulation.neigh_update == 0
+				neighbor_list!(r,Neighbors,simulation.neigh_cut_off,simulation.box)
+			end
+
+			if collision_calc
+				forces!(r, f, Eₚ, Neighbors, simulation.num_cold, colls, simulation.box, simulation.ϵ, simulation.σ, simulation.force_func)
+				#forces!(r, f, alpha_d, dQ, Eₚ, Neighbors, simulation.num_cold, colls, coll_switch, simulation.box, simulation.ϵ, simulation.σ, simulation.force_func)
+			else
+				forces!(r, f, Eₚ, Neighbors, simulation.box, simulation.ϵ, simulation.σ, simulation.force_func)
+				#forces!(r, f, alpha_d, dQ, Eₚ, Neighbors, simulation.box, simulation.ϵ, simulation.σ, simulation.force_func)
+			
+			end
+
+			update_particles_em!(r, v, f, dQ, Float64(simulation.dt), c3, simulation.box)
+			#update_particles_em!(r, v, f, dQ, Float64(simulation.dt), c3, sqrt_2alpha_d, simulation.box)
 
 			if step % simulation.save_interval == 0
 				if collision_calc
@@ -515,7 +565,8 @@ function simulateO!(
 			if collision_calc
 				forces!(r, f, Eₚ, Neighbors, simulation.num_cold, colls, coll_switch, simulation.box, simulation.ϵ, simulation.σ, simulation.force_func)
 			else
-				forces!(r, f, Eₚ, Neighbors, simulation.box, simulation.ϵ, simulation.σ, simulation.force_func)
+				#forces!(r, f, Eₚ, Neighbors, simulation.box, simulation.ϵ, simulation.σ, simulation.force_func)
+				forces!(r, f, alpha_d, dQ, Eₚ, Neighbors, simulation.box, simulation.ϵ, simulation.σ, simulation.force_func)
 			end
 
 			update_particles_mem!(r, v, f, dQ, Float64(simulation.dt), c3, simulation.box)
@@ -553,7 +604,6 @@ function simulateO!(
 		r₀ = CUDA.zeros(eltype(f), size(f))
 		neighbor_list!(r,Neighbors,simulation.neigh_cut_off,simulation.box)
 		for step = 0:simulation.num_steps
-
 			if step % simulation.neigh_update == 0
 				neighbor_list!(r,Neighbors,simulation.neigh_cut_off,simulation.box)
 			end
@@ -571,7 +621,8 @@ function simulateO!(
 			if collision_calc
 				forces!(r, f, Eₚ, Neighbors, simulation.num_cold, colls, coll_switch, simulation.box, simulation.ϵ, simulation.σ, simulation.force_func)
 			else
-				forces!(r, f, Eₚ, Neighbors, simulation.box, simulation.ϵ, simulation.σ, simulation.force_func)
+				#forces!(r, f, Eₚ, Neighbors, simulation.box, simulation.ϵ, simulation.σ, simulation.force_func)
+				forces!(r, f, alpha_d, dQ, Eₚ, Neighbors, simulation.box, simulation.ϵ, simulation.σ, simulation.force_func)
 			end
 			
 			corrector_Heun!(r₀, r, v, f₀, f, f_r, dQ, Float64(simulation.dt), c3, simulation.box)
