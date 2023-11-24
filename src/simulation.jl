@@ -41,49 +41,7 @@ function sim_run(;
 	end
 
 	neigh_cut_off *= sigma
-    if homogeneous
-		if random_positions && (Npart <= 100000)
-			box = Box(dim = dim, Npart = Npart, ϕ = ϕ, sigma = sigma )
-    		num_cold = ceil(Int, Npart*fraction)
-			r_init = [random_pos(box)]
-			for _ in 1:Npart-1
-				pos = random_pos(box)    
-				# Check for overlap with other particles
-				while check_overlap(pos, r_init, box, sigma * T(1.05))
-					pos = random_pos(box)
-				end        
-				# Append the position to the list of positions
-				push!(r_init,pos)
-			end
-		else
-			box = Box(dim = dim, Npart = Npart, ϕ = ϕ, sigma = sigma )
-    		num_cold = ceil(Int, Npart*fraction)
-			r_init = rectangular_lattice(Npart,box)
-			#r_init = triangular_lattice(Npart, box, σ)
-			r_init = sort_pos_by_dist(r_init, zero(T), zero(T))
-		end
-		shuffle!(r_init)
-		homog = "homogeneous"
-    else				
-		box = Box(dim = dim, Npart = Npart, ϕ = ϕ, sigma = sigma )
-		num_cold = ceil(Int, Npart*fraction)
-		r_init = cut_circle_sphere!(box, sigma, Npart, fraction, cold_frac)
-		if length(r_init) <= num_cold
-			rr_remain = rectangular_lattice(2Npart,box)
-			rad = T(sqrt(ceil(Npart .* fraction))/(2π/(1.0675*2sqrt(3))))
-			r_remain = circle_cut(rr_remain, rad, false)
-			shuffle!(r_remain)
-		else
-			error("r_droplet size is more than cold particles size!")
-		end
-		n_remain = Npart - length(r_init)
-		r_init = append!(r_init, r_remain[1:n_remain])
-		r_init = r_init[1:Npart]
-		if !random_positions
-			r_init = sort_pos_by_dist(r_init, zero(T), zero(T))
-		end
-		homog = "inhomogeneous"
-    end
+	box, r_init, num_cold = initialization(homogeneous = homogeneous , dim = dim, Npart = Npart, ϕ = ϕ, fraction = fraction, sigma = sigma, random_positions = random_positions, cold_frac = cold_frac)
 
     Npart = length(r_init)
 
@@ -94,7 +52,7 @@ function sim_run(;
 		simulation.neigh_cut_off = neigh_cut_off
 		simulation.num_cold = num_cold
 		alpha = α₂/α₁
-        output_file = "$type,Npart,$Npart,deltat-$Δt_prod,epsilon-$ϵ,alpha-$alpha,fraction-$ϕ,integ-$integ,run_num-$run,$homog"  # check this!
+        output_file = "$type,Npart,$Npart,deltat-$Δt_prod,epsilon-$ϵ,alpha-$alpha,fraction-$ϕ,integ-$integ,run_num-$run,homo_$homogeneous"  # check this!
 		simulation.part_types = ptypes
         simulation.output_file = output_file
         
