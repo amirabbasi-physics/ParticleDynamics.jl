@@ -2,6 +2,7 @@ export sim_run
 
 function sim_run(;
 	type::String,
+	restart::Union{String,Nothing},
     num_runs::N,
     homogeneous::Bool,
 	collision_calc::Bool,
@@ -31,7 +32,7 @@ function sim_run(;
     #density = T(1.0e3) # mass density of particles (kg/m³)
 	σ = T(1.0)
 	
-
+	prev_step = 0
 		 
     ###############################################################################
     #   Initializing the system to get randomly distributed positions
@@ -43,7 +44,11 @@ function sim_run(;
 	end
 
 	neigh_cut_off *= sigma
-	box, r_init, num_cold = initialization(homogeneous = homogeneous , dim = dim, Npart = Npart, ϕ = ϕ, fraction = fraction, sigma = sigma, random_positions = random_positions, cold_frac = cold_frac)
+	if restart != nothing
+		prev_step, r_init, velocities, p_ids, part_types, box, num_cold = read_last_gsd(restart, dim)
+	else
+		box, r_init, num_cold = initialization(homogeneous = homogeneous , dim = dim, Npart = Npart, ϕ = ϕ, fraction = fraction, sigma = sigma, random_positions = random_positions, cold_frac = cold_frac)
+	end
 
     Npart = length(r_init)
 
@@ -62,33 +67,55 @@ function sim_run(;
 		simulation.force_func = force_func
 		simulation.ϵ = ϵ 
 		simulation.σ = σ 
-        simulation.box = box
+		simulation.box = box
         r0 = r_init
 
-		if simulation.type == "Brownian"
-			for i = 1:num_cold
-				push!(simulation.particles, PassiveOP(part_type = ptypes[1], part_id = p_ids[1],r = r0[i], v = SVector{dim,T}(zeros(T,dim)), f = SVector{dim,T}(zeros(T,dim)), η = η, Radii = R, α = α₁))
+		if restart !== nothing
+			if simulation.type == "Brownian"
+				for i = 1:num_cold
+					push!(simulation.particles, PassiveOP(part_type = ptypes[1], part_id = p_ids[1],r = r0[i], v = velocities[i], f = SVector{dim,T}(zeros(T,dim)), η = η, Radii = R, α = α₁))
+				end
+				for i = num_cold+1:Npart
+					push!(simulation.particles, PassiveOP(part_type = ptypes[2], part_id = p_ids[2],r = r0[i], v = velocities[i], f = SVector{dim,T}(zeros(T,dim)), η = η, Radii = R, α = α₂))
+				end
+			elseif simulation.type == "Langevin"	
+				for i = 1:num_cold
+					push!(simulation.particles, PassiveP(part_type = ptypes[1], part_id = p_ids[1],r = r0[i], v = velocities[i], f = SVector{dim,T}(zeros(T,dim)), density = density, η = η, Radii = R, α = α₁))
+				end
+				for i = num_cold+1:Npart
+					push!(simulation.particles, PassiveP(part_type = ptypes[2], part_id = p_ids[2],r = r0[i], v = velocities[i], f = SVector{dim,T}(zeros(T,dim)), density = density, η = η, Radii = R, α = α₂))
+				end
 			end
-			for i = num_cold+1:Npart
-				push!(simulation.particles, PassiveOP(part_type = ptypes[2], part_id = p_ids[2],r = r0[i], v = SVector{dim,T}(zeros(T,dim)), f = SVector{dim,T}(zeros(T,dim)), η = η, Radii = R, α = α₂))
-			end
-		elseif simulation.type == "Langevin"	
-			for i = 1:num_cold
-				push!(simulation.particles, PassiveP(part_type = ptypes[1], part_id = p_ids[1],r = r0[i], v = SVector{dim,T}(zeros(T,dim)), f = SVector{dim,T}(zeros(T,dim)), density = density, η = η, Radii = R, α = α₁))
-			end
-			for i = num_cold+1:Npart
-				push!(simulation.particles, PassiveP(part_type = ptypes[2], part_id = p_ids[2],r = r0[i], v = SVector{dim,T}(zeros(T,dim)), f = SVector{dim,T}(zeros(T,dim)), density = density, η = η, Radii = R, α = α₂))
+		else
+			if simulation.type == "Brownian"
+				for i = 1:num_cold
+					push!(simulation.particles, PassiveOP(part_type = ptypes[1], part_id = p_ids[1],r = r0[i], v = SVector{dim,T}(zeros(T,dim)), f = SVector{dim,T}(zeros(T,dim)), η = η, Radii = R, α = α₁))
+				end
+				for i = num_cold+1:Npart
+					push!(simulation.particles, PassiveOP(part_type = ptypes[2], part_id = p_ids[2],r = r0[i], v = SVector{dim,T}(zeros(T,dim)), f = SVector{dim,T}(zeros(T,dim)), η = η, Radii = R, α = α₂))
+				end
+			elseif simulation.type == "Langevin"	
+				for i = 1:num_cold
+					push!(simulation.particles, PassiveP(part_type = ptypes[1], part_id = p_ids[1],r = r0[i], v = SVector{dim,T}(zeros(T,dim)), f = SVector{dim,T}(zeros(T,dim)), density = density, η = η, Radii = R, α = α₁))
+				end
+				for i = num_cold+1:Npart
+					push!(simulation.particles, PassiveP(part_type = ptypes[2], part_id = p_ids[2],r = r0[i], v = SVector{dim,T}(zeros(T,dim)), f = SVector{dim,T}(zeros(T,dim)), density = density, η = η, Radii = R, α = α₂))
+				end
 			end
 		end
 
 		println("System initialized!")
 		for i = 1:num_cold
 			simulation.particles[i].α = α₁
-			simulation.particles[i].v = sqrt(simulation.particles[i].α) .* @SVector randn(T,dim)
+			if restart !== nothing
+				simulation.particles[i].v = sqrt(simulation.particles[i].α) .* @SVector randn(T,dim)
+			end
 		end
 		for i = num_cold+1:Npart
 			simulation.particles[i].α = α₂
-			simulation.particles[i].v = sqrt(simulation.particles[i].α) .* @SVector randn(T,dim)
+			if restart !== nothing
+				simulation.particles[i].v = sqrt(simulation.particles[i].α) .* @SVector randn(T,dim)
+			end
 		end
 
 
@@ -98,9 +125,9 @@ function sim_run(;
 		println("Simulation starts!")
 
 		if simulation.type == "Brownian"
-			simulateO!(simulation, collision_calc,box)
+			simulateO!(simulation, collision_calc,box, prev_step)
 		elseif simulation.type == "Langevin"
-			simulate!(simulation, collision_calc,box)
+			simulate!(simulation, collision_calc,box, prev_step)
 		end
 		yield()
     end
@@ -121,7 +148,8 @@ export simulate!
 function simulate!(
 	simulation::Simulation,
 	collision_calc::Bool,
-	box::SVector{N,T}) where {N,T}
+	box::SVector{N,T}, 
+	prev_step::I) where {N, I,T}
 
 
 	Npart = length(simulation.particles)
@@ -171,12 +199,16 @@ function simulate!(
 	Ekin_alpha = similar(dQ₀)
 	Epot = similar(dQ₀)
 	coll₀ = similar(dQ₀)
+	if prev_step !== 0
+		prev_step += 1
+	end
+	
 	if simulation.integrator == "vv"
 		f_r = CUDA.zeros(eltype(f), size(f))
 		f₀ = CUDA.zeros(eltype(f), size(f))
 		neighbor_list!(r, Neighbors, simulation.neigh_cut_off, simulation.box)
 	
-		for step = 0:simulation.num_steps
+		for step = prev_step:simulation.num_steps + prev_step
 			if step % simulation.neigh_update == 0
 				neighbor_list!(r, Neighbors, simulation.neigh_cut_off, simulation.box)
 			end
@@ -248,7 +280,7 @@ function simulate!(
 		end	
 	elseif simulation.integrator == "em"
 		neighbor_list!(r,Neighbors,simulation.neigh_cut_off,simulation.box)
-		for step = 0:simulation.num_steps
+		for step = prev_step:simulation.num_steps + prev_step
 
 			if step % simulation.neigh_update == 0
 				neighbor_list!(r,Neighbors,simulation.neigh_cut_off,simulation.box)
@@ -302,7 +334,7 @@ function simulate!(
 		end
 	elseif simulation.integrator == "lf"
 		neighbor_list!(r,Neighbors,simulation.neigh_cut_off,simulation.box)
-		for step = 0:simulation.num_steps
+		for step = prev_step:simulation.num_steps + prev_step
 			if step % simulation.neigh_update == 0
 				neighbor_list!(r,Neighbors,simulation.neigh_cut_off,simulation.box)
 			end
@@ -384,7 +416,8 @@ export simulateO!
 function simulateO!(
 	simulation::Simulation,
 	collision_calc::Bool,
-	box::SVector{N,T}) where {N,T}
+	box::SVector{N,T},
+	prev_step::I) where {N,I,T}
 
 
 	Npart = length(simulation.particles)
@@ -447,9 +480,14 @@ function simulateO!(
 	dQ₀ = zeros(Float64)
 	Epot = similar(dQ₀)
 	coll₀ = similar(dQ₀)
+
+	if prev_step !== 0
+		prev_step += 1
+	end
+
 	if simulation.integrator == "em"
 		neighbor_list!(r,Neighbors,simulation.neigh_cut_off,simulation.box)
-		for step = 0:simulation.num_steps
+		for step = prev_step:simulation.num_steps + prev_step
 
 			if step % simulation.neigh_update == 0
 				neighbor_list!(r,Neighbors,simulation.neigh_cut_off,simulation.box)
@@ -496,7 +534,7 @@ function simulateO!(
 		end
 	elseif simulation.integrator == "em-nocollswitch"
 		neighbor_list!(r,Neighbors,simulation.neigh_cut_off,simulation.box)
-		for step = 0:simulation.num_steps
+		for step = prev_step:simulation.num_steps + prev_step
 
 			if step % simulation.neigh_update == 0
 				neighbor_list!(r,Neighbors,simulation.neigh_cut_off,simulation.box)
@@ -543,7 +581,7 @@ function simulateO!(
 		end
 	elseif simulation.integrator == "mem"
 		neighbor_list!(r,Neighbors,simulation.neigh_cut_off,simulation.box)
-		for step = 0:simulation.num_steps
+		for step = prev_step:simulation.num_steps + prev_step
 
 			if step % simulation.neigh_update == 0
 				neighbor_list!(r,Neighbors,simulation.neigh_cut_off,simulation.box)
@@ -590,7 +628,7 @@ function simulateO!(
 		f₀ = CUDA.zeros(eltype(f), size(f))
 		r₀ = CUDA.zeros(eltype(f), size(f))
 		neighbor_list!(r,Neighbors,simulation.neigh_cut_off,simulation.box)
-		for step = 0:simulation.num_steps
+		for step = prev_step:simulation.num_steps + prev_step
 			if step % simulation.neigh_update == 0
 				neighbor_list!(r,Neighbors,simulation.neigh_cut_off,simulation.box)
 			end

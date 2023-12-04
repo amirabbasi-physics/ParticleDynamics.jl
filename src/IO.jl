@@ -4,7 +4,7 @@ using FileIO
 export write_xyz
 export write_log
 export write_gsd
-
+export read_last_gsd
 
 """
     write_xyz(
@@ -183,6 +183,75 @@ function write_gsd(step::Int,simulation, part_ids::Vector{Int},positions::Vector
     f.close()
 end
 
+function read_last_gsd(file_path::String, dim::N) where N
+    gsdhoomd = pyimport("gsd.hoomd")
+    np = pyimport("numpy")
+    # Open the file in read mode
+    f = gsdhoomd.open(name = file_path, mode="rb")
+    
+    # Determine the index of the last frame
+    last_frame_index = length(f) 
+
+    # Read the last snapshot
+    s = f[last_frame_index]
+
+    positions = [SVector{dim}(s.particles.position[i, 1:dim]...) for i = 1:size(s.particles.position, 1)]
+    velocities = [SVector{dim}(s.particles.velocity[i, 1:dim]...) for i = 1:size(s.particles.velocity, 1)]
+
+    part_ids = np.asarray(s.particles.typeid, dtype=np.int64)
+    
+    part_types = s.particles.types
+    box = s.configuration.box
+    step = py"int"(s.configuration.step)
+
+    num_cold = count(t == 0 for t in part_ids) 
+    box = Vector([filter(x -> x != 0, box)...])
+    if dim == 2
+        box = SVector{2}(box[1:dim])
+    elseif dim == 3
+        box = SVector{3}(box[1:dim])
+    end
+    # Close the file
+   
+    f.close()
+
+    # Return the extracted data and the step
+    return step, positions, velocities, part_ids, part_types, box, num_cold
+end
+
+
+
+"""
+function read_last_gsd(file_path::String)
+    gsdhoomd = pyimport("gsd.hoomd")
+
+    # Open the file in read mode
+    f = gsdhoomd.open(name = file_path, mode="rb")
+
+    # Determine the index of the last frame
+    last_frame_index = length(f) - 1
+
+    # Read the last snapshot
+    s = f[last_frame_index]
+
+    # Extract data from the snapshot
+    positions = [Vector(s.particles.position[i]...) for i = 1:s.particles.N]
+    velocities = [Vector(s.particles.velocity[i]...) for i = 1:s.particles.N]
+
+    positions = [SVector(v...) for v in positions]
+    velocities = [SVector(v...) for v in positions]
+    part_ids = s.particles.typeid
+    part_types = s.particles.types
+    box = s.configuration.box
+    step = s.configuration.step
+
+    # Close the file
+    f.close()
+
+    # Return the extracted data and the step
+    return step, positions, velocities, part_ids, part_types, box
+end
+"""
 
 function write_log(
     step::Int,
