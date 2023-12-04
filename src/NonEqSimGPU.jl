@@ -25,11 +25,12 @@ using Random
 using Distributed
 
 include("definitions.jl")
+include("initialize.jl")
 include("simulation.jl")
 include("integrators.jl")
 include("neighbor_list.jl")
 include("interactions.jl")
-include("write_out.jl")
+include("IO.jl")
 
 
 
