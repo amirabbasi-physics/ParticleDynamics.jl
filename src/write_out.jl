@@ -252,6 +252,7 @@ function write_log(
     step_str = @sprintf("%+.5e", step)
     Ekin_str = @sprintf("%+.5e", Ekin)
     Epot_str = @sprintf("%+.5e", Epot)
+    Etot_str = @sprintf("%+.5e", Ekin + Epot)
     sdot_str = @sprintf("%+.5e", sdot)
     sdotpp_str = @sprintf("%+.5e", sdotpp)
 
@@ -260,11 +261,11 @@ function write_log(
 
     sdotpp_ave_str = @sprintf("%+.5e", sdotpp_ave)
     coll_cold_hot_str = @sprintf("%+.5e", coll_cold_hot)
-    data = join([step_str, Ekin_str, Epot_str, sdot_str, udot_str, sdotpp_str, udotpp_str, sdotpp_ave_str, coll_cold_hot_str], "\t")
+    data = join([step_str, Ekin_str, Epot_str, Etot_str, sdot_str, udot_str, sdotpp_str, udotpp_str, sdotpp_ave_str, coll_cold_hot_str], "\t")
 
     if step == 0
        open(output_file,"w") do file
-        println(file,"     Time     |     E_kin     |     E_pot     |      EPR      |      UPR      |  EPR / part  |   UPR / part  | EPR / part Ave | cold/hot coll rate ")
+        println(file,"     Time     |     E_kin     |     E_pot     |     E_tot     |      EPR      |      UPR      |  EPR / part  |   UPR / part  | EPR / part Ave | cold/hot coll rate ")
         #writedlm(file,data)
         end
     else
@@ -275,6 +276,59 @@ function write_log(
         end
     end
 end
+
+function write_log(
+    step::Int,
+    simulation,
+    Eₖ::Float64,
+    Eₚ::Float64,
+    sdot::Float64,
+    virial::Float64,
+    udot::Float64,
+    Eₖ_α::Float64,
+    colls::Float64) 
+
+    coll_cold_hot   = colls / simulation.dt
+
+    output_file = simulation.output_file*".log"
+
+    sdotpp = sdot/length(simulation.particles)
+    udotpp = udot/length(simulation.particles)
+    Ekin = Eₖ
+    Epot = Eₚ
+
+    sdotpp_ave = Eₖ_α/length(simulation.particles)
+
+
+    step_str = @sprintf("%+.5e", step)
+    Ekin_str = @sprintf("%+.5e", Ekin)
+    Epot_str = @sprintf("%+.5e", Epot)
+    Etot_str = @sprintf("%+.5e", Ekin + Epot)
+    virial_str = @sprintf("%+.5e", virial)
+    sdot_str = @sprintf("%+.5e", sdot)
+    sdotpp_str = @sprintf("%+.5e", sdotpp)
+
+    udot_str = @sprintf("%+.5e", udot)
+    udotpp_str = @sprintf("%+.5e", udotpp)
+
+    sdotpp_ave_str = @sprintf("%+.5e", sdotpp_ave)
+    coll_cold_hot_str = @sprintf("%+.5e", coll_cold_hot)
+    data = join([step_str, Ekin_str, Epot_str, Etot_str, virial_str,  sdot_str, udot_str, sdotpp_str, udotpp_str, sdotpp_ave_str, coll_cold_hot_str], "\t")
+
+    if step == 0
+       open(output_file,"w") do file
+        println(file,"    Time     |    E_kin     |    E_pot     |    E_tot     |    virial     |      EPR      |      UPR      |  EPR / part  |   UPR / part  | EPR / part Ave | cold/hot coll rate ")
+        #writedlm(file,data)
+        end
+    else
+        open(output_file,"a+") do file
+            println("Time = ",step_str, "| E_kin = ", Ekin_str,"| E_pot = ", Epot_str,"| E_tot = ", Etot_str, "| virial = ", virial_str, " | EPR = " ,sdot_str," | UPR = " ,udot_str, " | EPR per particle = " , sdotpp_str," | UPR per particle = " ,udotpp_str, "  |  EPR per particle averaged = " ,sdotpp_ave_str,"  |  cold/hot coll rate = " ,coll_cold_hot_str)
+            #println(coll_tot - coll_hot_hot -coll_cold_hot - coll_cold_cold)
+            println(file,data)
+        end
+    end
+end
+
 
 function write_log(
     step::Int,

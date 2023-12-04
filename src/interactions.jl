@@ -1,7 +1,7 @@
 export harm_rep
 export WCA
 
-
+#2D harmonic repulsive potential
 @inline function harm_rep(dx::T, dy::T, dr²::T, ϵ::T, σ::T) where T
     dist = dr²^(1/2)
     f_int = ϵ*(1/dist - 1/σ)
@@ -11,24 +11,7 @@ export WCA
     return SVector{2,T}(f_x,f_y), e_int
 end
 
-"""
-#Newly added!
-@inline function harm_rep(dx::T, dy::T, dr²::T, ϵ::T, σ::T, alpha::T1) where {T, T1}
-    dist = dr²^(1/2)
-    f_int = ϵ*(1/dist - 1/σ)
-    e_int = (ϵ/2)*(1 - dist/σ)^2
-    f_x = f_int*dx
-    f_y = f_int*dy
-    dqt = T1(f_x^2 + f_y^2 - 2ϵ * alpha)
-    return SVector{2,T}(f_x,f_y), e_int, dqt
-end
-#Newly added finished
-"""
-
-
-# uncomment for 3D case
-
-
+#3D harmonic repulsive potential
 @inline function harm_rep(dx::T, dy::T, dz::T, dr²::T, ϵ::T, σ::T) where T
     dist = dr²^(1/2)
     f_int = ϵ*(1/dist - 1/σ)
@@ -39,7 +22,7 @@ end
     return SVector{3,T}(f_x,f_y, f_z), e_int
 end
 
-
+#2D WCA potential
 @inline function WCA(dx::T, dy::T, dr²::T, ϵ::T, σ::T) where T
     inv_dr² = 1/dr²
     σ² = σ^2
@@ -53,7 +36,7 @@ end
     return SVector{2,T}(f_x,f_y), e_int
 end
 
-
+#3D WCA potential
 @inline function WCA(dx::T, dy::T, dz::T, dr²::T, ϵ::T, σ::T) where T
     inv_dr² = 1/dr²
     σ² = σ^2
@@ -601,3 +584,47 @@ function forces_kernel!(
 end
 
 """
+
+
+################################################################################
+#                                                                              #
+#                           Virial theorem calculator                          #
+#                                                                              #
+################################################################################
+
+
+function virial!(
+    r::CuVector{SVector{N,T}},
+    f::CuVector{SVector{N,T}},
+    virial::CuVector{T1}) where {N,T, T1}
+
+    kernel = @cuda launch = false virial_kernel!(r, f, virial)
+    config = launch_configuration(kernel.fun)
+    threads = min(length(r), config.threads)
+    blocks = cld(length(r), threads)
+    CUDA.@sync kernel(r, f, virial; threads, blocks)
+    return nothing
+end
+
+
+
+function virial_kernel!(
+    r::CuDeviceVector{T},
+    f::CuDeviceVector{T},
+    virial::CuDeviceVector{T1}) where {T,T1}
+
+    
+    Npart = length(r)
+    tid = threadIdx().x
+    gtid = (blockIdx().x - 1) * blockDim().x + tid  # global thread id
+
+    @inbounds begin
+        if gtid <= Npart
+            position = r[gtid]
+            force    = f[gtid]
+            vir = dot(T1.(position), T1.(force))              
+            virial[gtid] += vir 
+        end
+    end
+    return nothing
+end

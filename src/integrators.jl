@@ -273,7 +273,8 @@ function update_velocities_kernel_vv!(
             v_next = aa .* T1.(v_prev) + (dt*aa/2) .* frc_prev + (dt/2) .* frc + (bb*dt) .* rnd_force
             v[gtid]  = T.(v_next)
             injected_energy = dot((T1.(v_prev) .+ v_next), rnd_force)/(2bb)
-            dissipated_energy = - c1*dot(T1.(v_prev) ,T1.(v_prev))
+            dissipated_energy = - c1*dot(T1.(v_next) ,T1.(v_next))
+
 
             dQ += -(injected_energy + dissipated_energy)                 # Minus sign indicates the dQ of the heat bath
             dU += dot(v_next, T1.(frc))
@@ -445,20 +446,9 @@ function em_kernel!(
             pos = mod.(pos .+ box ./ 2, box) .- box ./ 2                    # Applying PBC!
             r[gtid] = T.(pos)
             v[gtid] = T.(v_next)
-            """
-            injected_energy = dot(T1.(v_next), rnd_force)
-            dissipated_energy = -dot(T1.(v_next) ,T1.(v_next))
-            dQ += -(injected_energy + dissipated_energy)
-            """
-
-            """
-            if frc !== zero(frc)
-                dQ += dot(T1.(frc),T1.(frc))- 2T1(5.0e7) + (sqrt2alpha * dot(T1.(frc), rnd)) / dt
-            end
-            """
 
             
-            dQ += dot(T1.(frc), rnd_force) 
+            dQ += dot(T1.(frc), v_next) 
             dq[gtid] = T(dQ)
         end
     end

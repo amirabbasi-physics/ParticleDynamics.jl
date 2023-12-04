@@ -52,7 +52,7 @@ function initialization(;
     else
         println("Warning! It is not modified for 3D systems!")				
 		box = Box(dim = dim, Npart = Npart, ϕ = ϕ, sigma = sigma )
-		num_cold = ceil(Int, Npart*fraction)
+		num_cold = floor(Int, Npart*fraction)
 		r_init = cut_circle_sphere!(box, sigma, Npart, fraction, cold_frac)
 		if length(r_init) <= num_cold
 			rr_remain = rectangular_lattice(2Npart,box)
@@ -316,9 +316,10 @@ function cut_circle_sphere!(box::SVector{N,T}, σ::T, Npart::Int, fraction::T,co
     dim = length(box)
     R = T(σ/2)
     if dim == 2
-        N_circle = Npart * fraction * cold_frac
+        N_circle = Npart * fraction * cold_frac * T(0.9)
         if σ == T(1.0)
-            rad = T(sqrt(N_circle)/(1.055*π/(sqrt(3))))
+            #rad = T(sqrt(N_circle)/(1.055*π/(sqrt(3))))
+            rad = T(sqrt(N_circle * 2sqrt(3)/π))
         else
             rad = T(sqrt(N_circle)/(2π/(1.0675*2sqrt(3))))
         end
@@ -369,7 +370,7 @@ function circle_cut(r0::Array{SVector{N,T}}, rad::T, in::Bool) where {N,T}
         end
     else
         for i = 1:length(r0)
-            if norm(r0[i])/rad > 1.01
+            if norm(r0[i])/rad > 1.0001
                 push!(new_pos , r0[i])
             end
         end

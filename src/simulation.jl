@@ -129,6 +129,7 @@ function simulate!(
 	dQ = CUDA.zeros(T,Npart)
 	dU = CUDA.zeros(T,Npart)
 	Eₖ = CUDA.zeros(Float64,Npart)
+	virial = CUDA.zeros(Float64,Npart)
 	Eₚ = similar(dQ)
 	
 	if simulation.force_func == WCA
@@ -166,6 +167,7 @@ function simulate!(
 	dQ₀ = zeros(Float64)
 	dU₀	= zeros(Float64)
 	Ekin = similar(dQ₀)
+	virial_sum = similar(dQ₀)
 	Ekin_alpha = similar(dQ₀)
 	Epot = similar(dQ₀)
 	coll₀ = similar(dQ₀)
@@ -190,7 +192,7 @@ function simulate!(
 				forces!(r, f, Eₚ, Neighbors, simulation.box, simulation.ϵ, simulation.σ, simulation.force_func)
 			end
 			
-	
+			virial!(r,f,virial)
 			#update_velocities_vv!(v, f₀, f, f_r, dQ, Eₖ, c1, Float64(simulation.dt), c3)
 			update_velocities_vv!(v, f₀, f, f_r, dQ, dU, Eₖ, c1, Float64(simulation.dt), c3)
 			copyto!(f₀,f)
@@ -204,6 +206,9 @@ function simulate!(
 				
 				@. dQ = dQ ./ alpha_d
 				dQ₀ = Float64.(sum(dQ)) / simulation.save_interval
+
+				@. virial = virial ./ alpha_d
+				virial_sum = Float64.(sum(virial)) / simulation.save_interval
 
 				# Naive way to define dU/T
 				@. dU = dU ./ alpha_d
@@ -219,6 +224,7 @@ function simulate!(
 				Epot = Float64(sum(Eₚ)) / simulation.save_interval
 	
 				fill!(dQ, zero(eltype(dQ)))
+				fill!(virial, zero(eltype(virial)))
 				fill!(dU, zero(eltype(dU)))
 				fill!(Eₖ, zero(eltype(Eₖ)))
 				fill!(Eₚ, zero(eltype(Eₚ)))
@@ -232,8 +238,9 @@ function simulate!(
 					write_gsd(step, simulation, part_id, r_c, v_c)
 					if collision_calc
 						#write_log(step, simulation, Ekin, Epot, dQ₀, Ekin_alpha, coll₀)
-						write_log(step, simulation, Ekin, Epot, dQ₀, dU₀, Ekin_alpha, coll₀)
+						write_log(step, simulation, Ekin, Epot, dQ₀, virial_sum, dU₀, Ekin_alpha, coll₀)
 					else
+						println("The correct write_log function to write virial is not implemented yet!")
 						write_log(step, simulation, Ekin, Epot, dQ₀)
 					end
 				end
