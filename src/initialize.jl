@@ -1,5 +1,16 @@
 
-export initialization
+export initialization, Box, random_pos
+
+ 
+function Box(; dim::Int, Npart::Int, ϕ::T, sigma::T) where T <: AbstractFloat   
+    if dim == 2
+        L = sqrt(π*sigma^2*Npart/(4*ϕ))
+        return SVector{2,T}([L,L])
+    elseif dim == 3
+        L = (π*sigma^3*Npart/(6*ϕ))^(1/3)
+        return SVector{3,T}([L,L,L])
+    end
+end
 
 function initialization(;
     homogeneous::Bool = true,
@@ -11,10 +22,15 @@ function initialization(;
     random_positions::Bool = true,
     cold_frac::T = 0.5
     ) where T
+
+    box = Box(dim = dim, Npart = Npart, ϕ = ϕ, sigma = sigma)
+    num_cold = floor(Int, Npart * fraction)
+    num_cold_inhomo = floor(Int, Npart * fraction * cold_frac)
+    num_random = Npart - num_cold_inhomo
+
     if homogeneous
-		if random_positions && (Npart <= 100000)
-			box = Box(dim = dim, Npart = Npart, ϕ = ϕ, sigma = sigma )
-    		num_cold = ceil(Int, Npart*fraction)
+		if random_positions && (Npart <= 100000)			
+    		num_cold = floor(Int, Npart*fraction)
 			r_init = [random_pos(box)]
 			for _ in 1:Npart-1
 				pos = random_pos(box)    
@@ -26,7 +42,6 @@ function initialization(;
 				push!(r_init,pos)
 			end
 		else
-			box = Box(dim = dim, Npart = Npart, ϕ = ϕ, sigma = sigma )
     		num_cold = ceil(Int, Npart*fraction)
             if dim == 2
                 r_init = rectangular_lattice(Npart,box)
@@ -37,28 +52,223 @@ function initialization(;
             end
 		end
 		shuffle!(r_init)
-    else
-        println("Warning! It is not modified for 3D systems!")				
-		box = Box(dim = dim, Npart = Npart, ϕ = ϕ, sigma = sigma )
-		num_cold = floor(Int, Npart*fraction)
-		r_init = cut_circle_sphere!(box, sigma, Npart, fraction, cold_frac)
-		if length(r_init) <= num_cold
-			rr_remain = rectangular_lattice(2Npart,box)
-			rad = T(sqrt(ceil(Npart .* fraction))/(2π/(1.0675*2sqrt(3))))
-			r_remain = circle_cut(rr_remain, rad, false)
-			shuffle!(r_remain)
-		else
-			error("r_droplet size is more than cold particles size!")
-		end
-		n_remain = Npart - length(r_init)
-		r_init = append!(r_init, r_remain[1:n_remain])
-		r_init = r_init[1:Npart]
-		if !random_positions
-			r_init = sort_pos_by_dist(r_init, zero(T), zero(T))
-		end
+    
+    else   
+        # Inhomogeneous initialization logic
+        if dim == 2
+            r_inhomogeneous = circular_cut_triangular_lattice(num_cold_inhomo, sigma)
+        elseif dim == 3
+            r_inhomogeneous = spherical_cut_hcp_lattice(num_cold_inhomo, sigma)
+        else
+            error("Unsupported dimension: $dim")
+        end
+        #println(r_inhomogeneous)
+        r_random = generate_random_positions(num_random, box, sigma, r_inhomogeneous)
+        r_init = merge_positions(r_inhomogeneous, r_random)
     end
+
     return box, r_init, num_cold
 end
+
+# Function to generate a circular cut of a triangular lattice centered at [0,0]
+using StaticArrays
+using LinearAlgebra
+
+function circular_cut_triangular_lattice(num_particles::I, sigma::T) where {I, T}
+    lattice = SVector{2, T}[]
+    seen = Set{SVector{2, T}}()
+    a = sigma * sqrt(2 / sqrt(3))  # Lattice constant for close packing
+
+    layer = 0
+    while length(lattice) < num_particles
+        for i in -layer:layer
+            for j in -layer:layer
+                x = i * a + j * a / 2
+                y = j * sqrt(3) * a / 2
+                point = SVector{2, T}(x, y)
+                if norm(point) <= layer * a * sqrt(3) / 2
+                    if point ∉ seen
+                        push!(lattice, point)
+                        push!(seen, point)
+                    end
+                end
+                if length(lattice) == num_particles
+                    return lattice
+                end
+            end
+        end
+        layer += 1
+    end
+
+    return lattice
+end
+
+function spherical_cut_hcp_lattice(num_particles::I, sigma::T) where {I, T}
+    lattice = SVector{3, T}[]
+    a = sigma  * 1.05# Lattice constant
+
+    # Estimate a radius and a range to generate a sufficiently large lattice
+    radius = cbrt(3 * num_particles / (4 * π)) * a
+    range = ceil(Int, radius / a) + 5  # Add buffer to ensure enough points are generated
+
+    # Generate a larger lattice
+    for i in -range:range
+        for j in -range:range
+            for k in -range:range
+                x = i * a + (j % 2) * a / 2 + (k % 2) * a / 2
+                y = j * sqrt(3) * a / 2 + (k % 2) * sqrt(3) * a / 6
+                z = k * sqrt(6) * a / 3
+                point = SVector{3, T}(x, y, z)
+
+                # Add point if it is within the spherical radius
+                if norm(point) <= radius
+                    push!(lattice, point)
+                end
+            end
+        end
+    end
+
+    # Trim the lattice to contain only the desired number of particles
+    sort!(lattice, by = p -> norm(p))
+    return lattice[1:min(num_particles, length(lattice))]
+end
+
+
+
+"""
+function spherical_cut_hcp_lattice(num_particles::I, sigma::T) where {I, T}
+    lattice = SVector{3, T}[]
+    seen = Set{SVector{3, T}}()
+    a = sigma  # Lattice constant
+
+    layer = 0
+    while length(lattice) < num_particles
+        for i in -layer:layer
+            for j in -layer:layer
+                for k in -layer:layer
+                    x = i * a + (j % 2) * a / 2 + (k % 2) * a / 2
+                    y = j * sqrt(3) * a / 2 + (k % 2) * sqrt(3) * a / 6
+                    z = k * sqrt(6) * a / 3
+                    point = SVector{3, T}(x, y, z)
+                    if norm(point) <= layer * a * sqrt(3)
+                        if point ∉ seen
+                            push!(lattice, point)
+                            push!(seen, point)
+                        end
+                    end
+                    if length(lattice) == num_particles
+                        return lattice
+                    end
+                end
+            end
+        end
+        layer += 1
+    end
+
+    return lattice
+end
+
+
+function circular_cut_triangular_lattice(num_particles::I, sigma::T) where {I,T}
+    lattice = SVector{2, T}[]
+    a = sigma * sqrt(2 / sqrt(3))  # Lattice constant for close packing
+    num_particles = ceil(Int,2*sqrt(num_particles))
+    # Generate lattice points
+    for i in -num_particles:num_particles
+        for j in -num_particles:num_particles
+            x = i * a + j * a / 2
+            y = j * sqrt(3) * a / 2
+            push!(lattice, SVector{2,T}(x, y))
+        end
+    end
+
+    sort!(lattice, by = pos -> norm(pos))
+    # Trim to the desired number of particles
+    return lattice[1:min(num_particles, length(lattice))]
+end
+"""
+# Function to generate a spherical cut of an HCP lattice
+
+"""
+function spherical_cut_hcp_lattice(num_particles::I, sigma::T) where {I,T}
+    lattice = SVector{3, T}[]
+    a = sigma  # Lattice constant
+    num_particles = floor(Int,(num_particles^(1/2)))
+    # Generate lattice points
+    for i in -num_particles:num_particles
+        for j in -num_particles:num_particles
+            for k in -num_particles:num_particles
+                x = i * a + (j % 2) * a / 2 + (k % 2) * a / 2
+                y = j * sqrt(3) * a / 2 + (k % 2) * sqrt(3) * a / 6
+                z = k * sqrt(6) * a / 3
+                push!(lattice, SVector{3,T}(x, y, z))
+            end
+        end
+    end
+    sort!(lattice, by = pos -> norm(pos))
+    # Trim to the desired number of particles
+    return lattice[1:num_particles]
+end
+
+
+function spherical_cut_hcp_lattice(num_particles::I, sigma::T) where {I,T}
+    lattice = SVector{3, T}[]
+    a = sigma * 1.02  # Lattice constant
+
+    # Function to check if a point is within the desired number of particles
+    function within_particle_limit()
+        return length(lattice) < num_particles
+    end
+
+    # Generate lattice points layer by layer
+    layer = 0
+    while within_particle_limit()
+        for i in -layer:layer
+            for j in -layer:layer
+                for k in -layer:layer
+                    x = i * a + (j % 2) * a / 2 + (k % 2) * a / 2
+                    y = j * sqrt(3) * a / 2 + (k % 2) * sqrt(3) * a / 6
+                    z = k * sqrt(6) * a / 3
+                    point = SVector{3,T}(x, y, z)
+                    if norm(point) <= layer * a * sqrt(3) && within_particle_limit()
+                        push!(lattice, point)
+                    end
+                end
+            end
+        end
+        layer += 1
+    end
+
+    # No need to sort as they are added in radial layers
+    return lattice
+end
+"""
+
+# Function to generate random positions
+function generate_random_positions(num_particles::I, box::SVector{N,T}, sigma::T, exclude_region) where {I, N, T}
+    dim = length(box)
+    positions = SVector{dim, T}[]
+
+    while length(positions) < num_particles
+        pos = random_pos(box) # Modify for 3D if needed
+        if all([norm(pos - p) > sigma for p in exclude_region])
+            push!(positions, pos)
+        end
+    end
+
+    return positions
+end
+
+
+function random_pos(box::SVector{N,T}) where {N,T}
+    dim = length(box)
+	return SVector{dim,T}((rand(dim)) .-T(0.5) ) .* box
+end
+# Function to merge positions
+function merge_positions(positions1, positions2)
+    return vcat(positions1, positions2)
+end
+
 
 export sort_pos_by_dist
 function sort_pos_by_dist(positions::Array{SVector{2,T},1}, x0::T, y0::T) where T
@@ -80,8 +290,6 @@ function shuffle_pos!(simulation)
     [simulation.particles[i].r = r_tmp[i] for i = 1:length(simulation.particles)]
     return nothing
 end
-
-
 
 export rectangular_lattice
 
@@ -238,92 +446,7 @@ function check_overlap(pos::SVector{N,T}, positions::Vector{SVector{N,T}}, box::
 end
 
 
-export cut_circle_sphere
 
-function cut_circle_sphere!(box::SVector{N,T}, σ::T, Npart::Int, fraction::T,cold_frac::T) where {N,T}
-    dim = length(box)
-    R = T(σ/2)
-    if dim == 2
-        N_circle = Npart * fraction * cold_frac * T(0.9)
-        if σ == T(1.0)
-            #rad = T(sqrt(N_circle)/(1.055*π/(sqrt(3))))
-            rad = T(sqrt(N_circle * 2sqrt(3)/π))
-        else
-            rad = T(sqrt(N_circle)/(2π/(1.0675*2sqrt(3))))
-        end
-        #rad = sqrt(N_circle)/(π/(2sqrt(3)))
-        N_lattice = ceil(Int,2N_circle)
-        r = triangular_lattice(N_lattice, σ)
-        r_init  = circle_cut(r, rad, true)
-    elseif dim == 3
-
-        N_sphere = Int(ceil(Npart .* fraction))
-        rad = T(cbrt(N_sphere))
-        nn = Int(ceil(rad))
-        lattice_const = T(sqrt(2)*σ)
-        r = fcc_lattice(box,lattice_const, nn, nn, nn)
-        
-        r1  = sphere_cut(r, rad)
-
-        num_pl = length(r1)
-        n_remain = Int(ceil(length(r1) *(1/fraction -1)))
-        Npart_new = n_remain + num_pl 
-        r2  = sphere_cut(r, rad*cold_frac)
-        n_remain = Npart_new-length(r2)
-
-        r_init = Array{SVector{3,T}}(undef, Npart_new)
-        [r_init[i]=r2[i] for i = 1:length(r2)]
-        for ii in 1:n_remain
-            # Generate a random position
-            pos = random_pos(box)    
-            # Check for overlap with other particles
-            while check_overlap(pos, r_init, R)
-                pos = random_pos(box)
-            end        
-            # Append the position to the list of positions
-            r_init[length(r2)+ ii] = pos
-        end
-    end
-    return r_init
-end
-
-export circle_cut
-function circle_cut(r0::Array{SVector{N,T}}, rad::T, in::Bool) where {N,T}
-    new_pos = Array{SVector{2,T}, 1}()
-    if in
-        for i = 1:length(r0)
-            if norm(r0[i])/rad < T(1.0)
-                push!(new_pos , r0[i])
-            end
-        end
-    else
-        for i = 1:length(r0)
-            if norm(r0[i])/rad > 1.0001
-                push!(new_pos , r0[i])
-            end
-        end
-    end
-
-    return new_pos
-end
-
-export sphere_cut
-function sphere_cut(r0::Array{SVector{N,T}}, rad::T) where {N,T}
-    r0_new = Array{SVector{3,T}, 1}()
-    #r_center = @SVector T[0.5*L_box,0.5*L_box,0.5*L_box]
-    for i = 1:length(r0)
-        if norm(r0[i])/rad <= 1
-            push!(r0_new , r0[i])
-        end
-    end
-    return r0_new
-end
-
-export random_pos
-function random_pos(box::SVector{N,T}) where {N,T}
-    dim = length(box)
-	return SVector{dim,T}((rand(dim)) .-T(0.5) ) .* box
-end
 
 export random_positions_init
 function random_positions_init(Npart, box, sigma, float_precision)

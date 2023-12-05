@@ -1,20 +1,9 @@
 export 
-    Box,
     volume,
     friction,
     hexagonal_neighbors,
     max_neighbors
 
- # This should be changed for polydisperse particles!
-function Box(; dim::Int, Npart::Int, ϕ::T, sigma::T) where T <: AbstractFloat   
-    if dim == 2
-        L = sqrt(π*sigma^2*Npart/(4*ϕ))
-        return SVector{2,T}([L,L])
-    elseif dim == 3
-        L = (π*sigma^3*Npart/(6*ϕ))^(1/3)
-        return SVector{3,T}([L,L,L])
-    end
-end
 
 function hexagonal_neighbors(; sigma::T, circ_R::T) where T
     n_max = ceil(Int,circ_R / sigma)
@@ -24,7 +13,7 @@ end
 
 function max_neighbors(; sigma::T, R::T, box::SVector{N,T}) where {N,T}
     dim = length(box)
-    return ceil(Int, (2 * R/sigma)^dim)
+    return ceil(Int, 20*(2 * R/sigma)^dim)
 end
 
 @inline function volume(R::T)::T where T
