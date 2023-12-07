@@ -1,10 +1,23 @@
-export 
-    volume,
-    friction,
-    hexagonal_neighbors,
-    max_neighbors
+export volume, friction, hexagonal_neighbors, max_neighbors
+    
+export zero_velocities_kernel!
 
+function zero_velocities_kernel!(
+    r::CuDeviceVector{T},
+    rr::CuDeviceVector{T},
+    num_cold::I ) where {I, T}
+    tid = threadIdx().x
+    gtid = (blockIdx().x - 1) * blockDim().x + tid  # global thread id
+    
+    @inbounds begin
+        if gtid <= num_cold
+            r[gtid] = rr[gtid]
+        end
+    end
+    return
+end
 
+    
 function hexagonal_neighbors(; sigma::T, circ_R::T) where T
     n_max = ceil(Int,circ_R / sigma)
     num_circles = 7 * sum(1:n_max)

@@ -4,7 +4,7 @@ function sim_run(;
 	type::String,
 	restart::Union{String,Nothing},
     num_runs::N,
-    homogeneous::Bool,
+    homogeneous::Union{String,Bool},
 	collision_calc::Bool,
     num_steps::N,
 	save_interval::N,
@@ -125,9 +125,9 @@ function sim_run(;
 		println("Simulation starts!")
 
 		if simulation.type == "Brownian"
-			simulateO!(simulation, collision_calc,box, prev_step)
+			simulateO!(simulation, collision_calc,box, prev_step, homogeneous)
 		elseif simulation.type == "Langevin"
-			simulate!(simulation, collision_calc,box, prev_step)
+			simulate!(simulation, collision_calc,box, prev_step, homogeneous)
 		end
 		yield()
     end
@@ -149,7 +149,8 @@ function simulate!(
 	simulation::Simulation,
 	collision_calc::Bool,
 	box::SVector{N,T}, 
-	prev_step::I) where {N, I,T}
+	prev_step::I,
+	homogeneous::Union{Bool, String}) where {N, I,T}
 
 
 	Npart = length(simulation.particles)
@@ -187,6 +188,7 @@ function simulate!(
 
 	r_c = [simulation.particles[i].r for i=1:Npart]
 	r = CuVector(r_c)
+	rr = r
 	v_c = [simulation.particles[i].v for i=1:Npart]
 	v = CuVector(v_c)
 	f_c = [simulation.particles[i].f for i=1:Npart]
@@ -213,15 +215,26 @@ function simulate!(
 				neighbor_list!(r, Neighbors, simulation.neigh_cut_off, simulation.box)
 			end
 			
+			
+			if homogeneous !== true && step <= 1e5
+				if simulation.force_func == harm_rep
+					ϵ = 10000.0f0
+				elseif simulation.force_func == WCA
+					ϵ = 0.1f0
+				end
+			else
+				ϵ = simulation.ϵ
+			end
+
 			update_positions_vv!(r, v, f₀, f_r, c1, Float64(simulation.dt), c3, simulation.box)
 	
 			
 			if collision_calc
 				#forces!(r, f, Eₚ, Neighbors, simulation.num_cold, colls, coll_switch, simulation.box, simulation.ϵ, simulation.σ, simulation.force_func)
-				forces!(r, f, Eₚ, Neighbors, simulation.num_cold, colls, simulation.box, simulation.ϵ, simulation.σ, simulation.force_func)
+				forces!(r, f, Eₚ, Neighbors, simulation.num_cold, colls, simulation.box, ϵ, simulation.σ, simulation.force_func)
 			else
 				#forces!(r, f, Eₚ, Neighbors, simulation.box, simulation.ϵ, simulation.σ, simulation.force_func)
-				forces!(r, f, Eₚ, Neighbors, simulation.box, simulation.ϵ, simulation.σ, simulation.force_func)
+				forces!(r, f, Eₚ, Neighbors, simulation.box, ϵ, simulation.σ, simulation.force_func)
 			end
 			
 			virial!(r,f,virial)
@@ -417,7 +430,8 @@ function simulateO!(
 	simulation::Simulation,
 	collision_calc::Bool,
 	box::SVector{N,T},
-	prev_step::I) where {N,I,T}
+	prev_step::I,
+	homogeneous::Union{Bool, String}) where {N,I,T}
 
 
 	Npart = length(simulation.particles)
