@@ -26,7 +26,7 @@ end
 
 function max_neighbors(; sigma::T, R::T, box::SVector{N,T}) where {N,T}
     dim = length(box)
-    return ceil(Int, 20*(2 * R/sigma)^dim)
+    return ceil(Int, 5*(2 * R/sigma)^dim)
 end
 
 @inline function volume(R::T)::T where T
