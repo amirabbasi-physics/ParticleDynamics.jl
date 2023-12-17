@@ -31,9 +31,11 @@ function initialization(;
 			for _ in 1:Npart-1
 				pos = random_pos(box)    
 				# Check for overlap with other particles
+                """
 				while check_overlap(pos, r_init, box, sigma * T(1.05))
 					pos = random_pos(box)
 				end        
+                """
 				# Append the position to the list of positions
 				push!(r_init,pos)
 			end
