@@ -24,6 +24,7 @@ function initialization(;
 
     box = Box(dim = dim, Npart = Npart, ϕ = ϕ, sigma = sigma)
 
+    
     if homogeneous == true
 		if random_positions && (Npart <= 100000)			
     		num_cold = floor(Int, Npart*fraction)
