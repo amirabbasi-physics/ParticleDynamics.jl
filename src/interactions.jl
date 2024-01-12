@@ -65,6 +65,7 @@ end
 export forces!
 export forces_kernel!
 
+"""
 function forces!(
     r::CuVector{SVector{N,T}},
     f::CuVector{SVector{N,T}},
@@ -369,6 +370,7 @@ end
 
 
 
+
 function forces!(
     r::CuVector{SVector{N,T}},
     f::CuVector{SVector{N,T}},
@@ -512,7 +514,154 @@ function forces_kernel!(
     end
     return nothing
 end
+"""
 
+function forces!(
+    r::CuVector{SVector{N,T}},
+    f::CuVector{SVector{N,T}},
+    Epot::CuVector{T},
+    Neighbors::CuMatrix{I},
+    part_ids::CuVector{I},
+    colls::CuVector{SVector{N1,I}},
+    box::SVector{N,T},
+    ϵ::T,
+    σ::T,
+    force_func::Function) where {N, N1, T, I}
+
+    kernel = @cuda launch = false forces_kernel!(r, f, Epot, Neighbors, part_ids, colls, box, ϵ, σ, force_func)
+    config = launch_configuration(kernel.fun)
+    threads = min(length(r), config.threads)
+    blocks = cld(length(r), threads)
+    CUDA.@sync kernel(r, f, Epot, Neighbors, part_ids, colls, box, ϵ, σ, force_func; threads, blocks)
+    return nothing
+end
+
+
+
+function forces_kernel!(
+    r::CuDeviceVector{T},
+    f::CuDeviceVector{T},
+    Epot::CuDeviceVector{T1},
+    Neighbors::CuDeviceMatrix{I},
+    part_ids::CuDeviceVector{I},
+    colls::CuDeviceVector{T2},
+    box::T,
+    ϵ::T1,
+    σ::T1,
+    force_func::Function) where {T,T1,T2,I}
+
+    
+    Npart = length(r)
+    tid = threadIdx().x
+    gtid = (blockIdx().x - 1) * blockDim().x + tid  # global thread id
+    NNeigh = size(Neighbors,2)
+
+    
+    if force_func == WCA
+        cut_off = T1(2^(1/6))*σ
+        cut_off² = cut_off^2
+    elseif force_func == harm_rep
+        cut_off = T1(σ)
+        cut_off² = cut_off^2
+    end
+    dim = length(box)
+
+    @inbounds begin
+        if dim == 2
+            if gtid <= Npart
+                pos₁ = r[gtid]
+                id_1 = part_ids[gtid]
+                acc = zero(T)
+                epot= zero(T1)
+                coll = SVector{2,I}(0, 0)
+                zero_one = SVector{2,I}(0, 1)
+                one_zero = SVector{2,I}(1, 0)
+
+                #@inbounds for j = 1:NNeigh
+                for j = 1:NNeigh
+                    idx = Neighbors[gtid,j]
+                    if idx != 0 
+                        pos₂  = r[idx]
+                        id_2  = part_ids[idx]
+                    else
+                        break
+                    end
+
+                    dx  = pos₁[1] - pos₂[1]
+                    dy  = pos₁[2] - pos₂[2]
+
+                    dx = (2abs(dx) > box[1] ) ? dx - sign(dx) * box[1] : dx
+                    dy = (2abs(dy) > box[2] ) ? dy - sign(dy) * box[2] : dy
+
+                    dr² = dx*dx + dy*dy
+
+                    if dr² < cut_off²                  
+                        if id_1 + id_2 == 1
+                            coll = coll .+ zero_one
+                        else
+                            coll = coll .+ one_zero
+                        end
+                        frc, ep = force_func(dx, dy, dr², ϵ, σ)
+                        acc = acc .+ frc
+                        epot = epot + ep
+                    end
+                end
+                    
+                f[gtid] = acc
+                Epot[gtid] += epot
+                colls[gtid] += coll 
+            end
+        elseif dim == 3
+            if gtid <= Npart
+                pos₁ = r[gtid]
+                id_1 = part_ids[gtid]
+                acc = zero(T)
+                epot= zero(T1)
+                coll = SVector{2,I}(0, 0)
+                zero_one = SVector{2,I}(0, 1)
+                one_zero = SVector{2,I}(1, 0)
+
+                #@inbounds for j = 1:NNeigh
+                for j = 1:NNeigh
+                    idx = Neighbors[gtid,j]
+                    if idx != 0
+                        id_2 = part_ids[idx] 
+                        pos₂  = r[idx]
+                    else
+                        break
+                    end
+
+                    dx  = pos₁[1] - pos₂[1]
+                    dy  = pos₁[2] - pos₂[2]
+                    dz  = pos₁[3] - pos₂[3]
+
+                    dx = (2abs(dx) > box[1] ) ? dx - sign(dx) * box[1] : dx
+                    dy = (2abs(dy) > box[2] ) ? dy - sign(dy) * box[2] : dy
+                    dz = (2abs(dz) > box[3] ) ? dz - sign(dz) * box[3] : dz
+
+                    dr² = dx*dx + dy*dy + dz*dz
+
+                    if dr² < cut_off²                  
+                        if id_1 + id_2 == 1
+                            coll = coll .+ zero_one
+                        else
+                            coll = coll .+ one_zero
+                        end
+
+                        frc, ep = force_func(dx, dy, dz, dr², ϵ, σ)
+                        acc = acc .+ frc
+                        epot = epot + ep
+                    end
+                end
+                    
+                f[gtid] = acc
+                Epot[gtid] += epot
+                colls[gtid] += coll 
+            end
+        end
+    end
+    return nothing
+end
 
 
 """

@@ -33,7 +33,6 @@ function neighbor_list_kernel!(
     if gtid <= Npart
         pos₁  = r[gtid]
         idx = 0
-
         # Loop over all other particles
         if dim == 2
             @inbounds for j = 1:gtid-1
