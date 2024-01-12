@@ -52,6 +52,7 @@ function sim_run(;
 
     Npart = length(r_init)
 
+	
     for run = 1:num_runs
 		simulation = Simulation()
 		simulation.type = type
@@ -134,16 +135,13 @@ function sim_run(;
     return nothing
 end
 
-
-
-
-
 #####################################################################################
 #####################################################################################
 #        Simulation scheme for Verlet-type and Euler-Maruyama algorithms            #
 #####################################################################################
 #####################################################################################
 export simulate!
+
 
 function simulate!(
 	simulation::Simulation,
@@ -169,7 +167,8 @@ function simulate!(
 	
 	Neighbors = CuArray(Matrix(zeros(Int,Npart,NN)))
 	if collision_calc
-		colls = CUDA.zeros(T,Npart)
+		colls_c = [SVector{2,I}(zeros(I,2)) for i = 1:Npart]
+		colls = CuVector(colls_c)
 		coll_switch = CuArray(falses(Npart,NN))
 	end
 
@@ -185,7 +184,7 @@ function simulate!(
 	alpha_d = CuVector(alpha_list)
 
 	part_id = [simulation.particles[i].part_id for i=1:Npart]
-
+	part_id_d = CuVector(part_id)
 	r_c = [simulation.particles[i].r for i=1:Npart]
 	r = CuVector(r_c)
 	rr = r
@@ -200,7 +199,7 @@ function simulate!(
 	virial_sum = similar(dQ₀)
 	Ekin_alpha = similar(dQ₀)
 	Epot = similar(dQ₀)
-	coll₀ = similar(dQ₀)
+	coll₀ = zeros(Float64,3)
 	if prev_step !== 0
 		prev_step += 1
 	end
@@ -213,10 +212,9 @@ function simulate!(
 		for step = prev_step:simulation.num_steps + prev_step
 			if step % simulation.neigh_update == 0
 				neighbor_list!(r, Neighbors, simulation.neigh_cut_off, simulation.box)
-			end
+			end	
 			
-			
-			if homogeneous !== true && step <= 1e5
+			if homogeneous !== true && step <= 1e3
 				if simulation.force_func == harm_rep
 					ϵ = 10000.0f0
 				elseif simulation.force_func == WCA
@@ -231,7 +229,7 @@ function simulate!(
 			
 			if collision_calc
 				#forces!(r, f, Eₚ, Neighbors, simulation.num_cold, colls, coll_switch, simulation.box, simulation.ϵ, simulation.σ, simulation.force_func)
-				forces!(r, f, Eₚ, Neighbors, simulation.num_cold, colls, simulation.box, ϵ, simulation.σ, simulation.force_func)
+				forces!(r, f, Eₚ, Neighbors, part_id_d, colls, simulation.box, ϵ, simulation.σ, simulation.force_func)
 			else
 				#forces!(r, f, Eₚ, Neighbors, simulation.box, simulation.ϵ, simulation.σ, simulation.force_func)
 				forces!(r, f, Eₚ, Neighbors, simulation.box, ϵ, simulation.σ, simulation.force_func)
@@ -243,7 +241,9 @@ function simulate!(
 			copyto!(f₀,f)
 			if step % simulation.save_interval == 0
 				if collision_calc
-					coll₀ = Float64.(sum(colls)) / (2 * simulation.save_interval)
+					copyto!(colls_c,colls)
+					# For hot/cold particles collision I have added an extra factor of 1/2 to avoid overcounting the collisions! 
+					copyto!(coll₀,[sum(colls_c[i][1] for i = 1:simulation.num_cold)/2, sum(colls_c[i][2] for i in 1:length(colls_c))/(2*2), sum(colls_c[i][1] for i = simulation.num_cold+1:length(colls_c))/2] ./ (simulation.save_interval))
 				end
 				
 				# Pre-allocate
@@ -277,7 +277,7 @@ function simulate!(
 				if collision_calc
 					fill!(colls, zero(eltype(colls)))
 				end
-	
+				
 				@async begin
 					r_c, v_c = Vector(r), Vector(v)
 					write_gsd(step, simulation, part_id, r_c, v_c)
@@ -988,6 +988,302 @@ end
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+"""
+function initialize_simulation_arrays(simulation::Simulation, Npart::Int, T::DataType, box::SVector{N,T}) where {N, T}
+    dQ = CUDA.zeros(T, Npart)
+    dU = CUDA.zeros(T, Npart)
+    Eₖ = CUDA.zeros(Float64, Npart)
+    virial = CUDA.zeros(Float64, Npart)
+    Eₚ = similar(dQ)
+
+    NN = determine_max_neighbors(simulation, T, box)
+
+    Neighbors = CuArray(Matrix(zeros(Int, Npart, NN)))
+    colls, coll_switch = initialize_collision_arrays(Npart, NN)
+
+    c1, c3, alpha_d, part_id, r, rr, v, f = initialize_particle_properties(simulation, T, Npart, box)
+
+    dQ₀, dU₀, Ekin, virial_sum, Ekin_alpha, Epot, coll₀ = initialize_save_interval_variables()
+
+    return dQ, dU, Eₖ, virial, Eₚ, Neighbors, colls, coll_switch, c1, c3, alpha_d, part_id, r, rr, v, f, dQ₀, dU₀, Ekin, virial_sum, Ekin_alpha, Epot, coll₀
+end
+
+function determine_max_neighbors(simulation::Simulation, T::DataType, box::SVector{N,T}) where {N, T}
+    if simulation.force_func == WCA
+        return max_neighbors(sigma = T(2^(1/6)), R = simulation.neigh_cut_off, box = box)
+    elseif simulation.force_func == harm_rep
+        return max_neighbors(sigma = T(1.0), R = simulation.neigh_cut_off, box = box)
+    end
+end
+
+function initialize_collision_arrays(Npart::Int, NN::Int)
+    colls = CUDA.zeros(T, Npart)
+    coll_switch = CuArray(falses(Npart, NN))
+    return colls, coll_switch
+end
+
+function initialize_particle_properties(simulation::Simulation, T::DataType, Npart::Int, box::SVector{N,T}) where {N, T}
+    c1 = Float64(sqrt(simulation.particles[1].τD / simulation.particles[1].τm))
+    alpha_list = [Float64(simulation.particles[i].α) for i = 1:Npart]
+
+    scale = if simulation.integrator in ["lf", "em"]
+                T(1.0 - c1 * simulation.dt / 2)
+             else
+                T(1.0)
+             end
+
+    c3 = [T(sqrt(2 * c1 * simulation.particles[i].α * scale / simulation.dt)) for i = 1:Npart]
+    c3 = CuVector(c3)
+    alpha_d = CuVector(alpha_list)
+    part_id = [simulation.particles[i].part_id for i = 1:Npart]
+
+    r_c = [simulation.particles[i].r for i = 1:Npart]
+    r = CuVector(r_c)
+    rr = r
+    v_c = [simulation.particles[i].v for i = 1:Npart]
+    v = CuVector(v_c)
+    f_c = [simulation.particles[i].f for i = 1:Npart]
+    f = CuVector(f_c)
+
+    return c1, c3, alpha_d, part_id, r, rr, v, f
+end
+
+function initialize_save_interval_variables()
+    dQ₀ = zeros(Float64)
+    dU₀ = zeros(Float64)
+    Ekin = similar(dQ₀)
+    virial_sum = similar(dQ₀)
+    Ekin_alpha = similar(dQ₀)
+    Epot = similar(dQ₀)
+    coll₀ = similar(dQ₀)
+
+    return dQ₀, dU₀, Ekin, virial_sum, Ekin_alpha, Epot, coll₀
+end
+
+
+function simulate_vv!(
+    simulation::Simulation,
+    collision_calc::Bool,
+    homogeneous::Union{Bool, String},
+    prev_step::I,
+    dQ, dU, Eₖ, virial, Eₚ, Neighbors, colls, c1, c3, alpha_d, part_id, r, v, f, 
+    dQ₀, dU₀, Ekin, virial_sum, Ekin_alpha, Epot, coll₀
+) where {I}
+
+f_r = CUDA.zeros(eltype(f), size(f))
+f₀ = CUDA.zeros(eltype(f), size(f))
+neighbor_list!(r, Neighbors, simulation.neigh_cut_off, simulation.box)
+
+for step = prev_step:simulation.num_steps + prev_step
+    neighbor_list_update!(simulation, step, r, Neighbors)
+
+    ϵ = determine_epsilon(simulation, step, homogeneous)
+    update_positions_vv!(r, v, f₀, f_r, c1, Float64(simulation.dt), c3, simulation.box)
+
+    apply_forces!(simulation, collision_calc, r, f, Eₚ, Neighbors, colls, ϵ)
+    virial!(r, f, virial)
+    update_velocities_vv!(v, f₀, f, f_r, dQ, dU, Eₖ, c1, Float64(simulation.dt), c3)
+    copyto!(f₀, f)
+
+    if step % simulation.save_interval == 0
+        perform_save_interval_operations!(simulation, collision_calc, step, colls, c1, alpha_d, dQ, dU, Eₖ, virial, Eₚ, dQ₀, dU₀, Ekin, virial_sum, Ekin_alpha, Epot, coll₀, part_id, r, v)
+    end
+end
+end
+
+function neighbor_list_update!(simulation::Simulation, step::Int, r, Neighbors)
+if step % simulation.neigh_update == 0
+    neighbor_list!(r, Neighbors, simulation.neigh_cut_off, simulation.box)
+end
+end
+
+function determine_epsilon(simulation::Simulation, step::Int, homogeneous::Union{Bool, String})
+if homogeneous !== true && step <= 1e5
+    if simulation.force_func == harm_rep
+        return 10000.0f0
+    elseif simulation.force_func == WCA
+        return 0.1f0
+    end
+else
+    return simulation.ϵ
+end
+end
+
+function apply_forces!(
+    simulation::Simulation,
+    collision_calc::Bool,
+    r, f, Eₚ, Neighbors, colls, ϵ
+)
+if collision_calc
+    forces!(r, f, Eₚ, Neighbors, simulation.num_cold, colls, simulation.box, ϵ, simulation.σ, simulation.force_func)
+else
+    forces!(r, f, Eₚ, Neighbors, simulation.box, ϵ, simulation.σ, simulation.force_func)
+end
+end
+
+function perform_save_interval_operations!(
+    simulation::Simulation,
+    collision_calc::Bool,
+    step::Int,
+    colls, c1, alpha_d, dQ, dU, Eₖ, virial, Eₚ, 
+    dQ₀, dU₀, Ekin, virial_sum, Ekin_alpha, Epot, coll₀, part_id, r, v
+)
+
+    if collision_calc
+        coll₀ = Float64.(sum(colls)) / (2 * simulation.save_interval)
+    end
+
+    c1_d = Float64(c1)
+
+    @. dQ = dQ ./ alpha_d
+    dQ₀ = Float64.(sum(dQ)) / simulation.save_interval
+
+    @. virial = virial ./ alpha_d
+    virial_sum = Float64.(sum(virial)) / simulation.save_interval
+
+    @. dU = dU ./ alpha_d
+    dU₀ = Float64.(sum(dU)) / simulation.save_interval
+
+    Ekin = sum(Eₖ) / simulation.save_interval
+
+    @. Eₖ = 2 * c1_d * Eₖ ./ alpha_d
+    Ekin_alpha_numerator = sum(Eₖ)
+    Ekin_alpha = (Ekin_alpha_numerator / simulation.save_interval) - length(simulation.particles) * Float64.(sum(c1_d .* length(simulation.box)))
+
+    Epot = Float64(sum(Eₚ)) / simulation.save_interval
+
+    fill!(dQ, zero(eltype(dQ)))
+    fill!(virial, zero(eltype(virial)))
+    fill!(dU, zero(eltype(dU)))
+    fill!(Eₖ, zero(eltype(Eₖ)))
+    fill!(Eₚ, zero(eltype(Eₚ)))
+
+    if collision_calc
+        fill!(colls, zero(eltype(colls)))
+    end
+
+    @async begin
+        r_c, v_c = Vector(r), Vector(v)
+        write_gsd(step, simulation, part_id, r_c, v_c)
+        if collision_calc
+            write_log(step, simulation, Ekin, Epot, dQ₀, virial_sum, dU₀, Ekin_alpha, coll₀)
+        else
+            println("The correct write_log function to write virial is not implemented yet!")
+            write_log(step, simulation, Ekin, Epot, dQ₀)
+        end
+    end
+end
+
+
+
+function simulate_em!(
+    simulation::Simulation,
+    collision_calc::Bool,
+    prev_step::I,
+    dQ, dU, Eₖ, virial, Eₚ, Neighbors, colls, c1, c3, alpha_d, part_id, r, v, f, 
+    dQ₀, dU₀, Ekin, virial_sum, Ekin_alpha, Epot, coll₀
+) where {I}
+
+    neighbor_list!(r, Neighbors, simulation.neigh_cut_off, simulation.box)
+    for step = prev_step:simulation.num_steps + prev_step
+        neighbor_list_update!(simulation, step, r, Neighbors)
+
+        apply_forces!(simulation, collision_calc, r, f, Eₚ, Neighbors, colls, simulation.ϵ)
+        update_particles_em!(r, v, f, dQ, Eₖ, c1, Float64(simulation.dt), c3, simulation.box)
+
+        if step % simulation.save_interval == 0
+            perform_save_interval_operations!(simulation, collision_calc, step, colls, c1, alpha_d, dQ, dU, Eₖ, virial, Eₚ, dQ₀, dU₀, Ekin, virial_sum, Ekin_alpha, Epot, coll₀, part_id, r, v)
+        end
+    end
+end
+
+function simulate_lf!(
+    simulation::Simulation,
+    collision_calc::Bool,
+    prev_step::I,
+    dQ, dU, Eₖ, virial, Eₚ, Neighbors, colls, c1, c3, alpha_d, part_id, r, v, f, 
+    dQ₀, dU₀, Ekin, virial_sum, Ekin_alpha, Epot, coll₀
+) where {I}
+
+    neighbor_list!(r, Neighbors, simulation.neigh_cut_off, simulation.box)
+    for step = prev_step:simulation.num_steps + prev_step
+        neighbor_list_update!(simulation, step, r, Neighbors)
+
+        update_positions_lf!(r, v, Float64(simulation.dt), simulation.box)
+        apply_forces!(simulation, collision_calc, r, f, Eₚ, Neighbors, colls, simulation.ϵ)
+        update_velocities_lf!(v, f, dQ, Eₖ, c1, Float64(simulation.dt), c3)
+        update_positions_lf!(r, v, Float64(simulation.dt), simulation.box)
+
+        if step % simulation.save_interval == 0
+            perform_save_interval_operations!(simulation, collision_calc, step, colls, c1, alpha_d, dQ, dU, Eₖ, virial, Eₚ, dQ₀, dU₀, Ekin, virial_sum, Ekin_alpha, Epot, coll₀, part_id, r, v)
+        end
+    end
+end
+
+
+function simulate!(
+    simulation::Simulation,
+    collision_calc::Bool,
+    box::SVector{N,T}, 
+    prev_step::I,
+    homogeneous::Union{Bool, String}
+) where {N, I, T}
+
+    Npart = length(simulation.particles)
+    dQ, dU, Eₖ, virial, Eₚ, Neighbors, colls, c1, c3, alpha_d, part_id, r, rr, v, f, 
+    dQ₀, dU₀, Ekin, virial_sum, Ekin_alpha, Epot, coll₀ = initialize_simulation_arrays(simulation, Npart, T, box)
+
+    if prev_step !== 0
+        prev_step += 1
+    end
+
+    if simulation.integrator == "vv"
+        simulate_vv!(
+            simulation, collision_calc, homogeneous, prev_step,
+            dQ, dU, Eₖ, virial, Eₚ, Neighbors, colls, c1, c3, alpha_d, part_id, r, v, f, 
+            dQ₀, dU₀, Ekin, virial_sum, Ekin_alpha, Epot, coll₀
+        )
+    elseif simulation.integrator == "em"
+        simulate_em!(
+            simulation, collision_calc, prev_step,
+            dQ, dU, Eₖ, virial, Eₚ, Neighbors, colls, c1, c3, alpha_d, part_id, r, v, f, 
+            dQ₀, dU₀, Ekin, virial_sum, Ekin_alpha, Epot, coll₀
+        )
+    elseif simulation.integrator == "lf"
+        simulate_lf!(
+            simulation, collision_calc, prev_step,
+            dQ, dU, Eₖ, virial, Eₚ, Neighbors, colls, c1, c3, alpha_d, part_id, r, v, f, 
+            dQ₀, dU₀, Ekin, virial_sum, Ekin_alpha, Epot, coll₀
+        )
+    end
+
+    finalize_simulation(simulation, r, v, f, Npart)
+    return nothing
+end
+
+function finalize_simulation(simulation::Simulation, r, v, f, Npart::Int)
+    r_c, v_c, f_c = Vector(r), Vector(v), Vector(f)
+    copyto!(r_c, r)
+    copyto!(v_c, v)
+    copyto!(f_c, f)
+    # After finishing the simulation it saves the positions, velocities and forces back into the simulation structure! 
+    [simulation.particles[i].r = r_c[i] for i = 1:Npart]
+    [simulation.particles[i].v = v_c[i] for i = 1:Npart]
+    [simulation.particles[i].f = f_c[i] for i = 1:Npart]
+end
+"""
 
 
 
