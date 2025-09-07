@@ -1,5 +1,5 @@
 name = "NonEqSimGPU"
-uuid = "752a07c7-babd-4c58-b72d-5567b6fb393f"
+uuid = "12ca460a-85bb-48c4-9960-620229cee2bc"
 authors = ["abbaa90 <abbaa90@fu-berlin.de> and contributors"]
 version = "0.3.0"
 
