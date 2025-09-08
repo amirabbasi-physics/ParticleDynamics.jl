@@ -1,8 +1,8 @@
-export harm_rep
+export Harmonic
 export WCA
 
 #2D harmonic repulsive potential
-@inline function harm_rep(dx::T, dy::T, dr²::T, ϵ::T, σ::T) where T
+@inline function Harmonic(dx::T, dy::T, dr²::T, ϵ::T, σ::T) where T
     dist = dr²^(1/2)
     f_int = ϵ*(1/dist - 1/σ)
     e_int = (ϵ/2)*(1 - dist/σ)^2
@@ -12,7 +12,7 @@ export WCA
 end
 
 #3D harmonic repulsive potential
-@inline function harm_rep(dx::T, dy::T, dz::T, dr²::T, ϵ::T, σ::T) where T
+@inline function Harmonic(dx::T, dy::T, dz::T, dr²::T, ϵ::T, σ::T) where T
     dist = dr²^(1/2)
     f_int = ϵ*(1/dist - 1/σ)
     e_int = (ϵ/2)*(1 - dist/σ)^2
@@ -53,6 +53,38 @@ end
 
 
 
+#2D WCA potential
+@inline function LennardJones(dx::T, dy::T, dr²::T, ϵ::T, σ::T) where T
+    inv_dr² = 1/dr²
+    σ² = σ^2
+    σ²_inv_dr² = σ²*inv_dr²
+    σ6_inv_dr6 = σ²_inv_dr²^3
+    σ12_inv_dr12 = σ6_inv_dr6^2
+    f_int = 24ϵ*(2σ12_inv_dr12 - σ6_inv_dr6)*inv_dr²
+    e_int = 4ϵ*(2σ12_inv_dr12 - σ6_inv_dr6)
+    f_x = f_int*dx
+    f_y = f_int*dy
+    return SVector{2,T}(f_x,f_y), e_int
+end
+
+#3D WCA potential
+@inline function LennardJones(dx::T, dy::T, dz::T, dr²::T, ϵ::T, σ::T) where T
+    inv_dr² = 1/dr²
+    σ² = σ^2
+    σ²_inv_dr² = σ²*inv_dr²
+    σ6_inv_dr6 = σ²_inv_dr²^3
+    σ12_inv_dr12 = σ6_inv_dr6^2
+    f_int = 24ϵ*(2σ12_inv_dr12 - σ6_inv_dr6)*inv_dr²
+    e_int = 4ϵ*(2σ12_inv_dr12 - σ6_inv_dr6)
+    f_x = f_int*dx
+    f_y = f_int*dy
+    f_z = f_int*dz
+    return SVector{3,T}(f_x,f_y, f_z), e_int
+end
+
+
+
+
 
 
 
@@ -65,7 +97,7 @@ end
 export forces!
 export forces_kernel!
 
-"""
+
 function forces!(
     r::CuVector{SVector{N,T}},
     f::CuVector{SVector{N,T}},
@@ -105,7 +137,7 @@ function forces_kernel!(
     if force_func == WCA
         cut_off = T1(2^(1/6))*σ
         cut_off² = cut_off^2
-    elseif force_func == harm_rep
+    elseif force_func == Harmonic
         cut_off = T1(σ)
         cut_off² = cut_off^2
     end
@@ -199,7 +231,7 @@ function forces_kernel!(
     if force_func == WCA
         cut_off = T1(2^(1/6))*σ
         cut_off² = cut_off^2
-    elseif force_func == harm_rep
+    elseif force_func == Harmonic
         cut_off = T1(σ)
         cut_off² = cut_off^2
     end
@@ -262,7 +294,7 @@ end
 ################################################################################
 
 
-
+"""
 function forces!(
     r::CuVector{SVector{N,T}},
     f::CuVector{SVector{N,T}},
@@ -309,7 +341,7 @@ function forces_kernel!(
     if force_func == WCA
         cut_off = T1(2^(1/6))*σ
         cut_off² = cut_off^2
-    elseif force_func == harm_rep
+    elseif force_func == Harmonic
         cut_off = T1(σ)
         cut_off² = cut_off^2
     end
@@ -368,9 +400,6 @@ function forces_kernel!(
     return nothing
 end
 
-
-
-
 function forces!(
     r::CuVector{SVector{N,T}},
     f::CuVector{SVector{N,T}},
@@ -390,8 +419,6 @@ function forces!(
     CUDA.@sync kernel(r, f, Epot, Neighbors, cold_num, colls, box, ϵ, σ, force_func; threads, blocks)
     return nothing
 end
-
-
 
 function forces_kernel!(
     r::CuDeviceVector{T},
@@ -415,7 +442,7 @@ function forces_kernel!(
     if force_func == WCA
         cut_off = T1(2^(1/6))*σ
         cut_off² = cut_off^2
-    elseif force_func == harm_rep
+    elseif force_func == Harmonic
         cut_off = T1(σ)
         cut_off² = cut_off^2
     end
@@ -560,108 +587,113 @@ function forces_kernel!(
     if force_func == WCA
         cut_off = T1(2^(1/6))*σ
         cut_off² = cut_off^2
-    elseif force_func == harm_rep
+    elseif force_func == Harmonic
         cut_off = T1(σ)
         cut_off² = cut_off^2
     end
     dim = length(box)
 
-    @inbounds begin
-        if dim == 2
-            if gtid <= Npart
-                pos₁ = r[gtid]
-                id_1 = part_ids[gtid]
-                acc = zero(T)
-                epot= zero(T1)
-                coll = SVector{2,I}(0, 0)
-                zero_one = SVector{2,I}(0, 1)
-                one_zero = SVector{2,I}(1, 0)
 
-                #@inbounds for j = 1:NNeigh
-                for j = 1:NNeigh
-                    idx = Neighbors[gtid,j]
-                    if idx != 0 
-                        pos₂  = r[idx]
-                        id_2  = part_ids[idx]
-                    else
-                        break
-                    end
+    if dim == 2
+        if gtid <= Npart
+            pos₁ = r[gtid]
+            id_1 = part_ids[gtid]
+            acc = zero(T)
+            epot= zero(T1)
+            coll = SVector{2,I}(0, 0)
+            zero_one = SVector{2,I}(0, 1)
+            one_zero = SVector{2,I}(1, 0)
 
-                    dx  = pos₁[1] - pos₂[1]
-                    dy  = pos₁[2] - pos₂[2]
-
-                    dx = (2abs(dx) > box[1] ) ? dx - sign(dx) * box[1] : dx
-                    dy = (2abs(dy) > box[2] ) ? dy - sign(dy) * box[2] : dy
-
-                    dr² = dx*dx + dy*dy
-
-                    if dr² < cut_off²                  
-                        if id_1 + id_2 == 1
-                            coll = coll .+ zero_one
-                        else
-                            coll = coll .+ one_zero
-                        end
-                        frc, ep = force_func(dx, dy, dr², ϵ, σ)
-                        acc = acc .+ frc
-                        epot = epot + ep
-                    end
+            #@inbounds for j = 1:NNeigh
+            for j = 1:NNeigh
+                idx = Neighbors[gtid,j]
+                if idx != 0 
+                    pos₂  = r[idx]
+                    id_2  = part_ids[idx]
+                else
+                    break
                 end
-                    
-                f[gtid] = acc
-                Epot[gtid] += epot
-                colls[gtid] += coll 
-            end
-        elseif dim == 3
-            if gtid <= Npart
-                pos₁ = r[gtid]
-                id_1 = part_ids[gtid]
-                acc = zero(T)
-                epot= zero(T1)
-                coll = SVector{2,I}(0, 0)
-                zero_one = SVector{2,I}(0, 1)
-                one_zero = SVector{2,I}(1, 0)
 
-                #@inbounds for j = 1:NNeigh
-                for j = 1:NNeigh
-                    idx = Neighbors[gtid,j]
-                    if idx != 0
-                        id_2 = part_ids[idx] 
-                        pos₂  = r[idx]
+                dx  = pos₁[1] - pos₂[1]
+                dy  = pos₁[2] - pos₂[2]
+
+                dx = (2abs(dx) > box[1] ) ? dx - sign(dx) * box[1] : dx
+                dy = (2abs(dy) > box[2] ) ? dy - sign(dy) * box[2] : dy
+
+                dr² = dx*dx + dy*dy
+
+                if dr² < cut_off²                  
+                    if id_1 + id_2 == 1
+                        coll = coll .+ zero_one
                     else
-                        break
+                        coll = coll .+ one_zero
                     end
-
-                    dx  = pos₁[1] - pos₂[1]
-                    dy  = pos₁[2] - pos₂[2]
-                    dz  = pos₁[3] - pos₂[3]
-
-                    dx = (2abs(dx) > box[1] ) ? dx - sign(dx) * box[1] : dx
-                    dy = (2abs(dy) > box[2] ) ? dy - sign(dy) * box[2] : dy
-                    dz = (2abs(dz) > box[3] ) ? dz - sign(dz) * box[3] : dz
-
-                    dr² = dx*dx + dy*dy + dz*dz
-
-                    if dr² < cut_off²                  
-                        if id_1 + id_2 == 1
-                            coll = coll .+ zero_one
-                        else
-                            coll = coll .+ one_zero
-                        end
-
-                        frc, ep = force_func(dx, dy, dz, dr², ϵ, σ)
-                        acc = acc .+ frc
-                        epot = epot + ep
-                    end
+                    frc, ep = force_func(dx, dy, dr², ϵ, σ)
+                    acc = acc .+ frc
+                    epot = epot + ep
                 end
-                    
-                f[gtid] = acc
-                Epot[gtid] += epot
-                colls[gtid] += coll 
             end
+                
+            f[gtid] = acc
+            Epot[gtid] += epot
+            colls[gtid] += coll 
+        end
+    elseif dim == 3
+        if gtid <= Npart
+            pos₁ = r[gtid]
+            id_1 = part_ids[gtid]
+            acc = zero(T)
+            epot= zero(T1)
+            coll = SVector{2,I}(0, 0)
+            zero_one = SVector{2,I}(0, 1)
+            one_zero = SVector{2,I}(1, 0)
+
+            #@inbounds for j = 1:NNeigh
+            for j = 1:NNeigh
+                idx = Neighbors[gtid,j]
+                if idx != 0
+                    id_2 = part_ids[idx] 
+                    pos₂  = r[idx]
+                else
+                    break
+                end
+
+                dx  = pos₁[1] - pos₂[1]
+                dy  = pos₁[2] - pos₂[2]
+                dz  = pos₁[3] - pos₂[3]
+
+                dx = (2abs(dx) > box[1] ) ? dx - sign(dx) * box[1] : dx
+                dy = (2abs(dy) > box[2] ) ? dy - sign(dy) * box[2] : dy
+                dz = (2abs(dz) > box[3] ) ? dz - sign(dz) * box[3] : dz
+
+                dr² = dx*dx + dy*dy + dz*dz
+
+                if dr² < cut_off²                  
+                    if id_1 + id_2 == 1
+                        coll = coll .+ zero_one
+                    else
+                        coll = coll .+ one_zero
+                    end
+
+                    frc, ep = force_func(dx, dy, dz, dr², ϵ, σ)
+                    acc = acc .+ frc
+                    epot = epot + ep
+                end
+            end
+                
+            f[gtid] = acc
+            Epot[gtid] += epot
+            colls[gtid] += coll 
         end
     end
     return nothing
 end
+
+
+
+
+
+
 
 
 """
@@ -687,7 +719,7 @@ function forces_kernel!(
     if force_func == WCA
         cut_off = T1(2^(1/6))*σ
         cut_off² = cut_off^2
-    elseif force_func == harm_rep
+    elseif force_func == Harmonic
         cut_off = T1(σ)
         cut_off² = cut_off^2
     end
@@ -777,3 +809,4 @@ function virial_kernel!(
     end
     return nothing
 end
+################################################################################

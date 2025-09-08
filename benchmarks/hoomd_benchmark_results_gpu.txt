@@ -1,0 +1,32 @@
+# HOOMD-blue Langevin LJ Benchmark - Results
+hoomd_version           = 5.3.1
+script_dir              = /net/storage/abbaa90/.julia/dev/NonEqSimGPU/benchmarks
+trajectory_file         = hoomd_trajectory_gpu.gsd
+
+[parameters]
+N                       = 10000
+density                 = 0.85
+temperature             = 1.0
+dt                      = 0.005
+gamma                   = 1.0
+epsilon                 = 1.0
+sigma                   = 1.0
+r_cut                   = 2.5
+box_length              = 22.74366019525953
+n_equilibrate           = 0
+n_production            = 100000
+trajectory_interval     = 10000
+
+[timing]
+equilibration_time_s    = 1.1920928955078125e-06
+equilibration_sps       = 0.0
+production_time_s       = 47.13663196563721
+production_sps          = 2121.4922625973873
+total_time_s            = 47.1366331577301
+overall_sps             = 2121.4922089445126
+
+[energies]
+initial_ke              = 14959.342644433918
+initial_pe              = -72100.27563528082
+final_ke                = 14937.751680672067
+final_pe                = -53580.28552272334

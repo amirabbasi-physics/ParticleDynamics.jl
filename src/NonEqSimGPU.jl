@@ -20,17 +20,16 @@ using CSV
 using DataFrames
 using Printf
 using LinearAlgebra
-using PyCall
 using Random
 using Distributed
 
-include("definitions.jl")
-include("initialize.jl")
-include("simulation.jl")
-include("integrators.jl")
-include("neighbor_list.jl")
-include("interactions.jl")
-include("IO.jl")
+include("Definitions.jl")
+include("Initialize.jl")
+include("Simulation.jl")
+include("Integrators.jl")
+include("NeighborLists.jl")
+include("NonBondedForces.jl")
+include("Writers.jl")
 
 
 

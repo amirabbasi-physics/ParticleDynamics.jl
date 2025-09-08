@@ -51,19 +51,21 @@ function initialization(;
             end
 		end
 		shuffle!(r_init)
-    
     elseif homogeneous == "slab"
         num_cold = floor(Int, Npart * fraction)
-        num_cold_inhomo = floor(Int, Npart * fraction * cold_frac)
-        slab_length = 50
+        num_cold_half = floor(Int, num_cold / 2)
+
+        num_hot = Npart - num_cold
+        num_hot_half = floor(Int, num_hot / 2)
+        
+        slab_length = 100
         if dim == 2
-            box, r_inhomogeneous, num_cold_inhomo, x_off_sets = slab_create(num_cold_inhomo, slab_length, sigma, box)
+            box, r_slab, num_cold_half, x_offset_max = slab_create(num_cold_half, slab_length, sigma, box)
         end
-        num_random = Npart - num_cold_inhomo
-        #r_random = generate_random_positions(num_random, box, sigma, r_inhomogeneous)
-        r_random = generate_random_positions(num_random, box, sigma, x_off_sets)
-        r_init = merge_positions(r_inhomogeneous, r_random)
-        r_init = r_init
+        r_random_inhomo = generate_random_positions(num_hot_half, box, sigma, x_offset_max)
+        num_remain = num_cold_half + num_hot_half
+        r_random_homo = generate_random_positions(num_remain, box, sigma)
+        r_init = vcat(r_slab, r_random_homo, r_random_inhomo)
     else homogeneous == false
         num_cold = floor(Int, Npart * fraction)
         num_cold_inhomo = floor(Int, Npart * fraction * cold_frac)
@@ -83,7 +85,6 @@ function initialization(;
     return box, r_init, num_cold
 end
 
-
 function slab_create(num_cold_inhomo::I, slab_length::I, sigma::T, box::SVector{N,T}) where {I, N, T}
     L_y = slab_length * sigma
     L_x = box[1] * box[2] / L_y
@@ -92,24 +93,21 @@ function slab_create(num_cold_inhomo::I, slab_length::I, sigma::T, box::SVector{
     num_layers = floor(Int, num_cold_inhomo/slab_length)
     num_cold_inhomo = num_layers * slab_length
 
-    if num_layers % 2 == 0
-        num_layers += 1
-    end
-    num_layers_half = floor(Int, num_layers/2)
-    a = sigma * sqrt(3)/2
+    a = T(sigma * sqrt(3)/2)
     lattice = SVector{2,T}[]
 
     
-    for column in -num_layers_half:num_layers_half
+    for column in 0:num_layers-1
         y_offset = (column % 2) * sigma / 2
-        for atom in 1:slab_length
-            push!(lattice, SVector{2, T}(column * a, (atom - 1) * sigma + y_offset))
+        for particle in 1:slab_length
+            push!(lattice, SVector{2, T}(column * a + sigma / 2, (particle - 1) * sigma + y_offset))
         end
     end
-    x_offset_min = -num_layers_half * a
-    x_offset_max =  num_layers_half * a
-    return box, lattice[1:num_cold_inhomo], num_cold_inhomo, SVector{2,T}(x_offset_min,x_offset_max)
+    x_offset_max = num_layers * a
+    return box, lattice[1:num_cold_inhomo], num_cold_inhomo, x_offset_max
 end
+
+
 
 
 function circular_cut_triangular_lattice(num_particles::I, sigma::T) where {I, T}
@@ -172,7 +170,7 @@ function spherical_cut_hcp_lattice(num_particles::I, sigma::T) where {I, T}
 end
 
 
-"""
+
 # Function to generate random positions
 function generate_random_positions(num_particles::I, box::SVector{N,T}, sigma::T, exclude_region::Array{SVector{N,T}}) where {I, N, T}
     dim = length(box)
@@ -188,8 +186,34 @@ function generate_random_positions(num_particles::I, box::SVector{N,T}, sigma::T
     return positions
 end
 
-"""
 
+function generate_random_positions(num_particles::I, box::SVector{N,T}, sigma::T, x_offset_max::T) where {I, N, T}
+    dim = length(box)
+    positions = SVector{dim, T}[]
+
+    while length(positions) < num_particles
+        pos = random_pos(box) 
+        if (pos[1] > x_offset_max + sigma/2)
+            push!(positions, pos)
+        end
+    end
+    return positions
+end
+
+function generate_random_positions(num_particles::I, box::SVector{N,T}, sigma::T) where {I, N, T}
+    dim = length(box)
+    positions = SVector{dim, T}[]
+
+    while length(positions) < num_particles
+        pos = random_pos(box) 
+        if (pos[1] < -sigma/2)
+            push!(positions, pos)
+        end
+    end
+    return positions
+end
+
+"""
 function generate_random_positions(num_particles::I, box::SVector{N,T}, sigma::T, x_off_set::SVector{N,T}) where {I, N, T}
     dim = length(box)
     positions = SVector{dim, T}[]
@@ -201,8 +225,42 @@ function generate_random_positions(num_particles::I, box::SVector{N,T}, sigma::T
         end
     end
 
+    group1 = [pos for pos in positions if pos[1] < x_off_set[1] - sigma]
+    group2 = [pos for pos in positions if pos[1] >= x_off_set[1] - sigma]
+
+    # Concatenate the two groups, with positions passing the criterion first
+    positions = vcat(group1, group2)
+
     return positions
 end
+"""
+
+
+"""
+function sort_positions(positions::Array{SVector{N,T}}, x_off_set::SVector{N,T}, sigma::T) where {N, T}
+    # Define a custom sorting function
+    sort_func = (pos1, pos2) -> begin
+        # Check conditions for pos1 and pos2 relative to x_off_set[1] - sigma
+        condition1 = pos1[1] < x_off_set[1] - sigma
+        condition2 = pos2[1] < x_off_set[1] - sigma
+
+        # Prioritize positions satisfying the condition
+        # If both satisfy the condition or both do not, sort by the first element
+        if condition1 && !condition2
+            return true
+        elseif !condition1 && condition2
+            return false
+        else
+            return pos1[1] < pos2[1]
+        end
+    end
+
+    # Sort the positions using the custom function
+    positions = sort(positions, lt = sort_func)
+    
+    return positions
+end
+"""
 
 
 function random_pos(box::SVector{N,T}) where {N,T}

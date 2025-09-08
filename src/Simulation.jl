@@ -1,137 +1,214 @@
-export sim_run
+export sim_run, relax_system!
+
 
 function sim_run(;
-	type::String,
-	restart::Union{String,Nothing},
+    type::String,
+    restart::Union{String,Nothing},
     num_runs::N,
     homogeneous::Union{String,Bool},
-	collision_calc::Bool,
+    collision_calc::Bool,
     num_steps::N,
-	save_interval::N,
+    save_interval::N,
     Npart::N,
     ptypes::Vector{String},
-	p_ids::Vector{Int},
+    p_ids::Vector{Int},
     dim::N,
     ϕ::T,
     fraction::T,
-	cold_frac::T,
+    cold_frac::T,
     R::T,
-	neigh_cut_off::T,
-	neigh_update::I,
-	ϵ::T,
+    neigh_cut_off::T,
+    neigh_update::I,
+    ϵ::T,
     α₁::T,
     α₂::T,
-	density::T,
-	η::T,
+    density::T,
+    η::T,
     Δt_prod::T,
     integ::String,
-	random_positions::Bool,
-	force_func::Function) where {N,I,T}
+    random_positions::Bool,
+    force_func::Function,
+    relax_steps::N,
+    relax_temp::T) where {N,I,T}
 
-    #η		= T(8.9e-4)
-    #density = T(1.0e3) # mass density of particles (kg/m³)
-	σ = T(1.0)
-	
-	prev_step = 0
-		 
-    ###############################################################################
-    #   Initializing the system to get randomly distributed positions
-    ###############################################################################
-	if force_func == WCA
-		sigma = T(2^(1/6))*σ
-	elseif force_func == harm_rep
-		sigma = σ
-	end
+    σ = T(1.0)
+    
+    prev_step = 0
 
-	neigh_cut_off *= sigma
-	if restart != nothing
-		prev_step, r_init, velocities, p_ids, part_types, box, num_cold = read_last_gsd(restart, dim)
-	else
-		box, r_init, num_cold = initialization(homogeneous = homogeneous , dim = dim, Npart = Npart, ϕ = ϕ, fraction = fraction, sigma = sigma, random_positions = random_positions, cold_frac = cold_frac)
-	end
+    if force_func == WCA
+        sigma = T(2^(1/6))*σ
+    elseif force_func == Harmonic
+        sigma = σ
+    end
+
+    neigh_cut_off *= sigma
+    if restart != nothing
+        prev_step, r_init, velocities, p_ids, part_types, box, num_cold = read_last_gsd(restart, dim)
+    else
+        box, r_init, num_cold = initialization(homogeneous = homogeneous, dim = dim, Npart = Npart, ϕ = ϕ, fraction = fraction, sigma = sigma, random_positions = random_positions, cold_frac = cold_frac)
+    end
 
     Npart = length(r_init)
 
-	
     for run = 1:num_runs
-		simulation = Simulation()
-		simulation.type = type
-		simulation.neigh_update = neigh_update
-		simulation.neigh_cut_off = neigh_cut_off
-		simulation.num_cold = num_cold
-		alpha = α₂/α₁
-        output_file = "$type,Npart,$Npart,$dim-D,deltat-$Δt_prod,epsilon-$ϵ,alpha-$alpha,fraction-$ϕ,integ-$integ,run_num-$run,homo_$homogeneous"  # check this!
-		simulation.part_types = ptypes
+        simulation = Simulation()
+        simulation.type = type
+        simulation.neigh_update = neigh_update
+        simulation.neigh_cut_off = neigh_cut_off
+        simulation.num_cold = num_cold
+        alpha = α₂/α₁
+        output_file = "$type,Npart,$Npart,$dim-D,deltat-$Δt_prod,epsilon-$ϵ,alpha-$alpha,fraction-$ϕ,integ-$integ,run_num-$run,homo_$homogeneous"
+        simulation.part_types = ptypes
         simulation.output_file = output_file
         
-		simulation.integrator = integ
-		simulation.force_func = force_func
-		simulation.ϵ = ϵ 
-		simulation.σ = σ 
-		simulation.box = box
+        simulation.integrator = integ
+        simulation.force_func = force_func
+        simulation.ϵ = ϵ
+        simulation.σ = σ
+        simulation.box = box
         r0 = r_init
 
-		if restart !== nothing
-			if simulation.type == "Brownian"
-				for i = 1:num_cold
-					push!(simulation.particles, PassiveOP(part_type = ptypes[1], part_id = p_ids[1],r = r0[i], v = velocities[i], f = SVector{dim,T}(zeros(T,dim)), η = η, Radii = R, α = α₁))
-				end
-				for i = num_cold+1:Npart
-					push!(simulation.particles, PassiveOP(part_type = ptypes[2], part_id = p_ids[2],r = r0[i], v = velocities[i], f = SVector{dim,T}(zeros(T,dim)), η = η, Radii = R, α = α₂))
-				end
-			elseif simulation.type == "Langevin"	
-				for i = 1:num_cold
-					push!(simulation.particles, PassiveP(part_type = ptypes[1], part_id = p_ids[1],r = r0[i], v = velocities[i], f = SVector{dim,T}(zeros(T,dim)), density = density, η = η, Radii = R, α = α₁))
-				end
-				for i = num_cold+1:Npart
-					push!(simulation.particles, PassiveP(part_type = ptypes[2], part_id = p_ids[2],r = r0[i], v = velocities[i], f = SVector{dim,T}(zeros(T,dim)), density = density, η = η, Radii = R, α = α₂))
-				end
+        if restart !== nothing
+            if simulation.type == "Brownian"
+                for i = 1:num_cold
+                    push!(simulation.particles, PassiveOP(part_type = ptypes[1], part_id = p_ids[1], r = r0[i], v = velocities[i], f = SVector{dim,T}(zeros(T,dim)), η = η, Radii = R, α = α₁))
+                end
+                for i = num_cold+1:Npart
+                    push!(simulation.particles, PassiveOP(part_type = ptypes[2], part_id = p_ids[2], r = r0[i], v = velocities[i], f = SVector{dim,T}(zeros(T,dim)), η = η, Radii = R, α = α₂))
+                end
+            elseif simulation.type == "Langevin"
+                for i = 1:num_cold
+                    push!(simulation.particles, PassiveP(part_type = ptypes[1], part_id = p_ids[1], r = r0[i], v = velocities[i], f = SVector{dim,T}(zeros(T,dim)), density = density, η = η, Radii = R, α = α₁))
+                end
+                for i = num_cold+1:Npart
+                    push!(simulation.particles, PassiveP(part_type = ptypes[2], part_id = p_ids[2], r = r0[i], v = velocities[i], f = SVector{dim,T}(zeros(T,dim)), density = density, η = η, Radii = R, α = α₂))
+                end
+            end
+        else
+            if simulation.type == "Brownian"
+                for i = 1:num_cold
+                    push!(simulation.particles, PassiveOP(part_type = ptypes[1], part_id = p_ids[1], r = r0[i], v = SVector{dim,T}(zeros(T,dim)), f = SVector{dim,T}(zeros(T,dim)), η = η, Radii = R, α = α₁))
+                end
+                for i = num_cold+1:Npart
+                    push!(simulation.particles, PassiveOP(part_type = ptypes[2], part_id = p_ids[2], r = r0[i], v = SVector{dim,T}(zeros(T,dim)), f = SVector{dim,T}(zeros(T,dim)), η = η, Radii = R, α = α₂))
+                end
+            elseif simulation.type == "Langevin"
+                for i = 1:num_cold
+                    push!(simulation.particles, PassiveP(part_type = ptypes[1], part_id = p_ids[1], r = r0[i], v = SVector{dim,T}(zeros(T,dim)), f = SVector{dim,T}(zeros(T,dim)), density = density, η = η, Radii = R, α = α₁))
+                end
+                for i = num_cold+1:Npart
+                    push!(simulation.particles, PassiveP(part_type = ptypes[2], part_id = p_ids[2], r = r0[i], v = SVector{dim,T}(zeros(T,dim)), f = SVector{dim,T}(zeros(T,dim)), density = density, η = η, Radii = R, α = α₂))
+                end
+            end
+        end
+
+		"""
+        println("System initialized!")
+
+        # Relax the system with a single temperature
+        relax_system!(simulation, box, relax_steps, relax_temp)
+
+		println("Relaxation is done!")
+
+		"""
+
+		
+        for i = 1:num_cold
+            simulation.particles[i].α = α₁
+            if restart !== nothing
+                simulation.particles[i].v = sqrt(simulation.particles[i].α) .* @SVector randn(T,dim)
+            end
+        end
+        for i = num_cold+1:Npart
+            simulation.particles[i].α = α₂
+            if restart !== nothing
+                simulation.particles[i].v = sqrt(simulation.particles[i].α) .* @SVector randn(T,dim)
+            end
+        end
+
+        simulation.dt = Δt_prod
+        simulation.num_steps = num_steps
+        simulation.save_interval = save_interval
+        println("Simulation starts!")
+
+        if simulation.type == "Brownian"
+            simulateO!(simulation, collision_calc, box, prev_step, homogeneous)
+        elseif simulation.type == "Langevin"
+            simulate!(simulation, collision_calc, box, prev_step, homogeneous)
+        end
+        yield()
+    end
+    return nothing
+end
+
+function relax_system!(
+    simulation::Simulation,
+    box::SVector{N,T}, 
+    num_steps::I,
+    single_temp::T) where {N,I,T}
+    
+    Npart = length(simulation.particles)
+
+    dQ = CUDA.zeros(T,Npart)
+    dU = CUDA.zeros(T,Npart)
+    Eₖ = CUDA.zeros(Float64,Npart)
+    virial = CUDA.zeros(Float64,Npart)
+    Eₚ = similar(dQ)
+    
+    if simulation.force_func == WCA
+        NN = max_neighbors(sigma = T(2^(1/6)), R = simulation.neigh_cut_off, box = box)
+    elseif simulation.force_func == Harmonic
+        NN = max_neighbors(sigma = T(1.0), R = simulation.neigh_cut_off, box = box)
+    end
+    
+    Neighbors = CuArray(Matrix(zeros(Int,Npart,NN)))
+
+    c1 = Float64(sqrt(simulation.particles[1].τD/simulation.particles[1].τm))
+    c3 = [T(sqrt(2*c1*single_temp/simulation.dt)) for i=1:Npart]
+    c3 = CuVector(c3)
+
+    part_id = [simulation.particles[i].part_id for i=1:Npart]
+    part_id_d = CuVector(part_id)
+    r_c = [simulation.particles[i].r for i=1:Npart]
+    r = CuVector(r_c)
+    v_c = [simulation.particles[i].v for i=1:Npart]
+    v = CuVector(v_c)
+    f_c = [simulation.particles[i].f for i=1:Npart]
+    f = CuVector(f_c)
+
+    neighbor_list!(r,Neighbors,simulation.neigh_cut_off,simulation.box)
+    f_r = CUDA.zeros(eltype(f), size(f))
+	f₀ = CUDA.zeros(eltype(f), size(f))
+
+    for step = 1:num_steps
+        if step % simulation.neigh_update == 0
+            neighbor_list!(r,Neighbors,simulation.neigh_cut_off,simulation.box)
+        end
+
+		if step <= 1e2
+			if simulation.force_func == Harmonic
+				ϵ = 10000.0f0
+			elseif simulation.force_func == WCA
+				ϵ = 0.1f0
 			end
 		else
-			if simulation.type == "Brownian"
-				for i = 1:num_cold
-					push!(simulation.particles, PassiveOP(part_type = ptypes[1], part_id = p_ids[1],r = r0[i], v = SVector{dim,T}(zeros(T,dim)), f = SVector{dim,T}(zeros(T,dim)), η = η, Radii = R, α = α₁))
-				end
-				for i = num_cold+1:Npart
-					push!(simulation.particles, PassiveOP(part_type = ptypes[2], part_id = p_ids[2],r = r0[i], v = SVector{dim,T}(zeros(T,dim)), f = SVector{dim,T}(zeros(T,dim)), η = η, Radii = R, α = α₂))
-				end
-			elseif simulation.type == "Langevin"	
-				for i = 1:num_cold
-					push!(simulation.particles, PassiveP(part_type = ptypes[1], part_id = p_ids[1],r = r0[i], v = SVector{dim,T}(zeros(T,dim)), f = SVector{dim,T}(zeros(T,dim)), density = density, η = η, Radii = R, α = α₁))
-				end
-				for i = num_cold+1:Npart
-					push!(simulation.particles, PassiveP(part_type = ptypes[2], part_id = p_ids[2],r = r0[i], v = SVector{dim,T}(zeros(T,dim)), f = SVector{dim,T}(zeros(T,dim)), density = density, η = η, Radii = R, α = α₂))
-				end
-			end
+			ϵ = simulation.ϵ
 		end
 
-		println("System initialized!")
-		for i = 1:num_cold
-			simulation.particles[i].α = α₁
-			if restart !== nothing
-				simulation.particles[i].v = sqrt(simulation.particles[i].α) .* @SVector randn(T,dim)
-			end
-		end
-		for i = num_cold+1:Npart
-			simulation.particles[i].α = α₂
-			if restart !== nothing
-				simulation.particles[i].v = sqrt(simulation.particles[i].α) .* @SVector randn(T,dim)
-			end
-		end
-
-
-		simulation.dt = Δt_prod
-		simulation.num_steps = num_steps
-		simulation.save_interval = save_interval
-		println("Simulation starts!")
-
-		if simulation.type == "Brownian"
-			simulateO!(simulation, collision_calc,box, prev_step, homogeneous)
-		elseif simulation.type == "Langevin"
-			simulate!(simulation, collision_calc,box, prev_step, homogeneous)
-		end
-		yield()
+		update_positions_vv!(r, v, f₀, f_r, c1, Float64(simulation.dt), c3, simulation.box)
+        forces!(r, f, Eₚ, Neighbors, simulation.box, ϵ, simulation.σ, simulation.force_func)
+        update_velocities_vv!(v, f₀, f, f_r, dQ, dU, Eₖ, c1, Float64(simulation.dt), c3)
+		copyto!(f₀,f)
     end
+
+    # Update particle states
+    copyto!(r_c, r)
+    copyto!(v_c, v)
+    copyto!(f_c, f)
+    [simulation.particles[i].r = r_c[i] for i=1:Npart]
+    [simulation.particles[i].v = v_c[i] for i=1:Npart]
+    [simulation.particles[i].f = f_c[i] for i=1:Npart]
+
     return nothing
 end
 
@@ -161,7 +238,7 @@ function simulate!(
 	
 	if simulation.force_func == WCA
 		NN = max_neighbors(sigma = T(2^(1/6)), R = simulation.neigh_cut_off, box = box)
-	elseif simulation.force_func == harm_rep
+	elseif simulation.force_func == Harmonic
 		NN = max_neighbors(sigma = T(1.0), R = simulation.neigh_cut_off, box = box)
 	end
 	
@@ -180,6 +257,7 @@ function simulate!(
 		scale = T(1.0)
 	end
 	c3 = [T(sqrt(2*c1*simulation.particles[i].α * scale /simulation.dt)) for i=1:Npart]
+	#println(c3)
 	c3 = CuVector(c3)
 	alpha_d = CuVector(alpha_list)
 
@@ -187,7 +265,7 @@ function simulate!(
 	part_id_d = CuVector(part_id)
 	r_c = [simulation.particles[i].r for i=1:Npart]
 	r = CuVector(r_c)
-	rr = r
+	#rr = r
 	v_c = [simulation.particles[i].v for i=1:Npart]
 	v = CuVector(v_c)
 	f_c = [simulation.particles[i].f for i=1:Npart]
@@ -211,42 +289,30 @@ function simulate!(
 	
 		for step = prev_step:simulation.num_steps + prev_step
 			if step % simulation.neigh_update == 0
+				fill!(Neighbors, zero(eltype(Neighbors)))
 				neighbor_list!(r, Neighbors, simulation.neigh_cut_off, simulation.box)
 			end	
-			
-			if homogeneous !== true && step <= 1e3
-				if simulation.force_func == harm_rep
-					ϵ = 10000.0f0
-				elseif simulation.force_func == WCA
-					ϵ = 0.1f0
-				end
-			else
-				ϵ = simulation.ϵ
-			end
 
 			update_positions_vv!(r, v, f₀, f_r, c1, Float64(simulation.dt), c3, simulation.box)
-	
 			
 			if collision_calc
 				#forces!(r, f, Eₚ, Neighbors, simulation.num_cold, colls, coll_switch, simulation.box, simulation.ϵ, simulation.σ, simulation.force_func)
-				forces!(r, f, Eₚ, Neighbors, part_id_d, colls, simulation.box, ϵ, simulation.σ, simulation.force_func)
+				forces!(r, f, Eₚ, Neighbors, part_id_d, colls, simulation.box, simulation.ϵ, simulation.σ, simulation.force_func)
 			else
 				#forces!(r, f, Eₚ, Neighbors, simulation.box, simulation.ϵ, simulation.σ, simulation.force_func)
-				forces!(r, f, Eₚ, Neighbors, simulation.box, ϵ, simulation.σ, simulation.force_func)
+				forces!(r, f, Eₚ, Neighbors, simulation.box, simulation.ϵ, simulation.σ, simulation.force_func)
 			end
-			
-			virial!(r,f,virial)
-			#update_velocities_vv!(v, f₀, f, f_r, dQ, Eₖ, c1, Float64(simulation.dt), c3)
+
+		
+			#virial!(r,f,virial)
 			update_velocities_vv!(v, f₀, f, f_r, dQ, dU, Eₖ, c1, Float64(simulation.dt), c3)
 			copyto!(f₀,f)
 			if step % simulation.save_interval == 0
 				if collision_calc
-					copyto!(colls_c,colls)
-					# For hot/cold particles collision I have added an extra factor of 1/2 to avoid overcounting the collisions! 
-					copyto!(coll₀,[sum(colls_c[i][1] for i = 1:simulation.num_cold)/2, sum(colls_c[i][2] for i in 1:length(colls_c))/(2*2), sum(colls_c[i][1] for i = simulation.num_cold+1:length(colls_c))/2] ./ (simulation.save_interval))
+					copyto!(colls_c,Array(colls))
+					copyto!(coll₀,[sum([colls_c[i][1] for i = 1:simulation.num_cold])/2, sum([colls_c[i][2] for i in 1:length(colls_c)])/2, sum([colls_c[i][1] for i = simulation.num_cold+1:length(colls_c)])/2] ./ (simulation.save_interval*simulation.dt))
 				end
-				
-				# Pre-allocate
+
 				c1_d = Float64(c1)
 				
 				@. dQ = dQ ./ alpha_d
@@ -255,7 +321,6 @@ function simulate!(
 				@. virial = virial ./ alpha_d
 				virial_sum = Float64.(sum(virial)) / simulation.save_interval
 
-				# Naive way to define dU/T
 				@. dU = dU ./ alpha_d
 				dU₀ = Float64.(sum(dU)) / simulation.save_interval
 
@@ -278,9 +343,8 @@ function simulate!(
 					fill!(colls, zero(eltype(colls)))
 				end
 				
-				@async begin
-					r_c, v_c = Vector(r), Vector(v)
-					write_gsd(step, simulation, part_id, r_c, v_c)
+				
+				begin
 					if collision_calc
 						#write_log(step, simulation, Ekin, Epot, dQ₀, Ekin_alpha, coll₀)
 						write_log(step, simulation, Ekin, Epot, dQ₀, virial_sum, dU₀, Ekin_alpha, coll₀)
@@ -288,7 +352,10 @@ function simulate!(
 						println("The correct write_log function to write virial is not implemented yet!")
 						write_log(step, simulation, Ekin, Epot, dQ₀)
 					end
+					r_c, v_c = Vector(r), Vector(v)
+					write_gsd(step, simulation, part_id, r_c, v_c)
 				end
+				
 			end
 		end	
 	elseif simulation.integrator == "em"
@@ -442,7 +509,7 @@ function simulateO!(
 
 	if simulation.force_func == WCA
 		NN = max_neighbors(sigma = T(2^(1/6)), R = simulation.neigh_cut_off, box = box)
-	elseif simulation.force_func == harm_rep
+	elseif simulation.force_func == Harmonic
 		NN = max_neighbors(sigma = T(1.0), R = simulation.neigh_cut_off, box = box)
 	end
 
@@ -450,13 +517,13 @@ function simulateO!(
 	if length(box) == 2
 		if simulation.force_func == WCA
 			NN = hexagonal_neighbors(sigma = T(2^(1/6)), circ_R = simulation.neigh_cut_off)
-		elseif simulation.force_func == harm_rep
+		elseif simulation.force_func == Harmonic
 			NN = hexagonal_neighbors(sigma = T(1.0), circ_R = simulation.neigh_cut_off)
 		end
 	elseif length(box) == 3
 		if simulation.force_func == WCA
 			NN = hcp_neighbors(sigma = T(2^(1/6)), circ_R = simulation.neigh_cut_off)
-		elseif simulation.force_func == harm_rep
+		elseif simulation.force_func == Harmonic
 			NN = hcp_neighbors(sigma = T(1.0), circ_R = simulation.neigh_cut_off)
 		end
 	end
@@ -744,7 +811,7 @@ function sim_runActiveO(;
     ###############################################################################
 	if force_func == WCA
 		sigma = T(2^(1/6))*σ
-	elseif force_func == harm_rep
+	elseif force_func == Harmonic
 		sigma = σ
 	end
 
@@ -827,7 +894,7 @@ function simulateAPMO!(
 	
 	if simulation.force_func == WCA
 		NN = hexagonal_neighbors(sigma = T(2^(1/6)), circ_R = simulation.neigh_cut_off)
-	elseif simulation.force_func == harm_rep
+	elseif simulation.force_func == Harmonic
 		NN = hexagonal_neighbors(sigma = T(1.0), circ_R = simulation.neigh_cut_off)
 	end
 
@@ -1023,7 +1090,7 @@ end
 function determine_max_neighbors(simulation::Simulation, T::DataType, box::SVector{N,T}) where {N, T}
     if simulation.force_func == WCA
         return max_neighbors(sigma = T(2^(1/6)), R = simulation.neigh_cut_off, box = box)
-    elseif simulation.force_func == harm_rep
+    elseif simulation.force_func == Harmonic
         return max_neighbors(sigma = T(1.0), R = simulation.neigh_cut_off, box = box)
     end
 end
@@ -1111,7 +1178,7 @@ end
 
 function determine_epsilon(simulation::Simulation, step::Int, homogeneous::Union{Bool, String})
 if homogeneous !== true && step <= 1e5
-    if simulation.force_func == harm_rep
+    if simulation.force_func == Harmonic
         return 10000.0f0
     elseif simulation.force_func == WCA
         return 0.1f0
