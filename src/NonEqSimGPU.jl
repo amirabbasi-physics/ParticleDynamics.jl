@@ -1,41 +1,20 @@
 module NonEqSimGPU
 
-"""
-Flush output so that jobs can be monitored on cluster.
-"""
-@inline println(args...) = println(stdout, args...)
-@inline function println(io::IO, args...)
-    Base.println(io, args...)
-    flush(io)
-end
-
-
-
 using CUDA
 using StaticArrays
-using DelimitedFiles
-using BenchmarkTools
-using Test
-using CSV
-using DataFrames
 using Printf
-using LinearAlgebra
-using Random
-using Distributed
+using DelimitedFiles
 
 include("Definitions.jl")
 include("Initialize.jl")
-include("Simulation.jl")
-include("Integrators.jl")
 include("NeighborLists.jl")
 include("NonBondedForces.jl")
+include("Integrators.jl")
+include("Simulation.jl")
 include("Writers.jl")
 
-
-
 println("##########################################################")
-println("                  NonEqSimGPU is Launched!                ")
+println("                  NonEqSimGPU (SoA) Loaded                ")
 println("##########################################################")
 
-
-end
+end # module NonEqSimGPU

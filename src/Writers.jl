@@ -1,28 +1,20 @@
-using DelimitedFiles
+module Writers
+
+using CUDA
 using Printf
-using GSDFiles
-using FileIO
 using StaticArrays
+using GSDFiles
+using DelimitedFiles
 
-# Export all writer functions and structs
 export InMemoryLogger, CSVWriter, XYZWriter, ObservableCSVWriter
-export write_xyz, write_log, write_gsd, read_last_gsd
-export gsd_open, gsd_close, write_gsd_frame!
-export write!, finalize
+export write_xyz!, write_observables_csv!
+export gsd_open, gsd_close, write_gsd_frame!, read_last_gsd
 
-# ---------------------------------------------------------------
-# Base Writer interface adapted for NonEqSimGPU
-# ---------------------------------------------------------------
+# =======================================================================
+# Simple in-memory logger (kept for API completeness)
+# =======================================================================
 abstract type Writer end
 
-# Default write! method - should be overridden by specific writers
-function write!(w::Writer, simulation, step::Int, dt::Real)
-    error("write! method not implemented for $(typeof(w))")
-end
-
-# ---------------------------------------------------------------
-# InMemoryLogger: stores data in memory
-# ---------------------------------------------------------------
 mutable struct InMemoryLogger <: Writer
     every::Int
     data::Dict{String, Vector}
@@ -32,23 +24,48 @@ end
 function InMemoryLogger(data_keys; every::Int=1)
     data = Dict{String, Vector}()
     for key in data_keys
-        data[string(key)] = []
+        data[string(key)] = Vector{Any}()
     end
-    return InMemoryLogger(every, data, [])
+    return InMemoryLogger(every, data, Int[])
 end
 
-function write!(w::InMemoryLogger, simulation, step::Int, dt::Real)
+function write!(w::InMemoryLogger, _simulation, step::Int, _dt::Real)
     if step % w.every != 0
         return
     end
     push!(w.steps, step)
-    # Users can extend this by overriding and adding specific data
     return nothing
 end
 
-# ---------------------------------------------------------------
-# CSVWriter: writes particle data to CSV
-# ---------------------------------------------------------------
+# =======================================================================
+# CSV observables (host)
+# =======================================================================
+
+"""
+Append simple observables to CSV (host side).
+Columns: step,Etot,Kavg,Qtot
+"""
+function write_observables_csv!(path::AbstractString, step::Int;
+                                Epot::CuArray{Float32,1},
+                                Ekin::CuArray{Float32,1},
+                                dq::CuArray{Float32,1})
+    Etot = sum(Array(Epot))
+    Kavg = sum(Array(Ekin))
+    Qtot = sum(Array(dq))
+    hdr = !isfile(path)
+    open(path, "a") do io
+        if hdr
+            @printf(io, "step,Etot,Kavg,Qtot\n")
+        end
+        @printf(io, "%d,%.7e,%.7e,%.7e\n", step, Etot, Kavg, Qtot)
+    end
+    return nothing
+end
+
+# =======================================================================
+# Particle CSV writer (kept for completeness; expects SoA SimulationState)
+# =======================================================================
+
 mutable struct CSVWriter <: Writer
     path::String
     every::Int
@@ -66,7 +83,7 @@ function _ensure_csv_open!(w::CSVWriter)
         mkpath(dirname(w.path))
         w.io = open(w.path, isfile(w.path) ? "a" : "w")
         if !w.wrote_header
-            println(w.io, "step,id,x,y,z,vx,vy,vz,type")
+            println(w.io, "step,id,x,y,z,vx,vy,vz,typeid")
             w.wrote_header = true
         end
     end
@@ -75,95 +92,40 @@ end
 
 function Base.finalize(w::CSVWriter)
     if w.io !== nothing
-        try
-            close(w.io)
-        catch
-        end
+        try close(w.io) catch end
         w.io = nothing
     end
 end
 
-function write!(w::CSVWriter, simulation, step::Int, dt::Real)
+"""
+Write a particle table (SoA SimulationState).
+"""
+function write!(w::CSVWriter, st, step::Int, _dt::Real)
     if step % w.every != 0
         return
     end
     _ensure_csv_open!(w)
 
-    particles = simulation.particles
-    N = length(particles)
-    
+    N = length(st.rx)
+    X = Array(st.rx); Y = Array(st.ry)
+    Z = st.rz === nothing ? fill(0.0f0, N) : Array(st.rz)
+
+    VX = Array(st.vx); VY = Array(st.vy)
+    VZ = st.vz === nothing ? fill(0.0f0, N) : Array(st.vz)
+
+    TID = Array(st.typeid)
+
     for i in 1:N
-        p = particles[i]
-        pos = p.r
-        vel = p.v
-        
-        x = pos[1]
-        y = length(pos) >= 2 ? pos[2] : 0.0
-        z = length(pos) >= 3 ? pos[3] : 0.0
-        
-        vx = vel[1]  
-        vy = length(vel) >= 2 ? vel[2] : 0.0
-        vz = length(vel) >= 3 ? vel[3] : 0.0
-        
-        part_type = p.part_type
-        
-        println(w.io, "$step,$i,$x,$y,$z,$vx,$vy,$vz,$part_type")
+        @printf(w.io, "%d,%d,%.7e,%.7e,%.7e,%.7e,%.7e,%.7e,%d\n",
+            step, i, X[i], Y[i], Z[i], VX[i], VY[i], VZ[i], TID[i])
     end
     return nothing
 end
 
-# ---------------------------------------------------------------
-# ObservableCSVWriter: writes observables to CSV
-# ---------------------------------------------------------------
-mutable struct ObservableCSVWriter <: Writer
-    path::String
-    every::Int
-    observables::Vector{String}
-    io::Union{Nothing,IO}
-    wrote_header::Bool
-end
+# =======================================================================
+# XYZ writer (SoA)
+# =======================================================================
 
-function ObservableCSVWriter(path, observables; every::Int=1)
-    p = endswith(path, ".csv") ? path : string(path, ".csv")
-    return ObservableCSVWriter(p, every, observables, nothing, false)
-end
-
-function _ensure_obs_open!(w::ObservableCSVWriter)
-    if w.io === nothing
-        mkpath(dirname(w.path))
-        w.io = open(w.path, "w")
-        header = "step"
-        for obs in w.observables
-            header *= "," * obs
-        end
-        println(w.io, header)
-        w.wrote_header = true
-    end
-end
-
-function write!(w::ObservableCSVWriter, simulation, step::Int, dt::Real; data::Dict=Dict())
-    if step % w.every != 0
-        return
-    end
-    _ensure_obs_open!(w)
-    line = string(step)
-    for obs in w.observables
-        value = get(data, obs, 0.0)
-        line *= "," * string(value)
-    end
-    println(w.io, line)
-end
-
-function Base.finalize(w::ObservableCSVWriter)
-    if w.io !== nothing
-        close(w.io)
-        w.io = nothing
-    end
-end
-
-# ---------------------------------------------------------------
-# XYZWriter: writes XYZ format files
-# ---------------------------------------------------------------
 mutable struct XYZWriter <: Writer
     path::String
     every::Int
@@ -185,424 +147,223 @@ end
 
 function Base.finalize(w::XYZWriter)
     if w.io !== nothing
-        try
-            close(w.io)
-        catch
-        end
+        try close(w.io) catch end
         w.io = nothing
     end
 end
 
-function write!(w::XYZWriter, simulation, step::Int, dt::Real)
+"""
+Write a single XYZ frame from a SoA SimulationState.
+Uses z=0 for 2D.
+"""
+function write!(w::XYZWriter, st, step::Int, _dt::Real)
     if step % w.every != 0
         return
     end
     _ensure_xyz_open!(w)
+    N = length(st.rx)
+    X = Array(st.rx); Y = Array(st.ry)
+    Z = st.rz === nothing ? fill(0.0f0, N) : Array(st.rz)
 
-    particles = simulation.particles
-    N = length(particles)
     println(w.io, N)
     println(w.io, "step=$step")
-
-    for particle in particles
-        pos = particle.r
-        x = pos[1]
-        y = length(pos) >= 2 ? pos[2] : 0.0
-        z = length(pos) >= 3 ? pos[3] : 0.0
-        element = particle.part_type[1]  # Use first character as element
-        println(w.io, "$element $x $y $z")
+    for i in 1:N
+        println(w.io, "A $(X[i]) $(Y[i]) $(Z[i])")
     end
     return nothing
 end
 
-# ---------------------------------------------------------------
-# Legacy functions from original IO.jl - adapted for compatibility
-# ---------------------------------------------------------------
+"""
+Direct helper: write an XYZ snapshot without a writer object.
+"""
+function write_xyz!(path::AbstractString; rx::CuArray{Float32,1},
+                    ry::CuArray{Float32,1},
+                    rz::Union{Nothing,CuArray{Float32,1}}=nothing,
+                    atomsym::AbstractString="A")
+    X = Array(rx); Y = Array(ry)
+    Z = rz === nothing ? fill(0.0f0, length(X)) : Array(rz)
+    N = length(X)
+    open(path, "a") do io
+        @printf(io, "%d\n", N)
+        @printf(io, "Generated by NonEqSimGPU SoA\n")
+        @inbounds for i in 1:N
+            @printf(io, "%s %.7e %.7e %.7e\n", atomsym, X[i], Y[i], Z[i])
+        end
+    end
+    return nothing
+end
+
+# =======================================================================
+# GSD support (GSDFiles, HOOMD schema)
+# =======================================================================
 
 """
-    write_xyz(
-        ofname::String,
-        Npart::Int,
-        alpha_lst::Vector{T},
-        σ::T,
-        L::T,
-        step::Int,
-        dim::Int,
-        part_type::Vector{String},
-        r::Vector{SVector{N,T}},
-        v::Vector{SVector{N,T}},
-        dQ::Vector{T}
-    ) where {N,T}
-
-Write the state of a simulation to an XYZ file with additional properties.
+Open a GSD file for writing.
 """
-function write_xyz(
-    ofname::String,
-    Npart::Int,
-    alpha_lst::Vector{T},
-    σ::T,
-    L::T,
-    step::Int,
-    dim::Int,
-    part_type::Vector{String},
-    r::Vector{SVector{N,T}},
-    v::Vector{SVector{N,T}},
-    dQ::Vector{T}) where {N,T}
-
-    out_file = ofname*".xyz"
-    sdot = dQ ./alpha_lst
-    snapshot = [vcat(part_type[i],σ/2,r[i],v[i],sdot[i]) for i = 1:Npart]
-    if step == 0
-       open(out_file,"w") do file
-            println(file, Npart)
-            if dim == 2
-                println(file,"""Lattice="$L $L 0.0 0.0 0.0 0.0 0.0 0.0 0.0" Properties="Particle Type:S:1:Radius:R:1:Position:R:2:Velocity:R:2:Entropy:R:1" """)
-                writedlm(file,snapshot)
-            elseif dim == 3
-                println(file,"""Lattice="$L $L $L 0.0 0.0 0.0 0.0 0.0 0.0" Properties="Particle Type:S:1:Radius:R:1:Position:R:3:Velocity:R:3:Entropy:R:1" """)
-                writedlm(file,snapshot)
-            end
-        end
-    else
-        open(out_file,"a+") do file
-            println(file,Npart)
-            if dim == 2
-                println(file,"""Lattice="$L $L 0.0 0.0 0.0 0.0 0.0 0.0 0.0" Properties="Particle Type:S:1:Radius:R:1:Position:R:2:Velocity:R:2:Entropy:R:1" """)
-                writedlm(file,snapshot)
-            elseif dim == 3
-                println(file,"""Lattice="$L $L $L 0.0 0.0 0.0 0.0 0.0 0.0" Properties="Particle Type:S:1:Radius:R:1:Position:R:3:Velocity:R:3:Entropy:R:1" """)
-                writedlm(file,snapshot)
-            end
-        end
-    end
-end
-
-"""
-    write_gsd(step::Int, simulation, part_ids::Vector{Int}, positions::Vector{SVector{N,T}}, velocities::Vector{SVector{N,T}}) where {N,T}
-
-Write the state of a simulation to a .gsd file for visualization or restart in HOOMD-blue format.
-"""
-function write_gsd(step::Int, simulation, part_ids::Vector{Int}, positions::Vector{SVector{N,T}}, velocities::Vector{SVector{N,T}}) where {N,T}
-    output_file = simulation.output_file * ".gsd"
-    
-    # Convert to 3D if needed
-    box = simulation.box
-    if length(box) == 2
-        positions_3d = [SVector{3,T}(pos[1], pos[2], zero(T)) for pos in positions]
-        velocities_3d = [SVector{3,T}(vel[1], vel[2], zero(T)) for vel in velocities]
-        box_6 = SVector{6,eltype(box)}(box[1], box[2], 0, 0, 0, 0)
-        D = 2
-    else
-        positions_3d = positions
-        velocities_3d = velocities
-        box_6 = SVector{6,eltype(box)}(box[1], box[2], box[3], 0, 0, 0)
-        D = 3
-    end
-    
-    # Open or create GSD file
-    gsd_writer = if step == 0 || !isfile(output_file)
-        GSDFiles.GSDWriter(output_file; application="NonEqSimGPU", schema="hoomd", schema_version=(1,4))
-    else
-        GSDFiles.GSDWriter(output_file; application="NonEqSimGPU", schema="hoomd", schema_version=(1,4))
-    end
-    
-    gsd_handle = GSDFiles.open_gsd(gsd_writer)
-    
-    try
-        # Convert positions and velocities to matrices
-        pos_matrix = reduce(hcat, [collect(p) for p in positions_3d])'
-        vel_matrix = reduce(hcat, [collect(v) for v in velocities_3d])'
-        
-        num_particles = length(positions)
-        
-        # Write frame data
-        GSDFiles.write_configuration_step!(gsd_handle, UInt64(step))
-        GSDFiles.write_configuration_dimensions!(gsd_handle, UInt8(D))
-        GSDFiles.write_configuration_box!(gsd_handle, Float32.(box_6))
-        GSDFiles.write_particles_N!(gsd_handle, num_particles)
-        GSDFiles.write_particles_types!(gsd_handle, simulation.part_types)
-        GSDFiles.write_particles_typeid!(gsd_handle, UInt32.(part_ids))  # Already 0-based
-        GSDFiles.write_particles_position!(gsd_handle, Float32.(pos_matrix))
-        GSDFiles.write_particles_velocity!(gsd_handle, Float32.(vel_matrix))
-        
-        GSDFiles.end_frame!(gsd_handle)
-    finally
-        GSDFiles.close_gsd(gsd_handle)
-    end
-end
-
-function read_last_gsd(file_path::String, dim::D) where D
-    # Open GSD file for reading
-    gsd_handle = GSDFiles.GSDReader(file_path)
-    GSDFiles.open_gsd(gsd_handle)
-    
-    try
-        # Get the number of frames
-        num_frames = GSDFiles.num_frames(gsd_handle)
-        if num_frames == 0
-            error("No frames found in GSD file")
-        end
-        
-        # Read the last frame (0-indexed)
-        frame_idx = num_frames - 1
-        
-        # Read frame data
-        step = Int(GSDFiles.read_configuration_step(gsd_handle, frame_idx))
-        N_particles = GSDFiles.read_particles_N(gsd_handle, frame_idx)
-        
-        # Read positions and velocities
-        pos_matrix = GSDFiles.read_particles_position(gsd_handle, frame_idx)
-        vel_matrix = GSDFiles.read_particles_velocity(gsd_handle, frame_idx)
-        
-        # Convert to SVector format, taking only the required dimensions
-        positions = [SVector{dim}(pos_matrix[i, 1:dim]...) for i = 1:N_particles]
-        velocities = [SVector{dim}(vel_matrix[i, 1:dim]...) for i = 1:N_particles]
-        
-        # Read type information
-        part_ids = GSDFiles.read_particles_typeid(gsd_handle, frame_idx) .+ 1  # Convert to 1-based
-        part_types = GSDFiles.read_particles_types(gsd_handle, frame_idx)
-        
-        # Read box
-        box_6 = GSDFiles.read_configuration_box(gsd_handle, frame_idx)
-        if dim == 2
-            box = SVector{2}(box_6[1], box_6[2])
-        else
-            box = SVector{3}(box_6[1], box_6[2], box_6[3])
-        end
-        
-        # Count cold particles (assuming type id 0 corresponds to cold particles)
-        num_cold = count(t == 1 for t in part_ids)  # 1-based indexing
-        
-        return step, positions, velocities, Vector{Int}(part_ids), part_types, box, num_cold
-        
-    finally
-        GSDFiles.close_gsd(gsd_handle)
-    end
-end
-
-"""
-    write_log(step::Int, simulation, ...)
-
-Write simulation log data. Multiple method signatures for different data types.
-"""
-function write_log(
-    step::Int,
-    simulation,
-    Eₖ::Float64,
-    Eₚ::Float64,
-    sdot::Float64,
-    virial::Float64,
-    udot::Float64,
-    Eₖ_α::Float64,
-    colls::Vector{Float64}) 
-
-    coll_cold_cold, coll_hot_cold, coll_hot_hot = colls[1], colls[2], colls[3]
-
-    output_file = simulation.output_file*".log"
-
-    sdotpp = sdot/length(simulation.particles)
-    udotpp = udot/length(simulation.particles)
-    Ekin = Eₖ
-    Epot = Eₚ
-
-    sdotpp_ave = Eₖ_α/length(simulation.particles)
-
-    step_str = @sprintf("%+.5e", step)
-    Ekin_str = @sprintf("%+.5e", Ekin)
-    Epot_str = @sprintf("%+.5e", Epot)
-    Etot_str = @sprintf("%+.5e", Ekin + Epot)
-    virial_str = @sprintf("%+.5e", virial)
-    sdot_str = @sprintf("%+.5e", sdot)
-    sdotpp_str = @sprintf("%+.5e", sdotpp)
-
-    udot_str = @sprintf("%+.5e", udot)
-    udotpp_str = @sprintf("%+.5e", udotpp)
-
-    sdotpp_ave_str = @sprintf("%+.5e", sdotpp_ave)
-    coll_cold_cold_str = @sprintf("%+.5e", coll_cold_cold)
-    coll_hot_cold_str = @sprintf("%+.5e", coll_hot_cold)
-    coll_hot_hot_str = @sprintf("%+.5e", coll_hot_hot)
-    data = join([step_str, Ekin_str, Epot_str, Etot_str, virial_str,  sdot_str, udot_str, sdotpp_str, udotpp_str, sdotpp_ave_str, coll_cold_cold_str, coll_hot_cold_str, coll_hot_hot_str], "\t")
-
-    if step == 0
-       open(output_file,"w") do file
-        println(file,"    Time       |      E_kin     |       E_pot     |      E_tot        |    virial      |      EPR       |       UPR       |    EPR / part   |    UPR / part    | EPR / part Ave  | cold/cold coll  |  hot/cold coll  |  hot/hot coll  ")
-        end
-    else
-        open(output_file,"a+") do file
-            println("Time = ",step_str, "| E_kin = ", Ekin_str,"| E_pot = ", Epot_str,"| E_tot = ", Etot_str, "| virial = ", virial_str, " | EPR = " ,sdot_str," | UPR = " ,udot_str, " | EPR per particle = " , sdotpp_str," | UPR per particle = " ,udotpp_str, "  |  EPR per particle averaged = " ,sdotpp_ave_str,"  |  cold/cold coll rate = " ,coll_cold_cold_str, "  |  hot/cold coll rate = " ,coll_hot_cold_str, "  |  hot/hot coll rate = " ,coll_hot_hot_str)
-            println(file,data)
-        end
-    end
-end
-
-# Additional overloaded write_log methods for different parameter combinations
-function write_log(
-    step::Int,
-    simulation,
-    Eₖ::Float64,
-    Eₚ::Float64,
-    sdot::Float64,
-    udot::Float64,
-    Eₖ_α::Float64,
-    colls::Array{3,Float64})  
-
-    coll_cold_hot   = colls / simulation.dt
-    output_file = simulation.output_file*".log"
-
-    sdotpp = sdot/length(simulation.particles)
-    udotpp = udot/length(simulation.particles)
-    Ekin = Eₖ
-    Epot = Eₚ
-
-    sdotpp_ave = Eₖ_α/length(simulation.particles)
-
-    step_str = @sprintf("%+.5e", step)
-    Ekin_str = @sprintf("%+.5e", Ekin)
-    Epot_str = @sprintf("%+.5e", Epot)
-    Etot_str = @sprintf("%+.5e", Ekin + Epot)
-    sdot_str = @sprintf("%+.5e", sdot)
-    sdotpp_str = @sprintf("%+.5e", sdotpp)
-
-    udot_str = @sprintf("%+.5e", udot)
-    udotpp_str = @sprintf("%+.5e", udotpp)
-
-    sdotpp_ave_str = @sprintf("%+.5e", sdotpp_ave)
-    coll_cold_hot_str = @sprintf("%+.5e", coll_cold_hot)
-    data = join([step_str, Ekin_str, Epot_str, Etot_str, sdot_str, udot_str, sdotpp_str, udotpp_str, sdotpp_ave_str, coll_cold_hot_str], "\t")
-
-    if step == 0
-       open(output_file,"w") do file
-        println(file,"     Time     |     E_kin     |     E_pot     |     E_tot     |      EPR      |      UPR      |  EPR / part  |   UPR / part  | EPR / part Ave | cold/hot coll rate ")
-        end
-    else
-        open(output_file,"a+") do file
-            println("Time = ",step_str, " | E_kin = ", Ekin_str," | E_pot = ", Epot_str, " | EPR = " ,sdot_str," | UPR = " ,udot_str, " | EPR per particle = " , sdotpp_str," | UPR per particle = " ,udotpp_str, "  |  EPR per particle averaged = " ,sdotpp_ave_str,"  |  cold/hot coll rate = " ,coll_cold_hot_str)
-            println(file,data)
-        end
-    end
-end
-
-function write_log(
-    step::Int,
-    simulation,
-    Eₚ::Float64,
-    sdot::Float64,
-    colls::Float64) 
-
-    coll_cold_hot   = colls / simulation.dt
-    output_file = simulation.output_file*".log"
-
-    sdotpp = sdot/length(simulation.particles)
-    Epot = Eₚ
-
-    step_str = @sprintf("%+.5e", step)
-    Epot_str = @sprintf("%+.5e", Epot)
-    sdot_str = @sprintf("%+.5e", sdot)
-    sdotpp_str = @sprintf("%+.5e", sdotpp)
-    coll_cold_hot_str = @sprintf("%+.5e", coll_cold_hot)
-    data = join([step_str, Epot_str, sdot_str, sdotpp_str, coll_cold_hot_str], "\t")
-
-    if step == 0
-       open(output_file,"w") do file
-        println(file,"     Time     |     E_pot     |      EPR      |  EPR / part  | cold/hot coll rate ")
-        end
-    else
-        open(output_file,"a+") do file
-            println("Time = ",step_str," | E_pot = ", Epot_str, " | EPR = " ,sdot_str, " | EPR per particle = " ,sdotpp_str, "  |  cold/hot coll rate = " ,coll_cold_hot_str)
-            println(file,data)
-        end
-    end
-end
-
-function write_log(
-    step::Int,
-    simulation,
-    Eₚ::Float64,
-    sdot::Float64) 
-
-    output_file = simulation.output_file*".log"
-
-    sdotpp = sdot/length(simulation.particles)
-    Epot = Eₚ
-
-    step_str = @sprintf("%+.5e", step)
-    Epot_str = @sprintf("%+.5e", Epot)
-    sdot_str = @sprintf("%+.5e", sdot)
-    sdotpp_str = @sprintf("%+.5e", sdotpp)
-    data = join([step_str, Epot_str, sdot_str, sdotpp_str], "\t")
-
-    if step == 0
-       open(output_file,"w") do file
-        println(file,"     Time     |     E_pot     |      EPR      |  EPR / part  ")
-        end
-    else
-        open(output_file,"a+") do file
-            println("Time = ",step_str," | E_pot = ", Epot_str, " | EPR = " ,sdot_str, " | EPR per particle = " ,sdotpp_str)
-            println(file,data)
-        end
-    end
-end
-
-# ---------------------------------------------------------------
-# GSD convenience functions using GSDFiles.jl
-# ---------------------------------------------------------------
-
 function gsd_open(path::AbstractString; application="NonEqSimGPU", schema="hoomd", schema_version=(1,4))
+    mkpath(dirname(path))
     w = GSDFiles.GSDWriter(path; application, schema, schema_version)
-    GSDFiles.open_gsd(w)
-    return w
+    h = GSDFiles.open_gsd(w)              # <- returns GSDFilesHandle
+    return h
 end
 
+
+"""
+Close a previously opened GSD handle.
+"""
 gsd_close(h) = GSDFiles.close_gsd(h)
 
-function write_gsd_frame!(h, simulation; diameter::Real=1.0, step::Int=0)
-    particles = simulation.particles
-    N = length(particles)
-    
-    # Extract positions and velocities
-    positions = [particle.r for particle in particles]
-    velocities = [particle.v for particle in particles]
-    
-    # Determine dimensionality and ensure 3D for GSD
-    if length(positions[1]) == 2
-        positions_3d = [SVector{3}(pos[1], pos[2], 0.0) for pos in positions]
-        velocities_3d = [SVector{3}(vel[1], vel[2], 0.0) for vel in velocities]
-        D = 2
+# -- internal helpers -----------------------------------------------------
+
+@inline function _pack_box2(box::Tuple{Float32,Float32})
+    # HOOMD box: (Lx, Ly, Lz, xy, xz, yz)
+    return SVector{6,Float32}(box[1], box[2], 0f0, 0f0, 0f0, 0f0)
+end
+
+@inline function _pack_box3(box::Tuple{Float32,Float32,Float32})
+    return SVector{6,Float32}(box[1], box[2], box[3], 0f0, 0f0, 0f0)
+end
+
+@inline function _soa_to_posmat(rx::CuArray{Float32,1}, ry::CuArray{Float32,1})
+    # Asynchronous GPU->CPU transfer (non-blocking)
+    X = Vector{Float32}(undef, length(rx))
+    Y = Vector{Float32}(undef, length(ry))
+    copyto!(X, rx)  # Async copy
+    copyto!(Y, ry)  # Async copy
+    Z = fill(0.0f0, length(X))
+    CUDA.synchronize()  # Single sync point for both transfers
+    return hcat(X, Y, Z)
+end
+
+@inline function _soa_to_posmat(rx::CuArray{Float32,1}, ry::CuArray{Float32,1}, rz::CuArray{Float32,1})
+    # Asynchronous GPU->CPU transfer (non-blocking)
+    X = Vector{Float32}(undef, length(rx))
+    Y = Vector{Float32}(undef, length(ry))
+    Z = Vector{Float32}(undef, length(rz))
+    copyto!(X, rx)  # Async copy
+    copyto!(Y, ry)  # Async copy  
+    copyto!(Z, rz)  # Async copy
+    CUDA.synchronize()  # Single sync point for all transfers
+    return hcat(X, Y, Z)
+end
+
+@inline function _soa_to_velmat(vx::CuArray{Float32,1}, vy::CuArray{Float32,1})
+    # Asynchronous GPU->CPU transfer (non-blocking)
+    VX = Vector{Float32}(undef, length(vx))
+    VY = Vector{Float32}(undef, length(vy))
+    copyto!(VX, vx)  # Async copy
+    copyto!(VY, vy)  # Async copy
+    VZ = fill(0.0f0, length(VX))
+    CUDA.synchronize()  # Single sync point for both transfers
+    return hcat(VX, VY, VZ)
+end
+
+@inline function _soa_to_velmat(vx::CuArray{Float32,1}, vy::CuArray{Float32,1}, vz::CuArray{Float32,1})
+    # Asynchronous GPU->CPU transfer (non-blocking)
+    VX = Vector{Float32}(undef, length(vx))
+    VY = Vector{Float32}(undef, length(vy))
+    VZ = Vector{Float32}(undef, length(vz))
+    copyto!(VX, vx)  # Async copy
+    copyto!(VY, vy)  # Async copy  
+    copyto!(VZ, vz)  # Async copy
+    CUDA.synchronize()  # Single sync point for all transfers
+    return hcat(VX, VY, VZ)
+end
+
+# -- public API -----------------------------------------------------------
+
+"""
+Write one frame to an already-open GSD file (HOOMD schema).
+
+Usage (2D):
+    h = Writers.gsd_open("traj.gsd")
+    Writers.write_gsd_frame!(h, state; diameter=1.0, types_names=["A"], step=state.step)
+    Writers.gsd_close(h)
+
+Usage (3D) is identical; z-components are written when present.
+"""
+function write_gsd_frame!(h, st; diameter::Real=1.0, types_names::Vector{String}=["A"], step::Int=0)
+    N = length(st.rx)
+
+    # positions and velocities (N×3 Float32)
+    posM = st.rz === nothing ? _soa_to_posmat(st.rx, st.ry) :
+                               _soa_to_posmat(st.rx, st.ry, st.rz)
+    velM = st.vz === nothing ? _soa_to_velmat(st.vx, st.vy) :
+                               _soa_to_velmat(st.vx, st.vy, st.vz)
+
+    # dimensionality & box
+    if st.box3 === nothing
+        D = UInt8(2)
+        box6 = _pack_box2(st.box2::Tuple{Float32,Float32})
     else
-        positions_3d = positions
-        velocities_3d = velocities
-        D = 3
+        D = UInt8(3)
+        box6 = _pack_box3(st.box3::Tuple{Float32,Float32,Float32})
     end
-    
-    # Convert to matrices
-    pos_matrix = reduce(hcat, [collect(p) for p in positions_3d])'
-    vel_matrix = reduce(hcat, [collect(v) for v in velocities_3d])'
-    
-    # Extract type information
-    part_types = unique([p.part_type for p in particles])
-    type_dict = Dict(type => i-1 for (i, type) in enumerate(part_types))  # 0-based
-    typeids = UInt32.([type_dict[p.part_type] for p in particles])
-    
-    # Set box
-    box = simulation.box
-    if D == 2
-        box_6 = SVector{6}(box[1], box[2], 0.0, 0.0, 0.0, 0.0)
-    else
-        box_6 = SVector{6}(box[1], box[2], box[3], 0.0, 0.0, 0.0)
-    end
-    
-    # Write frame data
+
+    # types (async transfer)
+    tid_host = Vector{Int32}(undef, length(st.typeid))
+    copyto!(tid_host, st.typeid)  # Async copy
+    CUDA.synchronize()  # Wait for typeid transfer
+    tid_0based = UInt32.(tid_host .- 1)  # HOOMD expects 0-based
+
+    # write frame
     GSDFiles.write_configuration_step!(h, UInt64(step))
-    GSDFiles.write_configuration_dimensions!(h, UInt8(D))
-    GSDFiles.write_configuration_box!(h, Float32.(box_6))
+    GSDFiles.write_configuration_dimensions!(h, D)
+    GSDFiles.write_configuration_box!(h, Float32.(box6))
     GSDFiles.write_particles_N!(h, N)
-    GSDFiles.write_particles_types!(h, part_types)
-    GSDFiles.write_particles_typeid!(h, typeids)
+    GSDFiles.write_particles_types!(h, types_names)
+    GSDFiles.write_particles_typeid!(h, tid_0based)
     GSDFiles.write_particles_diameter!(h, fill(Float32(diameter), N))
-    GSDFiles.write_particles_position!(h, Float32.(pos_matrix))
-    GSDFiles.write_particles_velocity!(h, Float32.(vel_matrix))
-    
+    GSDFiles.write_particles_position!(h, Float32.(posM))
+    GSDFiles.write_particles_velocity!(h, Float32.(velM))
     GSDFiles.end_frame!(h)
     return h
 end
+
+"""
+Read the **last** frame from a GSD file and return SoA arrays.
+
+Returns:
+    step::Int,
+    rx::Vector{Float32}, ry::Vector{Float32}, rz::Union{Nothing,Vector{Float32}},
+    vx::Vector{Float32}, vy::Vector{Float32}, vz::Union{Nothing,Vector{Float32}},
+    typeid_1based::Vector{Int32},
+    types_names::Vector{String},
+    box::Union{Tuple{Float32,Float32},Tuple{Float32,Float32,Float32}}
+"""
+function read_last_gsd(file_path::AbstractString)
+    r = GSDFiles.GSDReader(file_path)
+    GSDFiles.open_gsd(r)
+    try
+        nf = GSDFiles.num_frames(r)
+        nf == 0 && error("No frames in GSD: $file_path")
+        fid = nf - 1  # 0-based index of last frame
+
+        step = Int(GSDFiles.read_configuration_step(r, fid))
+        D    = Int(GSDFiles.read_configuration_dimensions(r, fid))
+        N    = Int(GSDFiles.read_particles_N(r, fid))
+
+        posM = GSDFiles.read_particles_position(r, fid)  # N×3 Float32
+        velM = GSDFiles.read_particles_velocity(r, fid)  # N×3 Float32
+
+        rx = Float32.(posM[:,1]); ry = Float32.(posM[:,2])
+        rz = D == 3 ? Float32.(posM[:,3]) : nothing
+
+        vx = Float32.(velM[:,1]); vy = Float32.(velM[:,2])
+        vz = D == 3 ? Float32.(velM[:,3]) : nothing
+
+        typeid0 = Vector{UInt32}(GSDFiles.read_particles_typeid(r, fid))
+        types   = Vector{String}(GSDFiles.read_particles_types(r, fid))
+        typeid1 = Int32.(typeid0 .+ 1)
+
+        box6 = GSDFiles.read_configuration_box(r, fid)
+        box  = D == 2 ? (Float32(box6[1]), Float32(box6[2])) :
+                        (Float32(box6[1]), Float32(box6[2]), Float32(box6[3]))
+
+        return step, rx, ry, rz, vx, vy, vz, typeid1, types, box
+    finally
+        GSDFiles.close_gsd(r)
+    end
+end
+
+end # module

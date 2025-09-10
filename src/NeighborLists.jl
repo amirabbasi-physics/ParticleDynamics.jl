@@ -1,123 +1,146 @@
-export neighbor_list!
-export neighbor_list_kernel!
+module NeighborLists
 
+using CUDA
+using ..Definitions
 
-function neighbor_list!(
-    r::CuVector{SVector{N,T}},
-    Neighbors::CuMatrix{I},
-    neigh_cut_off::T,
-    box::SVector{N,T}) where {N,I,T}
+export NeighborMatrix, build_neighbors_dense!, update_neighbors_inplace!, update_needed!
 
-    Npart = length(r)    
-    kernel = @cuda launch = false neighbor_list_kernel!(r, Neighbors, neigh_cut_off, box)
-    config = launch_configuration(kernel.fun)
-    threads = min(Npart, config.threads)
-    blocks = cld(Npart, threads)
-    CUDA.@sync kernel(r, Neighbors, neigh_cut_off, box; threads, blocks)
-    return nothing
+mutable struct NeighborMatrix
+    neighbors::CuArray{Int32,2}
+    cap::Int32
+    cutoff::Definitions.FloatX
+    skin::Definitions.FloatX
+    last_build_step::Int
 end
 
-
-
-function neighbor_list_kernel!(
-    r::CuDeviceVector{SVector{N,T}},
-    Neighbors::CuDeviceMatrix{I},
-    neigh_cut_off::T,
-    box::SVector{N,T}) where {N,I,T}
-
-    gtid = (blockIdx().x-1) * blockDim().x + threadIdx().x
-    Npart = length(r)
-    NNeigh = size(Neighbors,2)
-    ncut_off² = neigh_cut_off^2
-    dim = length(box)
-    idx = 0
-    @inbounds begin
-        if gtid <= Npart
-            pos₁  = r[gtid]
-            idx = 0
-            # Loop over all other particles
-            if dim == 2
-                for j = 1:gtid-1    
-                    pos₂  = r[j]
-                    dx  = pos₁[1] - pos₂[1]
-                    dy  = pos₁[2] - pos₂[2]
-    
-                    dx = (2abs(dx) > box[1] ) ? dx - sign(dx) * box[1] : dx
-                    dy = (2abs(dy) > box[2] ) ? dy - sign(dy) * box[2] : dy
-    
-                    dr² = dx*dx + dy*dy
-    
-                    if  dr² <= ncut_off²
-                        idx += 1
-                        if idx > NNeigh
-                            break
-                        else
-                            Neighbors[gtid, idx] = j    
-                        end
-                    end
-                end
-                for j = gtid+1:Npart
-                    pos₂  = r[j]
-                    dx  = pos₁[1] - pos₂[1]
-                    dy  = pos₁[2] - pos₂[2]
-    
-                    dx = (2abs(dx) > box[1] ) ? dx - sign(dx) * box[1] : dx
-                    dy = (2abs(dy) > box[2] ) ? dy - sign(dy) * box[2] : dy
-    
-                    dr² = dx*dx + dy*dy
-                    if dr² <= ncut_off²
-                        idx += 1
-                        if idx > NNeigh
-                            break
-                        else
-                            Neighbors[gtid, idx] = j    
-                        end
-                    end
-                end
-            elseif dim == 3
-                @inbounds for j = 1:gtid-1
-                    if idx > NNeigh
-                        break
-                    end
-                    pos₂  = r[j]
-                    dx  = pos₁[1] - pos₂[1]
-                    dy  = pos₁[2] - pos₂[2]
-                    dz  = pos₁[3] - pos₂[3]
-        
-                    dx = (2abs(dx) > box[1] ) ? dx - sign(dx) * box[1] : dx
-                    dy = (2abs(dy) > box[2] ) ? dy - sign(dy) * box[2] : dy
-                    dz = (2abs(dz) > box[3] ) ? dz - sign(dz) * box[3] : dz
-        
-                    dr² = dx*dx + dy*dy + dz*dz
-        
-                    if 0 < dr² < ncut_off²
-                        idx += 1
-                        Neighbors[gtid, idx] = j    
-                    end
-                end
-        
-                for j = gtid+1:Npart
-                    if idx > NNeigh
-                        break
-                    end
-                    pos₂  = r[j]
-                    dx  = pos₁[1] - pos₂[1]
-                    dy  = pos₁[2] - pos₂[2]
-                    dz  = pos₁[3] - pos₂[3]
-        
-                    dx = (2abs(dx) > box[1] ) ? dx - sign(dx) * box[1] : dx
-                    dy = (2abs(dy) > box[2] ) ? dy - sign(dy) * box[2] : dy
-                    dz = (2abs(dz) > box[3] ) ? dz - sign(dz) * box[3] : dz
-        
-                    dr² = dx*dx + dy*dy + dz*dz
-        
-                    if 0 < dr² < ncut_off²
-                        idx += 1
-                        Neighbors[gtid, idx] = j    
-                    end
-                end
+function _build_kernel2!(
+    rx::CuDeviceVector{Definitions.FloatX}, ry::CuDeviceVector{Definitions.FloatX},
+    nbr::CuDeviceMatrix{Int32}, cap::Int32,
+    Lx::Definitions.FloatX, Ly::Definitions.FloatX,
+    cutoff2::Definitions.FloatX
+)
+    i = (blockIdx().x-1)*blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    xi = rx[i]; yi = ry[i]
+    cnt = Int32(0)
+    @inbounds for j in 1:N
+        if j == i; continue; end
+        dx = xi - rx[j]; dy = yi - ry[j]
+        dx = (2abs(dx) > Lx) ? dx - sign(dx)*Lx : dx
+        dy = (2abs(dy) > Ly) ? dy - sign(dy)*Ly : dy
+        r2 = dx*dx + dy*dy
+        if r2 < cutoff2
+            cnt += 1
+            id = cnt <= cap ? cnt : cap
+            if id <= cap
+                nbr[i,id] = Int32(j)
             end
         end
     end
+    if cnt < cap
+        for k in (cnt+1):cap
+            nbr[i,k] = 0
+        end
+    end
+    return
+end
+
+function _build_kernel3!(
+    rx::CuDeviceVector{Definitions.FloatX}, ry::CuDeviceVector{Definitions.FloatX}, rz::CuDeviceVector{Definitions.FloatX},
+    nbr::CuDeviceMatrix{Int32}, cap::Int32,
+    Lx::Definitions.FloatX, Ly::Definitions.FloatX, Lz::Definitions.FloatX,
+    cutoff2::Definitions.FloatX
+)
+    i = (blockIdx().x-1)*blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    xi = rx[i]; yi = ry[i]; zi = rz[i]
+    cnt = Int32(0)
+    @inbounds for j in 1:N
+        if j == i; continue; end
+        dx = xi - rx[j]; dy = yi - ry[j]; dz = zi - rz[j]
+        dx = (2abs(dx) > Lx) ? dx - sign(dx)*Lx : dx
+        dy = (2abs(dy) > Ly) ? dy - sign(dy)*Ly : dy
+        dz = (2abs(dz) > Lz) ? dz - sign(dz)*Lz : dz
+        r2 = dx*dx + dy*dy + dz*dz
+        if r2 < cutoff2
+            cnt += 1
+            id = cnt <= cap ? cnt : cap
+            if id <= cap
+                nbr[i,id] = Int32(j)
+            end
+        end
+    end
+    if cnt < cap
+        for k in (cnt+1):cap
+            nbr[i,k] = 0
+        end
+    end
+    return
+end
+
+function build_neighbors_dense!(rx::CuArray{Definitions.FloatX,1},
+                                ry::CuArray{Definitions.FloatX,1};
+                                box::Definitions.Box2,
+                                cutoff::Definitions.FloatX,
+                                cap::Int32=Int32(96),
+                                skin::Definitions.FloatX=0.4f0)
+    N = length(rx)
+    neighbors = CUDA.fill(Int32(0), N, cap)
+    threads = min(256,N); blocks = cld(N,threads)
+    cutoff2 = cutoff*cutoff
+    k = CUDA.@cuda launch=false _build_kernel2!(rx, ry, neighbors, cap, box[1], box[2], cutoff2)
+    CUDA.@sync k(rx, ry, neighbors, cap, box[1], box[2], cutoff2; threads, blocks)
+    return NeighborMatrix(neighbors, cap, cutoff, skin, 0)
+end
+
+function build_neighbors_dense!(rx::CuArray{Definitions.FloatX,1},
+                                ry::CuArray{Definitions.FloatX,1},
+                                rz::CuArray{Definitions.FloatX,1};
+                                box::Definitions.Box3,
+                                cutoff::Definitions.FloatX,
+                                cap::Int32=Int32(96),
+                                skin::Definitions.FloatX=0.4f0)
+    N = length(rx)
+    neighbors = CUDA.fill(Int32(0), N, cap)
+    threads = min(256,N); blocks = cld(N,threads)
+    cutoff2 = cutoff*cutoff
+    k = CUDA.@cuda launch=false _build_kernel3!(rx, ry, rz, neighbors, cap, box[1], box[2], box[3], cutoff2)
+    CUDA.@sync k(rx, ry, rz, neighbors, cap, box[1], box[2], box[3], cutoff2; threads, blocks)
+    return NeighborMatrix(neighbors, cap, cutoff, skin, 0)
+end
+
+# In-place neighbor list update (no allocation!)
+function update_neighbors_inplace!(nbh::NeighborMatrix,
+                                   rx::CuArray{Definitions.FloatX,1},
+                                   ry::CuArray{Definitions.FloatX,1};
+                                   box::Definitions.Box2)
+    N = length(rx)
+    # Reuse existing neighbor matrix - just fill with zeros and rebuild
+    fill!(nbh.neighbors, Int32(0))
+    threads = min(256,N); blocks = cld(N,threads)
+    cutoff2 = nbh.cutoff * nbh.cutoff
+    k = CUDA.@cuda launch=false _build_kernel2!(rx, ry, nbh.neighbors, nbh.cap, box[1], box[2], cutoff2)
+    CUDA.@sync k(rx, ry, nbh.neighbors, nbh.cap, box[1], box[2], cutoff2; threads, blocks)
+    nbh.last_build_step = 0  # Reset counter
     return nothing
 end
+
+function update_neighbors_inplace!(nbh::NeighborMatrix,
+                                   rx::CuArray{Definitions.FloatX,1},
+                                   ry::CuArray{Definitions.FloatX,1},
+                                   rz::CuArray{Definitions.FloatX,1};
+                                   box::Definitions.Box3)
+    N = length(rx)
+    # Reuse existing neighbor matrix - just fill with zeros and rebuild
+    fill!(nbh.neighbors, Int32(0))
+    threads = min(256,N); blocks = cld(N,threads)
+    cutoff2 = nbh.cutoff * nbh.cutoff
+    k = CUDA.@cuda launch=false _build_kernel3!(rx, ry, rz, nbh.neighbors, nbh.cap, box[1], box[2], box[3], cutoff2)
+    CUDA.@sync k(rx, ry, rz, nbh.neighbors, nbh.cap, box[1], box[2], box[3], cutoff2; threads, blocks)
+    nbh.last_build_step = 0  # Reset counter
+    return nothing
+end
+
+update_needed!(nbl::NeighborMatrix, step::Int, interval::Int) = (step == 0) || (interval > 0 && (step % interval == 0))
+
+end # module
