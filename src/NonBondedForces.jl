@@ -1,812 +1,116 @@
-export Harmonic
-export WCA
+module NonBondedForces
 
-#2D harmonic repulsive potential
-@inline function Harmonic(dx::T, dy::T, dr²::T, ϵ::T, σ::T) where T
-    dist = dr²^(1/2)
-    f_int = ϵ*(1/dist - 1/σ)
-    e_int = (ϵ/2)*(1 - dist/σ)^2
-    f_x = f_int*dx
-    f_y = f_int*dy
-    return SVector{2,T}(f_x,f_y), e_int
+using CUDA
+using ..Definitions
+
+export lj_forces_soa!
+
+@inline function lj_pair(dx::Float32, dy::Float32, r2::Float32, ϵ::Float32, σ::Float32)
+    invr2 = 1f0 / r2
+    s2    = (σ*σ) * invr2
+    s6    = s2*s2*s2
+    s12   = s6*s6
+    f_over_r = 24f0*ϵ*(2f0*s12 - s6)*invr2
+    fx = f_over_r*dx  # FIXED: removed negative sign
+    fy = f_over_r*dy  # FIXED: removed negative sign
+    ep = 4f0*ϵ*(s12 - s6)
+    return (fx, fy, ep)
 end
 
-#3D harmonic repulsive potential
-@inline function Harmonic(dx::T, dy::T, dz::T, dr²::T, ϵ::T, σ::T) where T
-    dist = dr²^(1/2)
-    f_int = ϵ*(1/dist - 1/σ)
-    e_int = (ϵ/2)*(1 - dist/σ)^2
-    f_x = f_int*dx
-    f_y = f_int*dy
-    f_z = f_int*dz
-    return SVector{3,T}(f_x,f_y, f_z), e_int
+@inline function lj_pair(dx::Float32, dy::Float32, dz::Float32, r2::Float32, ϵ::Float32, σ::Float32)
+    invr2 = 1f0 / r2
+    s2    = (σ*σ) * invr2
+    s6    = s2*s2*s2
+    s12   = s6*s6
+    f_over_r = 24f0*ϵ*(2f0*s12 - s6)*invr2
+    fx = f_over_r*dx  # FIXED: removed negative sign
+    fy = f_over_r*dy  # FIXED: removed negative sign
+    fz = f_over_r*dz  # FIXED: removed negative sign
+    ep = 4f0*ϵ*(s12 - s6)
+    return (fx, fy, fz, ep)
 end
 
-#2D WCA potential
-@inline function WCA(dx::T, dy::T, dr²::T, ϵ::T, σ::T) where T
-    inv_dr² = 1/dr²
-    σ² = σ^2
-    σ²_inv_dr² = σ²*inv_dr²
-    σ6_inv_dr6 = σ²_inv_dr²^3
-    σ12_inv_dr12 = σ6_inv_dr6^2
-    f_int = 24ϵ*(2σ12_inv_dr12 - σ6_inv_dr6)*inv_dr²
-    e_int = 4ϵ*(2σ12_inv_dr12 - σ6_inv_dr6) + ϵ
-    f_x = f_int*dx
-    f_y = f_int*dy
-    return SVector{2,T}(f_x,f_y), e_int
-end
-
-#3D WCA potential
-@inline function WCA(dx::T, dy::T, dz::T, dr²::T, ϵ::T, σ::T) where T
-    inv_dr² = 1/dr²
-    σ² = σ^2
-    σ²_inv_dr² = σ²*inv_dr²
-    σ6_inv_dr6 = σ²_inv_dr²^3
-    σ12_inv_dr12 = σ6_inv_dr6^2
-    f_int = 24ϵ*(2σ12_inv_dr12 - σ6_inv_dr6)*inv_dr²
-    e_int = 4ϵ*(2σ12_inv_dr12 - σ6_inv_dr6) + ϵ
-    f_x = f_int*dx
-    f_y = f_int*dy
-    f_z = f_int*dz
-    return SVector{3,T}(f_x,f_y, f_z), e_int
-end
-
-
-
-#2D WCA potential
-@inline function LennardJones(dx::T, dy::T, dr²::T, ϵ::T, σ::T) where T
-    inv_dr² = 1/dr²
-    σ² = σ^2
-    σ²_inv_dr² = σ²*inv_dr²
-    σ6_inv_dr6 = σ²_inv_dr²^3
-    σ12_inv_dr12 = σ6_inv_dr6^2
-    f_int = 24ϵ*(2σ12_inv_dr12 - σ6_inv_dr6)*inv_dr²
-    e_int = 4ϵ*(2σ12_inv_dr12 - σ6_inv_dr6)
-    f_x = f_int*dx
-    f_y = f_int*dy
-    return SVector{2,T}(f_x,f_y), e_int
-end
-
-#3D WCA potential
-@inline function LennardJones(dx::T, dy::T, dz::T, dr²::T, ϵ::T, σ::T) where T
-    inv_dr² = 1/dr²
-    σ² = σ^2
-    σ²_inv_dr² = σ²*inv_dr²
-    σ6_inv_dr6 = σ²_inv_dr²^3
-    σ12_inv_dr12 = σ6_inv_dr6^2
-    f_int = 24ϵ*(2σ12_inv_dr12 - σ6_inv_dr6)*inv_dr²
-    e_int = 4ϵ*(2σ12_inv_dr12 - σ6_inv_dr6)
-    f_x = f_int*dx
-    f_y = f_int*dy
-    f_z = f_int*dz
-    return SVector{3,T}(f_x,f_y, f_z), e_int
-end
-
-
-
-
-
-
-
-################################################################################
-#                                                                              #
-#                           Calculating forces                                 #
-#                           USING NEIGHBORLIST                                 #
-#                                                                              #
-################################################################################
-export forces!
-export forces_kernel!
-
-
-function forces!(
-    r::CuVector{SVector{N,T}},
-    f::CuVector{SVector{N,T}},
-    Epot::CuVector{T},
-    Neighbors::CuMatrix{I},
-    box::SVector{N,T},
-    ϵ::T,
-    σ::T,
-    force_func::Function) where {N,T,I}
-
-    kernel = @cuda launch = false forces_kernel!(r, f, Epot, Neighbors, box, ϵ, σ, force_func)
-    config = launch_configuration(kernel.fun)
-    threads = min(length(r), config.threads)
-    blocks = cld(length(r), threads)
-    CUDA.@sync kernel(r, f, Epot, Neighbors, box, ϵ, σ, force_func; threads, blocks)
-
-    return nothing
-end
-
-
-function forces_kernel!(
-    r::CuDeviceVector{T},
-    f::CuDeviceVector{T},
-    Epot::CuDeviceVector{T1},
-    Neighbors::CuDeviceMatrix{I},
-    box::T,
-    ϵ::T1,
-    σ::T1,
-    force_func::Function) where {T,T1,I}
-
-    Npart = length(r)
-    tid = threadIdx().x
-    gtid = (blockIdx().x - 1) * blockDim().x + tid  # global thread id
-    NNeigh = size(Neighbors,2)
-
-    
-    if force_func == WCA
-        cut_off = T1(2^(1/6))*σ
-        cut_off² = cut_off^2
-    elseif force_func == Harmonic
-        cut_off = T1(σ)
-        cut_off² = cut_off^2
-    end
-    
-
-    acc = zero(T)
-    epot= zero(T1)
-
-    @inbounds begin
-        if gtid <= Npart
-            pos₁ = r[gtid]
-        else
-            pos₁ = zero(T)
-        end
-        acc = zero(T)
-        epot= zero(T1)
-
-        for j = 1:NNeigh
-            idx = Neighbors[gtid,j]
-            if idx != 0 
-                pos₂  = r[idx]
-            else
-                break
-            end
-            dx  = pos₁[1] - pos₂[1]
-            dy  = pos₁[2] - pos₂[2]
-            dx = (2abs(dx) > box[1] ) ? dx - sign(dx) * box[1] : dx
-            dy = (2abs(dy) > box[2] ) ? dy - sign(dy) * box[2] : dy
-            
-            dr² = dx*dx + dy*dy
-
-            if  0 < dr² < cut_off²
-                frc, ep = force_func(dx, dy, dr², ϵ, σ) # Call the passed function here
-                acc += frc
-                epot = epot + ep
-            end
-        end
-              
-        if gtid <= Npart
-            f[gtid] = acc
-            Epot[gtid] += epot
+function _lj2_soa_kernel!(
+    rx::CuDeviceVector{Float32}, ry::CuDeviceVector{Float32},
+    fx::CuDeviceVector{Float32}, fy::CuDeviceVector{Float32},
+    Epot::CuDeviceVector{Float32},
+    nbr::CuDeviceMatrix{Int32}, cap::Int32,
+    Lx::Float32, Ly::Float32,
+    ϵ::Float32, σ::Float32, cutoff2::Float32
+)
+    i = (blockIdx().x-1)*blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    xi = rx[i]; yi = ry[i]
+    accx = 0f0; accy = 0f0; eacc = 0f0
+    @inbounds for k in 1:cap
+        j = nbr[i,k]; if j == 0; break; end
+        dx = xi - rx[j]; dy = yi - ry[j]
+        dx = (2abs(dx) > Lx) ? dx - sign(dx)*Lx : dx
+        dy = (2abs(dy) > Ly) ? dy - sign(dy)*Ly : dy
+        r2 = dx*dx + dy*dy
+        if (r2 > 0f0) & (r2 < cutoff2)
+            fxij, fyij, ep = lj_pair(dx, dy, r2, ϵ, σ)
+            accx += fxij; accy += fyij
+            eacc += 0.5f0 * ep
         end
     end
-    return nothing
+    fx[i] = accx; fy[i] = accy; Epot[i] = eacc
+    return
 end
 
-
-
-
-#Newly added!
-function forces!(
-    r::CuVector{SVector{N,T}},
-    f::CuVector{SVector{N,T}},
-    alpha_list::CuVector{T1},
-    dQ::CuVector{T},
-    Epot::CuVector{T},
-    Neighbors::CuMatrix{I},
-    box::SVector{N,T},
-    ϵ::T,
-    σ::T,
-    force_func::Function) where {N,T,T1,I}
-
-    kernel = @cuda launch = false forces_kernel!(r, f, alpha_list, dQ, Epot, Neighbors, box, ϵ, σ, force_func)
-    config = launch_configuration(kernel.fun)
-    threads = min(length(r), config.threads)
-    blocks = cld(length(r), threads)
-    CUDA.@sync kernel(r, f, alpha_list, dQ, Epot, Neighbors, box, ϵ, σ, force_func; threads, blocks)
-
-    return nothing
-end
-
-
-function forces_kernel!(
-    r::CuDeviceVector{T},
-    f::CuDeviceVector{T},
-    alpha_list::CuDeviceVector{T2},
-    dQ::CuDeviceVector{T1},
-    Epot::CuDeviceVector{T1},
-    Neighbors::CuDeviceMatrix{I},
-    box::T,
-    ϵ::T1,
-    σ::T1,
-    force_func::Function) where {T,T1, T2, I}
-
-    Npart = length(r)
-    tid = threadIdx().x
-    gtid = (blockIdx().x - 1) * blockDim().x + tid  # global thread id
-    NNeigh = size(Neighbors,2)
-
-    
-    if force_func == WCA
-        cut_off = T1(2^(1/6))*σ
-        cut_off² = cut_off^2
-    elseif force_func == Harmonic
-        cut_off = T1(σ)
-        cut_off² = cut_off^2
-    end
-    
-
-    acc  = zero(T)
-    epot = zero(T1)
-    dqt  = zero(T1) 
-
-    @inbounds begin
-        if gtid <= Npart
-            pos₁ = r[gtid]
-            alpha = alpha_list[gtid]
-        else
-            pos₁ = zero(T)
-            alpha = zero(T1)
-        end
-
-        acc = zero(T)
-        epot= zero(T1)
-        dqt  = zero(T1)
-
-        for j = 1:NNeigh
-            idx = Neighbors[gtid,j]
-            if idx != 0 
-                pos₂  = r[idx]
-            else
-                break
-            end
-            dx  = pos₁[1] - pos₂[1]
-            dy  = pos₁[2] - pos₂[2]
-            dx = (2abs(dx) > box[1] ) ? dx - sign(dx) * box[1] : dx
-            dy = (2abs(dy) > box[2] ) ? dy - sign(dy) * box[2] : dy
-            
-            dr² = dx*dx + dy*dy
-
-            if  0 < dr² < cut_off²
-                frc, ep, dq = force_func(dx, dy, dr², ϵ, σ, alpha) # Call the passed function here
-                acc += frc
-                epot = epot + ep
-                dqt += dq
-            end
-        end
-              
-        if gtid <= Npart
-            f[gtid] = acc
-            Epot[gtid] += epot
-            dQ[gtid] += dqt
+function _lj3_soa_kernel!(
+    rx::CuDeviceVector{Float32}, ry::CuDeviceVector{Float32}, rz::CuDeviceVector{Float32},
+    fx::CuDeviceVector{Float32}, fy::CuDeviceVector{Float32}, fz::CuDeviceVector{Float32},
+    Epot::CuDeviceVector{Float32},
+    nbr::CuDeviceMatrix{Int32}, cap::Int32,
+    Lx::Float32, Ly::Float32, Lz::Float32,
+    ϵ::Float32, σ::Float32, cutoff2::Float32
+)
+    i = (blockIdx().x-1)*blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    xi = rx[i]; yi = ry[i]; zi = rz[i]
+    accx = 0f0; accy = 0f0; accz = 0f0; eacc = 0f0
+    @inbounds for k in 1:cap
+        j = nbr[i,k]; if j == 0; break; end
+        dx = xi - rx[j]; dy = yi - ry[j]; dz = zi - rz[j]
+        dx = (2abs(dx) > Lx) ? dx - sign(dx)*Lx : dx
+        dy = (2abs(dy) > Ly) ? dy - sign(dy)*Ly : dy
+        dz = (2abs(dz) > Lz) ? dz - sign(dz)*Lz : dz
+        r2 = dx*dx + dy*dy + dz*dz
+        if (r2 > 0f0) & (r2 < cutoff2)
+            fxij, fyij, fzij, ep = lj_pair(dx, dy, dz, r2, ϵ, σ)
+            accx += fxij; accy += fyij; accz += fzij
+            eacc += 0.5f0 * ep
         end
     end
-    return nothing
+    fx[i] = accx; fy[i] = accy; fz[i] = accz; Epot[i] = eacc
+    return
 end
-#Newly added finished!
 
-################################################################################
-#                                                                              #
-#                   Calculating forces and collisions                          #
-#                           USING NEIGHBORLIST                                 #
-#                                                                              #
-################################################################################
-
-
-"""
-function forces!(
-    r::CuVector{SVector{N,T}},
-    f::CuVector{SVector{N,T}},
-    Epot::CuVector{T},
-    Neighbors::CuMatrix{I},
-    cold_num::I,
-    colls::CuVector{T},
-    coll_switch::CuMatrix{Bool},
-    box::SVector{N,T},
-    ϵ::T,
-    σ::T,
-    force_func::Function) where {N,T,I}
-
-    kernel = @cuda launch = false forces_kernel!(r, f, Epot, Neighbors, cold_num, colls, coll_switch, box, ϵ, σ, force_func)
-    config = launch_configuration(kernel.fun)
-    threads = min(length(r), config.threads)
-    blocks = cld(length(r), threads)
-    CUDA.@sync kernel(r, f, Epot, Neighbors, cold_num, colls, coll_switch, box, ϵ, σ, force_func; threads, blocks)
-
+function lj_forces_soa!(rx::CuArray{Float32,1}, ry::CuArray{Float32,1},
+                        fx::CuArray{Float32,1}, fy::CuArray{Float32,1},
+                        Epot::CuArray{Float32,1},
+                        nbh, box::Definitions.Box2, params::Definitions.LJParams{Float32})
+    N = length(rx); threads = min(256,N); blocks = cld(N,threads)
+    cap = nbh.cap
+    cutoff2 = params.rcut*params.rcut
+    k = CUDA.@cuda launch=false _lj2_soa_kernel!(rx, ry, fx, fy, Epot, nbh.neighbors, cap,
+                                                 box[1], box[2], params.ϵ, params.σ, cutoff2)
+    CUDA.@sync k(rx, ry, fx, fy, Epot, nbh.neighbors, cap, box[1], box[2], params.ϵ, params.σ, cutoff2; threads, blocks)
     return nothing
 end
 
-
-function forces_kernel!(
-    r::CuDeviceVector{T},
-    f::CuDeviceVector{T},
-    Epot::CuDeviceVector{T1},
-    Neighbors::CuDeviceMatrix{I},
-    num_cold::Int,
-    colls::CuDeviceVector{T1},
-    coll_switch::CuDeviceMatrix{Bool},
-    box::T,
-    ϵ::T1,
-    σ::T1,
-    force_func::Function) where {T,T1,I}
-
-    
-    Npart = length(r)
-    tid = threadIdx().x
-    gtid = (blockIdx().x - 1) * blockDim().x + tid  # global thread id
-    NNeigh = size(Neighbors,2)
-
-    
-    if force_func == WCA
-        cut_off = T1(2^(1/6))*σ
-        cut_off² = cut_off^2
-    elseif force_func == Harmonic
-        cut_off = T1(σ)
-        cut_off² = cut_off^2
-    end
-
-
-    @inbounds begin
-        if gtid <= Npart
-            pos₁ = r[gtid]
-            acc = zero(T)
-            epot= zero(T1)
-            coll = zero(T1)
-
-            @inbounds for j = 1:NNeigh
-                idx = Neighbors[gtid,j]
-                if idx != 0 
-                    pos₂  = r[idx]
-                else
-                    break
-                end
-
-                dx  = pos₁[1] - pos₂[1]
-                dy  = pos₁[2] - pos₂[2]
-
-                dx = (2abs(dx) > box[1] ) ? dx - sign(dx) * box[1] : dx
-                dy = (2abs(dy) > box[2] ) ? dy - sign(dy) * box[2] : dy
-
-                dr² = dx*dx + dy*dy
-
-                if dr² > cut_off²
-                    coll_switch[gtid,j] = false
-                else
-                    if !coll_switch[gtid,j]                    
-                        if gtid <= num_cold
-                            if idx > num_cold
-                                coll += one(T1)
-                                coll_switch[gtid,j] = true
-                            end
-                        else
-                            if idx <= num_cold
-                                coll += one(T1)
-                                coll_switch[gtid,j] = true
-                            end
-                        end
-                    end
-                    frc, ep = force_func(dx, dy, dr², ϵ, σ)
-                    acc = acc .+ frc
-                    epot = epot + ep
-                end
-            end
-              
-            f[gtid] = acc
-            Epot[gtid] += epot
-            colls[gtid] += coll 
-        end
-    end
+function lj_forces_soa!(rx::CuArray{Float32,1}, ry::CuArray{Float32,1}, rz::CuArray{Float32,1},
+                        fx::CuArray{Float32,1}, fy::CuArray{Float32,1}, fz::CuArray{Float32,1},
+                        Epot::CuArray{Float32,1},
+                        nbh, box::Definitions.Box3, params::Definitions.LJParams{Float32})
+    N = length(rx); threads = min(256,N); blocks = cld(N,threads)
+    cap = nbh.cap
+    cutoff2 = params.rcut*params.rcut
+    k = CUDA.@cuda launch=false _lj3_soa_kernel!(rx, ry, rz, fx, fy, fz, Epot, nbh.neighbors, cap,
+                                                 box[1], box[2], box[3], params.ϵ, params.σ, cutoff2)
+    CUDA.@sync k(rx, ry, rz, fx, fy, fz, Epot, nbh.neighbors, cap, box[1], box[2], box[3], params.ϵ, params.σ, cutoff2; threads, blocks)
     return nothing
 end
 
-function forces!(
-    r::CuVector{SVector{N,T}},
-    f::CuVector{SVector{N,T}},
-    Epot::CuVector{T},
-    Neighbors::CuMatrix{I},
-    cold_num::I,
-    colls::CuVector{T},
-    box::SVector{N,T},
-    ϵ::T,
-    σ::T,
-    force_func::Function) where {N,T,I}
-
-    kernel = @cuda launch = false forces_kernel!(r, f, Epot, Neighbors, cold_num, colls, box, ϵ, σ, force_func)
-    config = launch_configuration(kernel.fun)
-    threads = min(length(r), config.threads)
-    blocks = cld(length(r), threads)
-    CUDA.@sync kernel(r, f, Epot, Neighbors, cold_num, colls, box, ϵ, σ, force_func; threads, blocks)
-    return nothing
-end
-
-function forces_kernel!(
-    r::CuDeviceVector{T},
-    f::CuDeviceVector{T},
-    Epot::CuDeviceVector{T1},
-    Neighbors::CuDeviceMatrix{I},
-    num_cold::Int,
-    colls::CuDeviceVector{T1},
-    box::T,
-    ϵ::T1,
-    σ::T1,
-    force_func::Function) where {T,T1,I}
-
-    
-    Npart = length(r)
-    tid = threadIdx().x
-    gtid = (blockIdx().x - 1) * blockDim().x + tid  # global thread id
-    NNeigh = size(Neighbors,2)
-
-    
-    if force_func == WCA
-        cut_off = T1(2^(1/6))*σ
-        cut_off² = cut_off^2
-    elseif force_func == Harmonic
-        cut_off = T1(σ)
-        cut_off² = cut_off^2
-    end
-    dim = length(box)
-
-    @inbounds begin
-        if dim == 2
-            if gtid <= Npart
-                pos₁ = r[gtid]
-                acc = zero(T)
-                epot= zero(T1)
-                coll = zero(T1)
-    
-                @inbounds for j = 1:NNeigh
-                    idx = Neighbors[gtid,j]
-                    if idx != 0 
-                        pos₂  = r[idx]
-                    else
-                        break
-                    end
-    
-                    dx  = pos₁[1] - pos₂[1]
-                    dy  = pos₁[2] - pos₂[2]
-    
-                    dx = (2abs(dx) > box[1] ) ? dx - sign(dx) * box[1] : dx
-                    dy = (2abs(dy) > box[2] ) ? dy - sign(dy) * box[2] : dy
-    
-                    dr² = dx*dx + dy*dy
-    
-                    if dr² < cut_off²                  
-                        if gtid <= num_cold
-                            if idx > num_cold
-                                coll += one(T1)
-                            end
-                        else
-                            if idx <= num_cold
-                                coll += one(T1)
-                            end
-                        end
-                        frc, ep = force_func(dx, dy, dr², ϵ, σ)
-                        acc = acc .+ frc
-                        epot = epot + ep
-                    end
-                end
-                  
-                f[gtid] = acc
-                Epot[gtid] += epot
-                colls[gtid] += coll 
-            end
-        elseif dim == 3
-            if gtid <= Npart
-                pos₁ = r[gtid]
-                acc = zero(T)
-                epot= zero(T1)
-                coll = zero(T1)
-    
-                @inbounds for j = 1:NNeigh
-                    idx = Neighbors[gtid,j]
-                    if idx != 0 
-                        pos₂  = r[idx]
-                    else
-                        break
-                    end
-    
-                    dx  = pos₁[1] - pos₂[1]
-                    dy  = pos₁[2] - pos₂[2]
-                    dz  = pos₁[3] - pos₂[3]
-    
-                    dx = (2abs(dx) > box[1] ) ? dx - sign(dx) * box[1] : dx
-                    dy = (2abs(dy) > box[2] ) ? dy - sign(dy) * box[2] : dy
-                    dz = (2abs(dz) > box[3] ) ? dz - sign(dz) * box[3] : dz
-    
-                    dr² = dx*dx + dy*dy + dz*dz
-    
-                    if dr² < cut_off²                  
-                        if gtid <= num_cold
-                            if idx > num_cold
-                                coll += one(T1)
-                            end
-                        else
-                            if idx <= num_cold
-                                coll += one(T1)
-                            end
-                        end
-                        frc, ep = force_func(dx, dy, dz, dr², ϵ, σ)
-                        acc = acc .+ frc
-                        epot = epot + ep
-                    end
-                end
-                  
-                f[gtid] = acc
-                Epot[gtid] += epot
-                colls[gtid] += coll 
-            end
-        end
-    end
-    return nothing
-end
-"""
-
-function forces!(
-    r::CuVector{SVector{N,T}},
-    f::CuVector{SVector{N,T}},
-    Epot::CuVector{T},
-    Neighbors::CuMatrix{I},
-    part_ids::CuVector{I},
-    colls::CuVector{SVector{N1,I}},
-    box::SVector{N,T},
-    ϵ::T,
-    σ::T,
-    force_func::Function) where {N, N1, T, I}
-
-    kernel = @cuda launch = false forces_kernel!(r, f, Epot, Neighbors, part_ids, colls, box, ϵ, σ, force_func)
-    config = launch_configuration(kernel.fun)
-    threads = min(length(r), config.threads)
-    blocks = cld(length(r), threads)
-    CUDA.@sync kernel(r, f, Epot, Neighbors, part_ids, colls, box, ϵ, σ, force_func; threads, blocks)
-    return nothing
-end
-
-
-
-function forces_kernel!(
-    r::CuDeviceVector{T},
-    f::CuDeviceVector{T},
-    Epot::CuDeviceVector{T1},
-    Neighbors::CuDeviceMatrix{I},
-    part_ids::CuDeviceVector{I},
-    colls::CuDeviceVector{T2},
-    box::T,
-    ϵ::T1,
-    σ::T1,
-    force_func::Function) where {T,T1,T2,I}
-
-    
-    Npart = length(r)
-    tid = threadIdx().x
-    gtid = (blockIdx().x - 1) * blockDim().x + tid  # global thread id
-    NNeigh = size(Neighbors,2)
-
-    
-    if force_func == WCA
-        cut_off = T1(2^(1/6))*σ
-        cut_off² = cut_off^2
-    elseif force_func == Harmonic
-        cut_off = T1(σ)
-        cut_off² = cut_off^2
-    end
-    dim = length(box)
-
-
-    if dim == 2
-        if gtid <= Npart
-            pos₁ = r[gtid]
-            id_1 = part_ids[gtid]
-            acc = zero(T)
-            epot= zero(T1)
-            coll = SVector{2,I}(0, 0)
-            zero_one = SVector{2,I}(0, 1)
-            one_zero = SVector{2,I}(1, 0)
-
-            #@inbounds for j = 1:NNeigh
-            for j = 1:NNeigh
-                idx = Neighbors[gtid,j]
-                if idx != 0 
-                    pos₂  = r[idx]
-                    id_2  = part_ids[idx]
-                else
-                    break
-                end
-
-                dx  = pos₁[1] - pos₂[1]
-                dy  = pos₁[2] - pos₂[2]
-
-                dx = (2abs(dx) > box[1] ) ? dx - sign(dx) * box[1] : dx
-                dy = (2abs(dy) > box[2] ) ? dy - sign(dy) * box[2] : dy
-
-                dr² = dx*dx + dy*dy
-
-                if dr² < cut_off²                  
-                    if id_1 + id_2 == 1
-                        coll = coll .+ zero_one
-                    else
-                        coll = coll .+ one_zero
-                    end
-                    frc, ep = force_func(dx, dy, dr², ϵ, σ)
-                    acc = acc .+ frc
-                    epot = epot + ep
-                end
-            end
-                
-            f[gtid] = acc
-            Epot[gtid] += epot
-            colls[gtid] += coll 
-        end
-    elseif dim == 3
-        if gtid <= Npart
-            pos₁ = r[gtid]
-            id_1 = part_ids[gtid]
-            acc = zero(T)
-            epot= zero(T1)
-            coll = SVector{2,I}(0, 0)
-            zero_one = SVector{2,I}(0, 1)
-            one_zero = SVector{2,I}(1, 0)
-
-            #@inbounds for j = 1:NNeigh
-            for j = 1:NNeigh
-                idx = Neighbors[gtid,j]
-                if idx != 0
-                    id_2 = part_ids[idx] 
-                    pos₂  = r[idx]
-                else
-                    break
-                end
-
-                dx  = pos₁[1] - pos₂[1]
-                dy  = pos₁[2] - pos₂[2]
-                dz  = pos₁[3] - pos₂[3]
-
-                dx = (2abs(dx) > box[1] ) ? dx - sign(dx) * box[1] : dx
-                dy = (2abs(dy) > box[2] ) ? dy - sign(dy) * box[2] : dy
-                dz = (2abs(dz) > box[3] ) ? dz - sign(dz) * box[3] : dz
-
-                dr² = dx*dx + dy*dy + dz*dz
-
-                if dr² < cut_off²                  
-                    if id_1 + id_2 == 1
-                        coll = coll .+ zero_one
-                    else
-                        coll = coll .+ one_zero
-                    end
-
-                    frc, ep = force_func(dx, dy, dz, dr², ϵ, σ)
-                    acc = acc .+ frc
-                    epot = epot + ep
-                end
-            end
-                
-            f[gtid] = acc
-            Epot[gtid] += epot
-            colls[gtid] += coll 
-        end
-    end
-    return nothing
-end
-
-
-
-
-
-
-
-
-"""
-function forces_kernel!(
-    r::CuDeviceVector{T},
-    f::CuDeviceVector{T},
-    Epot::CuDeviceVector{T1},
-    Neighbors::CuDeviceMatrix{I},
-    num_cold::Int,
-    colls::CuDeviceVector{T1},
-    box::T,
-    ϵ::T1,
-    σ::T1,
-    force_func::Function) where {T,T1,I}
-
-    
-    Npart = length(r)
-    tid = threadIdx().x
-    gtid = (blockIdx().x - 1) * blockDim().x + tid  # global thread id
-    NNeigh = size(Neighbors,2)
-
-    
-    if force_func == WCA
-        cut_off = T1(2^(1/6))*σ
-        cut_off² = cut_off^2
-    elseif force_func == Harmonic
-        cut_off = T1(σ)
-        cut_off² = cut_off^2
-    end
-
-
-    @inbounds begin
-        if gtid <= Npart
-            pos₁ = r[gtid]
-            acc = zero(T)
-            epot= zero(T1)
-            coll = zero(T1)
-
-            @inbounds for j = 1:NNeigh
-                idx = Neighbors[gtid,j]
-                if idx != 0 
-                    pos₂  = r[idx]
-                else
-                    break
-                end
-
-                dx  = pos₁[1] - pos₂[1]
-                dy  = pos₁[2] - pos₂[2]
-
-                dx = (2abs(dx) > box[1] ) ? dx - sign(dx) * box[1] : dx
-                dy = (2abs(dy) > box[2] ) ? dy - sign(dy) * box[2] : dy
-
-                dr² = dx*dx + dy*dy
-
-                if dr² < cut_off²                  
-                    coll += one(T1)
-                    frc, ep = force_func(dx, dy, dr², ϵ, σ)
-                    acc = acc .+ frc
-                    epot = epot + ep
-                end
-            end
-              
-            f[gtid] = acc
-            Epot[gtid] += epot
-            colls[gtid] += coll 
-        end
-    end
-    return nothing
-end
-
-"""
-
-
-################################################################################
-#                                                                              #
-#                           Virial theorem calculator                          #
-#                                                                              #
-################################################################################
-
-
-function virial!(
-    r::CuVector{SVector{N,T}},
-    f::CuVector{SVector{N,T}},
-    virial::CuVector{T1}) where {N,T, T1}
-
-    kernel = @cuda launch = false virial_kernel!(r, f, virial)
-    config = launch_configuration(kernel.fun)
-    threads = min(length(r), config.threads)
-    blocks = cld(length(r), threads)
-    CUDA.@sync kernel(r, f, virial; threads, blocks)
-    return nothing
-end
-
-
-
-function virial_kernel!(
-    r::CuDeviceVector{T},
-    f::CuDeviceVector{T},
-    virial::CuDeviceVector{T1}) where {T,T1}
-
-    
-    Npart = length(r)
-    tid = threadIdx().x
-    gtid = (blockIdx().x - 1) * blockDim().x + tid  # global thread id
-
-    @inbounds begin
-        if gtid <= Npart
-            position = r[gtid]
-            force    = f[gtid]
-            vir = dot(T1.(position), T1.(force))              
-            virial[gtid] += vir 
-        end
-    end
-    return nothing
-end
-################################################################################
+end # module
