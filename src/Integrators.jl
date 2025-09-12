@@ -34,21 +34,55 @@ end
 
 Fill `beta_x`, `beta_y` (and optionally `beta_z`) with noise_scale .* randn(Float32) on the GPU.
 This generates β_n ~ N(0, 2*gamma*kT*dt) for the GJF integrator.
-Call exactly **once per time step** and pass the same arrays to both
+Call exactly once per time step and pass the same arrays to both
 `vv_positions_soa!` and `vv_velocities_soa!`.
+Fused implementation reduces kernel launches vs. randn! + scaling.
 """
+
+function _vv_noise2_kernel!(beta_x::CuDeviceVector{Float32},
+                            beta_y::CuDeviceVector{Float32},
+                            noise_scale::CuDeviceVector{Float32})
+    i = (blockIdx().x-1)*blockDim().x + threadIdx().x
+    N = length(beta_x); if i > N; return; end
+    @inbounds begin
+        s = noise_scale[i]
+        beta_x[i] = s * randn(Float32)
+        beta_y[i] = s * randn(Float32)
+    end
+    return
+end
+
+function _vv_noise3_kernel!(beta_x::CuDeviceVector{Float32},
+                            beta_y::CuDeviceVector{Float32},
+                            beta_z::CuDeviceVector{Float32},
+                            noise_scale::CuDeviceVector{Float32})
+    i = (blockIdx().x-1)*blockDim().x + threadIdx().x
+    N = length(beta_x); if i > N; return; end
+    @inbounds begin
+        s = noise_scale[i]
+        beta_x[i] = s * randn(Float32)
+        beta_y[i] = s * randn(Float32)
+        beta_z[i] = s * randn(Float32)
+    end
+    return
+end
+
 function vv_prepare_noise!(beta_x::CuArray{Float32,1},
                            beta_y::CuArray{Float32,1},
                            noise_scale::CuArray{Float32,1};
                            beta_z::Union{Nothing,CuArray{Float32,1}}=nothing)
     @assert length(beta_x) == length(noise_scale) == length(beta_y)
-    CUDA.randn!(beta_x); CUDA.randn!(beta_y)
-    @. beta_x = beta_x * noise_scale
-    @. beta_y = beta_y * noise_scale
-    if beta_z !== nothing
+    N = length(beta_x)
+    threads = (N < 100_000) ? 128 : 256
+    blocks  = cld(N, threads)
+
+    if beta_z === nothing
+        k = CUDA.@cuda launch=false _vv_noise2_kernel!(beta_x, beta_y, noise_scale)
+        k(beta_x, beta_y, noise_scale; threads, blocks)
+    else
         @assert length(beta_z) == length(noise_scale)
-        CUDA.randn!(beta_z)
-        @. beta_z = beta_z * noise_scale
+        k = CUDA.@cuda launch=false _vv_noise3_kernel!(beta_x, beta_y, beta_z, noise_scale)
+        k(beta_x, beta_y, beta_z, noise_scale; threads, blocks)
     end
     return nothing
 end
@@ -127,9 +161,9 @@ function vv_positions_soa!(rx::CuArray{Float32,1}, ry::CuArray{Float32,1},
                            fx::CuArray{Float32,1}, fy::CuArray{Float32,1},
                            beta_x::CuArray{Float32,1}, beta_y::CuArray{Float32,1},
                            params::VVParams{Float32}, dt::Float32, box::Definitions.Box2)
-    N = length(rx); threads = min(256, N); blocks = cld(N, threads)
+    N = length(rx); threads = (N < 100_000) ? 128 : 256; blocks = cld(N, threads)
     k = CUDA.@cuda launch=false _vv_pos2!(rx, ry, vx, vy, fx, fy, beta_x, beta_y, params.gamma, params.mass, dt, box[1], box[2])
-    CUDA.@sync k(rx, ry, vx, vy, fx, fy, beta_x, beta_y, params.gamma, params.mass, dt, box[1], box[2]; threads, blocks)
+    k(rx, ry, vx, vy, fx, fy, beta_x, beta_y, params.gamma, params.mass, dt, box[1], box[2]; threads, blocks)
     return nothing
 end
 
@@ -139,9 +173,9 @@ function vv_positions_soa!(rx::CuArray{Float32,1}, ry::CuArray{Float32,1}, rz::C
                            fx::CuArray{Float32,1}, fy::CuArray{Float32,1}, fz::CuArray{Float32,1},
                            beta_x::CuArray{Float32,1}, beta_y::CuArray{Float32,1}, beta_z::CuArray{Float32,1},
                            params::VVParams{Float32}, dt::Float32, box::Definitions.Box3)
-    N = length(rx); threads = min(256, N); blocks = cld(N, threads)
+    N = length(rx); threads = (N < 100_000) ? 128 : 256; blocks = cld(N, threads)
     k = CUDA.@cuda launch=false _vv_pos3!(rx, ry, rz, vx, vy, vz, fx, fy, fz, beta_x, beta_y, beta_z, params.gamma, params.mass, dt, box[1], box[2], box[3])
-    CUDA.@sync k(rx, ry, rz, vx, vy, vz, fx, fy, fz, beta_x, beta_y, beta_z, params.gamma, params.mass, dt, box[1], box[2], box[3]; threads, blocks)
+    k(rx, ry, rz, vx, vy, vz, fx, fy, fz, beta_x, beta_y, beta_z, params.gamma, params.mass, dt, box[1], box[2], box[3]; threads, blocks)
     return nothing
 end
 
@@ -227,9 +261,9 @@ function vv_velocities_soa!(
     dq::CuArray{Float32,1},  Ekin::CuArray{Float32,1},
     params::VVParams{Float32}, dt::Float32
 )
-    N = length(vx); threads = min(256, N); blocks = cld(N, threads)
+    N = length(vx); threads = (N < 100_000) ? 128 : 256; blocks = cld(N, threads)
     k = CUDA.@cuda launch=false _vv_vel2!(vx, vy, f0x, f0y, fx, fy, beta_x, beta_y, dq, Ekin, params.gamma, params.mass, dt)
-    CUDA.@sync k(vx, vy, f0x, f0y, fx, fy, beta_x, beta_y, dq, Ekin, params.gamma, params.mass, dt; threads, blocks)
+    k(vx, vy, f0x, f0y, fx, fy, beta_x, beta_y, dq, Ekin, params.gamma, params.mass, dt; threads, blocks)
     return nothing
 end
 
@@ -242,9 +276,9 @@ function vv_velocities_soa!(
     dq::CuArray{Float32,1},  Ekin::CuArray{Float32,1},
     params::VVParams{Float32}, dt::Float32
 )
-    N = length(vx); threads = min(256, N); blocks = cld(N, threads)
+    N = length(vx); threads = (N < 100_000) ? 128 : 256; blocks = cld(N, threads)
     k = CUDA.@cuda launch=false _vv_vel3!(vx, vy, vz, f0x, f0y, f0z, fx, fy, fz, beta_x, beta_y, beta_z, dq, Ekin, params.gamma, params.mass, dt)
-    CUDA.@sync k(vx, vy, vz, f0x, f0y, f0z, fx, fy, fz, beta_x, beta_y, beta_z, dq, Ekin, params.gamma, params.mass, dt; threads, blocks)
+    k(vx, vy, vz, f0x, f0y, f0z, fx, fy, fz, beta_x, beta_y, beta_z, dq, Ekin, params.gamma, params.mass, dt; threads, blocks)
     return nothing
 end
 
@@ -281,9 +315,9 @@ function em_step_soa!(rx::CuArray{Float32,1}, ry::CuArray{Float32,1},
                       fx::CuArray{Float32,1}, fy::CuArray{Float32,1},
                       dq::CuArray{Float32,1},
                       params::EMParams{Float32}, dt::Float32, box::Definitions.Box2)
-    N = length(rx); threads = min(256,N); blocks = cld(N,threads)
+    N = length(rx); threads = (N < 100_000) ? 128 : 256; blocks = cld(N,threads)
     k = CUDA.@cuda launch=false _em2!(rx, ry, vx, vy, fx, fy, dq, dt, params.noise_scale, box[1], box[2])
-    CUDA.@sync k(rx, ry, vx, vy, fx, fy, dq, dt, params.noise_scale, box[1], box[2]; threads, blocks)
+    k(rx, ry, vx, vy, fx, fy, dq, dt, params.noise_scale, box[1], box[2]; threads, blocks)
     return nothing
 end
 
