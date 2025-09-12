@@ -70,15 +70,13 @@ function _lj2_csr_kernel!(
 
     @inbounds for t in 0:Int(nlist-1)
         j = neighbors_flat[base + t + 1]
-        if j != i
-            dx = mic_fast(xi - rx[j], halfLx, Lx)
-            dy = mic_fast(yi - ry[j], halfLy, Ly)
-            r2 = muladd(dx, dx, dy*dy)
-            if (r2 > 0f0) & (r2 < cutoff2)
-                fxij, fyij, ep = lj_pair_2d(dx, dy, r2, ϵ, σ)
-                accx += fxij; accy += fyij
-                eacc += 0.5f0 * ep   # half to avoid double counting
-            end
+        dx = mic_fast(xi - rx[j], halfLx, Lx)
+        dy = mic_fast(yi - ry[j], halfLy, Ly)
+        r2 = muladd(dx, dx, dy*dy)
+        if (r2 > 0f0) & (r2 < cutoff2)
+            fxij, fyij, ep = lj_pair_2d(dx, dy, r2, ϵ, σ)
+            accx += fxij; accy += fyij
+            eacc += 0.5f0 * ep   # half to avoid double counting
         end
     end
 
@@ -107,16 +105,14 @@ function _lj3_csr_kernel!(
 
     @inbounds for t in 0:Int(nlist-1)
         j = neighbors_flat[base + t + 1]
-        if j != i
-            dx = mic_fast(xi - rx[j], halfLx, Lx)
-            dy = mic_fast(yi - ry[j], halfLy, Ly)
-            dz = mic_fast(zi - rz[j], halfLz, Lz)
-            r2 = muladd(dx, dx, muladd(dy, dy, dz*dz))
-            if (r2 > 0f0) & (r2 < cutoff2)
-                fxij, fyij, fzij, ep = lj_pair_3d(dx, dy, dz, r2, ϵ, σ)
-                accx += fxij; accy += fyij; accz += fzij
-                eacc += 0.5f0 * ep
-            end
+        dx = mic_fast(xi - rx[j], halfLx, Lx)
+        dy = mic_fast(yi - ry[j], halfLy, Ly)
+        dz = mic_fast(zi - rz[j], halfLz, Lz)
+        r2 = muladd(dx, dx, muladd(dy, dy, dz*dz))
+        if (r2 > 0f0) & (r2 < cutoff2)
+            fxij, fyij, fzij, ep = lj_pair_3d(dx, dy, dz, r2, ϵ, σ)
+            accx += fxij; accy += fyij; accz += fzij
+            eacc += 0.5f0 * ep
         end
     end
 
@@ -197,7 +193,7 @@ function lj_forces_soa!(rx::CuArray{Float32,1}, ry::CuArray{Float32,1},
                         nbh::NeighborLists.NeighborMatrix,
                         box::Definitions.Box2, params::Definitions.LJParams{Float32})
     N = length(rx)
-    threads = min(256, N)
+    threads = (N < 100_000) ? 128 : 256
     blocks  = cld(N, threads)
 
     cutoff2 = params.rcut * params.rcut
@@ -210,10 +206,10 @@ function lj_forces_soa!(rx::CuArray{Float32,1}, ry::CuArray{Float32,1},
         Lx, Ly, halfLx, halfLy,
         params.ϵ, params.σ, cutoff2
     )
-    CUDA.@sync k(rx, ry, fx, fy, Epot,
-                 nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
-                 Lx, Ly, halfLx, halfLy,
-                 params.ϵ, params.σ, cutoff2; threads, blocks)
+    k(rx, ry, fx, fy, Epot,
+      nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+      Lx, Ly, halfLx, halfLy,
+      params.ϵ, params.σ, cutoff2; threads, blocks)
     return nothing
 end
 
@@ -224,7 +220,7 @@ function lj_forces_soa!(rx::CuArray{Float32,1}, ry::CuArray{Float32,1}, rz::CuAr
                         nbh::NeighborLists.NeighborMatrix,
                         box::Definitions.Box3, params::Definitions.LJParams{Float32})
     N = length(rx)
-    threads = min(256, N)
+    threads = (N < 100_000) ? 128 : 256
     blocks  = cld(N, threads)
 
     cutoff2 = params.rcut * params.rcut
@@ -237,10 +233,10 @@ function lj_forces_soa!(rx::CuArray{Float32,1}, ry::CuArray{Float32,1}, rz::CuAr
         Lx, Ly, Lz, halfLx, halfLy, halfLz,
         params.ϵ, params.σ, cutoff2
     )
-    CUDA.@sync k(rx, ry, rz, fx, fy, fz, Epot,
-                 nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
-                 Lx, Ly, Lz, halfLx, halfLy, halfLz,
-                 params.ϵ, params.σ, cutoff2; threads, blocks)
+    k(rx, ry, rz, fx, fy, fz, Epot,
+      nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+      Lx, Ly, Lz, halfLx, halfLy, halfLz,
+      params.ϵ, params.σ, cutoff2; threads, blocks)
     return nothing
 end
 
@@ -254,7 +250,7 @@ function lj_forces_soa!(rx::CuArray{Float32,1}, ry::CuArray{Float32,1},
     @assert hasproperty(nbh, :cap)       "nbh lacks 'cap' field"
 
     N = length(rx)
-    threads = min(256, N)
+    threads = (N < 100_000) ? 128 : 256
     blocks  = cld(N, threads)
 
     cutoff2 = params.rcut * params.rcut
@@ -267,9 +263,9 @@ function lj_forces_soa!(rx::CuArray{Float32,1}, ry::CuArray{Float32,1},
         Lx, Ly, halfLx, halfLy,
         params.ϵ, params.σ, cutoff2
     )
-    CUDA.@sync k(rx, ry, fx, fy, Epot, nbh.neighbors, cap,
-                 Lx, Ly, halfLx, halfLy,
-                 params.ϵ, params.σ, cutoff2; threads, blocks)
+    k(rx, ry, fx, fy, Epot, nbh.neighbors, cap,
+      Lx, Ly, halfLx, halfLy,
+      params.ϵ, params.σ, cutoff2; threads, blocks)
     return nothing
 end
 
@@ -283,7 +279,7 @@ function lj_forces_soa!(rx::CuArray{Float32,1}, ry::CuArray{Float32,1}, rz::CuAr
     @assert hasproperty(nbh, :cap)       "nbh lacks 'cap' field"
 
     N = length(rx)
-    threads = min(256, N)
+    threads = (N < 100_000) ? 128 : 256
     blocks  = cld(N, threads)
 
     cutoff2 = params.rcut * params.rcut
@@ -296,9 +292,9 @@ function lj_forces_soa!(rx::CuArray{Float32,1}, ry::CuArray{Float32,1}, rz::CuAr
         Lx, Ly, Lz, halfLx, halfLy, halfLz,
         params.ϵ, params.σ, cutoff2
     )
-    CUDA.@sync k(rx, ry, rz, fx, fy, fz, Epot, nbh.neighbors, cap,
-                 Lx, Ly, Lz, halfLx, halfLy, halfLz,
-                 params.ϵ, params.σ, cutoff2; threads, blocks)
+    k(rx, ry, rz, fx, fy, fz, Epot, nbh.neighbors, cap,
+      Lx, Ly, Lz, halfLx, halfLy, halfLz,
+      params.ϵ, params.σ, cutoff2; threads, blocks)
     return nothing
 end
 

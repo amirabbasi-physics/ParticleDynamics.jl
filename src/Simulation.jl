@@ -6,6 +6,8 @@ using ..NeighborLists
 using ..NonBondedForces
 using ..Integrators
 
+const NL_CHECK_STRIDE = 10  # only check NL rebuild every N steps to cut overhead
+
 export SimulationState, build_simulation, step!, step_fused!, zero_forces!
 
 # =========================
@@ -208,16 +210,20 @@ function step!(st::SimulationState, dt::Float32)
     D = st.rz === nothing ? 2 : 3
 
     # NL rebuild policy using new displacement-based algorithm only
-    rebuild_needed = if D == 2
-        NeighborLists.update_needed!(st.nbh, st.rx, st.ry; 
-                                   skin=st.nbh.skin, 
-                                   Lx=st.box2[1], Ly=st.box2[2], 
-                                   step=st.step)
-    else
-        NeighborLists.update_needed!(st.nbh, st.rx, st.ry, st.rz; 
-                                   skin=st.nbh.skin,
-                                   Lx=st.box3[1], Ly=st.box3[2], Lz=st.box3[3],
-                                   step=st.step)
+    do_check = (st.step % NL_CHECK_STRIDE == 0)
+    rebuild_needed = false
+    if do_check
+        rebuild_needed = if D == 2
+            NeighborLists.update_needed!(st.nbh, st.rx, st.ry;
+                                        skin=st.nbh.skin,
+                                        Lx=st.box2[1], Ly=st.box2[2],
+                                        step=st.step)
+        else
+            NeighborLists.update_needed!(st.nbh, st.rx, st.ry, st.rz;
+                                        skin=st.nbh.skin,
+                                        Lx=st.box3[1], Ly=st.box3[2], Lz=st.box3[3],
+                                        step=st.step)
+        end
     end
     
     if rebuild_needed
@@ -228,34 +234,28 @@ function step!(st::SimulationState, dt::Float32)
         end
     end
 
-    # Forces at t
-    zero_forces!(st)
+    # Forces at t — write directly into f0* to avoid a device-to-device copy
     if D == 2
-        NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.fx, st.fy, st.Epot,
+        NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.f0x, st.f0y, st.Epot,
                                        st.nbh, st.box2::Definitions.Box2, st.pair_lj)
     else
-        NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot,
+        NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.Epot,
                                        st.nbh, st.box3::Definitions.Box3, st.pair_lj)
     end
-
-    # Save forces at t to f0* (no allocation)
-    copy!(st.f0x, st.fx); copy!(st.f0y, st.fy)
-    if D == 3; copy!(st.f0z, st.fz); end
 
     # Prepare noise ONCE for the step and reuse in both updates
     if D == 2
         Integrators.vv_prepare_noise!(st.rf_x, st.rf_y, st.vv.noise_scale; beta_z=nothing)
-        Integrators.vv_positions_soa!(st.rx, st.ry, st.vx, st.vy, st.fx, st.fy,
+        Integrators.vv_positions_soa!(st.rx, st.ry, st.vx, st.vy, st.f0x, st.f0y,
                                       st.rf_x, st.rf_y, st.vv, dt, st.box2::Definitions.Box2)
     else
         Integrators.vv_prepare_noise!(st.rf_x, st.rf_y, st.vv.noise_scale; beta_z=st.rf_z)
         Integrators.vv_positions_soa!(st.rx, st.ry, st.rz, st.vx, st.vy, st.vz,
-                                      st.fx, st.fy, st.fz,
+                                      st.f0x, st.f0y, st.f0z,
                                       st.rf_x, st.rf_y, st.rf_z, st.vv, dt, st.box3::Definitions.Box3)
     end
 
-    # Forces at t + dt
-    zero_forces!(st)
+    # Forces at t + dt (write into fx,fy[,fz])
     if D == 2
         NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.fx, st.fy, st.Epot,
                                        st.nbh, st.box2::Definitions.Box2, st.pair_lj)

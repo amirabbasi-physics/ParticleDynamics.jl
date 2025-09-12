@@ -63,7 +63,7 @@ end
 end
 
 @inline function _launchdims(N::Int)
-    t = min(256, N)
+    t = (N < 100_000) ? 128 : 256
     b = cld(N, t)
     return t, b
 end
