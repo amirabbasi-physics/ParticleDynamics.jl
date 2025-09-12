@@ -206,12 +206,10 @@ function _vv_vel2!(
     vnx = a * vpx + (dt / (2f0 * mass)) * (a * f0x[i] + fx[i]) + (b / mass) * beta_x[i]
     vny = a * vpy + (dt / (2f0 * mass)) * (a * f0y[i] + fy[i]) + (b / mass) * beta_y[i]
 
-    # Heat bookkeeping (properly scaled for GJF)
-    inj = ((vpx + vnx) * beta_x[i] + (vpy + vny) * beta_y[i]) / (2f0 * b)
-    dis = -gamma * (vpx * vpx + vpy * vpy)
 
-    dq[i] = dq[i] - (inj + dis)
     Ekin[i] = 0.5f0 * mass * (vnx * vnx + vny * vny)
+    #TODO We need to add temperature to the kernel to compute dq as  dq[i] = (gamma/m)* (2*temperature - Ekin[i])
+    dq[i] = (2.f0 * gamma / mass) * (1.0f0 - Ekin[i])  # Placeholder for correct heat bookkeeping
 
     vx[i] = vnx; vy[i] = vny
     return
@@ -241,12 +239,10 @@ function _vv_vel3!(
     vny = a * vpy + (dt / (2f0 * mass)) * (a * f0y[i] + fy[i]) + (b / mass) * beta_y[i]
     vnz = a * vpz + (dt / (2f0 * mass)) * (a * f0z[i] + fz[i]) + (b / mass) * beta_z[i]
 
-    # Heat bookkeeping (properly scaled for GJF)
-    inj = ((vpx + vnx) * beta_x[i] + (vpy + vny) * beta_y[i] + (vpz + vnz) * beta_z[i]) / (2f0 * b)
-    dis = -gamma * (vpx * vpx + vpy * vpy + vpz * vpz)
 
-    dq[i] = dq[i] - (inj + dis)
     Ekin[i] = 0.5f0 * mass * (vnx * vnx + vny * vny + vnz * vnz)
+    #TODO We need to add temperature to the kernel to compute dq as  dq[i] = (gamma/m)* (2*temperature - Ekin[i])
+    dq[i] = (2.f0 * gamma / mass) * (1.5f0 - Ekin[i])  # Placeholder for correct heat bookkeeping
 
     vx[i] = vnx; vy[i] = vny; vz[i] = vnz
     return

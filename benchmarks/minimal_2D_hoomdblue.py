@@ -62,8 +62,8 @@ def benchmark_minimal_2d():
     gamma = 10.0
     temperature = 1.0
     dt = 0.0005
-    n_steps = 100000
-    frame_interval = 10000  # save frames every 10,000 steps
+    n_steps = 1000000
+    frame_interval = 100000  # save frames every 10,000 steps
 
     print(f"N = {N}")
     print(f"Box = {box_Lx} x {box_Ly}")

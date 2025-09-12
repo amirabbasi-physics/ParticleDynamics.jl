@@ -16,6 +16,9 @@ cap = Int32(100)
 # Note: neigh_interval not used with new displacement-based neighbor list algorithm
 gamma = 10f0
 temperature = 1f0
+
+N_steps = 1_000_000
+N_log = 100_000  
 dt = 0.0005f0
 
 # Langevin noise scale per particle: sqrt(2γT) (mass=1)
@@ -63,14 +66,16 @@ types = ["C"]
 Writers.write_gsd_frame!(gsdh, st; diameter= sigma, types_names=types, step=st.step)  # initial frame
 
 # ---- Run ----
-@time for s in 1:1000000
-    Simulation.step!(st, dt)
-    if s % 100000 == 0
+@time for s in 1:N_steps
+    if s % N_log == 0
+        Simulation.step!(st, dt)
         # Only write available observables - Ekin might not be computed yet
         Writers.write_observables_csv!(joinpath(@__DIR__, "obs2d.csv"), s; Epot=st.Epot, Ekin=st.Ekin, dq=st.dq)
         #Writers.write_xyz!(joinpath(@__DIR__, "traj2d.xyz"); rx=st.rx, ry=st.ry, rz=nothing)
         Writers.write_gsd_frame!(gsdh, st; diameter=sigma, types_names=types, step=st.step)
         @info "wrote frame" step=s Epot_sum=sum(st.Epot) Ekin_sum=sum(st.Ekin)
+    else
+        Simulation.step!(st, dt, compute_energy=false)
     end
 end
 
