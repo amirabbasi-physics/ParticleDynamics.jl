@@ -6,9 +6,9 @@ using ..NeighborLists
 using ..NonBondedForces
 using ..Integrators
 
-const NL_CHECK_STRIDE = 10  # only check NL rebuild every N steps to cut overhead
+const NL_CHECK_STRIDE = 20  # only check NL rebuild every N steps to cut overhead
 
-export SimulationState, build_simulation, step!, step_fused!, zero_forces!
+export SimulationState, build_simulation, step!, step_graph!, step_fused!, zero_forces!
 
 # =========================
 #   Simulation state (SoA)
@@ -206,7 +206,7 @@ end
 # =========================
 #   One integrator step
 # =========================
-function step!(st::SimulationState, dt::Float32)
+function step!(st::SimulationState, dt::Float32; compute_energy::Bool=true)
     D = st.rz === nothing ? 2 : 3
 
     # NL rebuild policy using new displacement-based algorithm only
@@ -236,11 +236,21 @@ function step!(st::SimulationState, dt::Float32)
 
     # Forces at t — write directly into f0* to avoid a device-to-device copy
     if D == 2
-        NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.f0x, st.f0y, st.Epot,
-                                       st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+        if compute_energy
+            NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.f0x, st.f0y, st.Epot,
+                                           st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+        else
+            NonBondedForces.lj_forces_soa_noE!(st.rx, st.ry, st.f0x, st.f0y,
+                                               st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+        end
     else
-        NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.Epot,
-                                       st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+        if compute_energy
+            NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.Epot,
+                                           st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+        else
+            NonBondedForces.lj_forces_soa_noE!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
+                                               st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+        end
     end
 
     # Prepare noise ONCE for the step and reuse in both updates
@@ -257,17 +267,114 @@ function step!(st::SimulationState, dt::Float32)
 
     # Forces at t + dt (write into fx,fy[,fz])
     if D == 2
-        NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.fx, st.fy, st.Epot,
-                                       st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+        if compute_energy
+            NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.fx, st.fy, st.Epot,
+                                           st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+        else
+            NonBondedForces.lj_forces_soa_noE!(st.rx, st.ry, st.fx, st.fy,
+                                               st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+        end
         Integrators.vv_velocities_soa!(st.vx, st.vy, st.f0x, st.f0y, st.fx, st.fy,
                                        st.rf_x, st.rf_y, st.dq, st.Ekin, st.vv, dt)
     else
-        NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot,
-                                       st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+        if compute_energy
+            NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot,
+                                           st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+        else
+            NonBondedForces.lj_forces_soa_noE!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz,
+                                               st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+        end
         Integrators.vv_velocities_soa!(st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z,
                                        st.fx, st.fy, st.fz,
                                        st.rf_x, st.rf_y, st.rf_z,
                                        st.dq, st.Ekin, st.vv, dt)
+    end
+
+    st.step += 1
+    return nothing
+end
+
+"""
+    step_graph!(st, dt; compute_energy=true)
+
+Execute a single integrator step using a CUDA Graph-captured sequence for the steady
+kernel chain (forces → noise → positions → forces → velocities). NL checks and rebuilds
+are executed outside the graph when needed. The executable graph is cached and reused
+across calls.
+"""
+function step_graph!(st::SimulationState, dt::Float32; compute_energy::Bool=true)
+    D = st.rz === nothing ? 2 : 3
+
+    # NL rebuild decision outside graph
+    do_check = (st.step % NL_CHECK_STRIDE == 0)
+    if do_check
+        rebuild_needed = if D == 2
+            NeighborLists.update_needed!(st.nbh, st.rx, st.ry;
+                                        skin=st.nbh.skin,
+                                        Lx=st.box2[1], Ly=st.box2[2],
+                                        step=st.step)
+        else
+            NeighborLists.update_needed!(st.nbh, st.rx, st.ry, st.rz;
+                                        skin=st.nbh.skin,
+                                        Lx=st.box3[1], Ly=st.box3[2], Lz=st.box3[3],
+                                        step=st.step)
+        end
+        if rebuild_needed
+            if D == 2
+                NeighborLists.update_neighbors_inplace!(st.nbh, st.rx, st.ry; box = st.box2, step=st.step)
+            else
+                NeighborLists.update_neighbors_inplace!(st.nbh, st.rx, st.ry, st.rz; box = st.box3, step=st.step)
+            end
+        end
+    end
+
+    if D == 2
+        CUDA.@captured begin
+            if compute_energy
+                NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.f0x, st.f0y, st.Epot,
+                                               st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+            else
+                NonBondedForces.lj_forces_soa_noE!(st.rx, st.ry, st.f0x, st.f0y,
+                                                   st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+            end
+            Integrators.vv_prepare_noise!(st.rf_x, st.rf_y, st.vv.noise_scale; beta_z=nothing)
+            Integrators.vv_positions_soa!(st.rx, st.ry, st.vx, st.vy, st.f0x, st.f0y,
+                                          st.rf_x, st.rf_y, st.vv, dt, st.box2::Definitions.Box2)
+            if compute_energy
+                NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.fx, st.fy, st.Epot,
+                                               st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+            else
+                NonBondedForces.lj_forces_soa_noE!(st.rx, st.ry, st.fx, st.fy,
+                                                   st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+            end
+            Integrators.vv_velocities_soa!(st.vx, st.vy, st.f0x, st.f0y, st.fx, st.fy,
+                                           st.rf_x, st.rf_y, st.dq, st.Ekin, st.vv, dt)
+        end
+    else
+        CUDA.@captured begin
+            if compute_energy
+                NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.Epot,
+                                               st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+            else
+                NonBondedForces.lj_forces_soa_noE!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
+                                                   st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+            end
+            Integrators.vv_prepare_noise!(st.rf_x, st.rf_y, st.vv.noise_scale; beta_z=st.rf_z)
+            Integrators.vv_positions_soa!(st.rx, st.ry, st.rz, st.vx, st.vy, st.vz,
+                                          st.f0x, st.f0y, st.f0z,
+                                          st.rf_x, st.rf_y, st.rf_z, st.vv, dt, st.box3::Definitions.Box3)
+            if compute_energy
+                NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot,
+                                               st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+            else
+                NonBondedForces.lj_forces_soa_noE!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz,
+                                                   st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+            end
+            Integrators.vv_velocities_soa!(st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z,
+                                           st.fx, st.fy, st.fz,
+                                           st.rf_x, st.rf_y, st.rf_z,
+                                           st.dq, st.Ekin, st.vv, dt)
+        end
     end
 
     st.step += 1
