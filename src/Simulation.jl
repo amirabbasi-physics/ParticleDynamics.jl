@@ -207,12 +207,24 @@ end
 function step!(st::SimulationState, dt::Float32)
     D = st.rz === nothing ? 2 : 3
 
-    # NL rebuild policy (in-place update, no allocation!)
-    if NeighborLists.update_needed!(st.nbh, st.step, st.neigh_interval)
+    # NL rebuild policy using new displacement-based algorithm only
+    rebuild_needed = if D == 2
+        NeighborLists.update_needed!(st.nbh, st.rx, st.ry; 
+                                   skin=st.nbh.skin, 
+                                   Lx=st.box2[1], Ly=st.box2[2], 
+                                   step=st.step)
+    else
+        NeighborLists.update_needed!(st.nbh, st.rx, st.ry, st.rz; 
+                                   skin=st.nbh.skin,
+                                   Lx=st.box3[1], Ly=st.box3[2], Lz=st.box3[3],
+                                   step=st.step)
+    end
+    
+    if rebuild_needed
         if D == 2
-            NeighborLists.update_neighbors_inplace!(st.nbh, st.rx, st.ry; box = st.box2::Definitions.Box2)
+            NeighborLists.update_neighbors_inplace!(st.nbh, st.rx, st.ry; box = st.box2, step=st.step)
         else
-            NeighborLists.update_neighbors_inplace!(st.nbh, st.rx, st.ry, st.rz; box = st.box3::Definitions.Box3)
+            NeighborLists.update_neighbors_inplace!(st.nbh, st.rx, st.ry, st.rz; box = st.box3, step=st.step)
         end
     end
 
