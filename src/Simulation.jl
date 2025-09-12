@@ -234,22 +234,28 @@ function step!(st::SimulationState, dt::Float32; compute_energy::Bool=true)
         end
     end
 
-    # Forces at t — write directly into f0* to avoid a device-to-device copy
-    if D == 2
-        if compute_energy
-            NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.f0x, st.f0y, st.Epot,
-                                           st.nbh, st.box2::Definitions.Box2, st.pair_lj)
-        else
-            NonBondedForces.lj_forces_soa_noE!(st.rx, st.ry, st.f0x, st.f0y,
-                                               st.nbh, st.box2::Definitions.Box2, st.pair_lj)
-        end
+    # Prepare forces at t (f0*): reuse last step's fx,* via buffer swap when available
+    if st.step > 1
+        st.f0x, st.fx = st.fx, st.f0x
+        st.f0y, st.fy = st.fy, st.f0y
+        if D == 3; st.f0z, st.fz = st.fz, st.f0z; end
     else
-        if compute_energy
-            NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.Epot,
-                                           st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+        if D == 2
+            if compute_energy
+                NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.f0x, st.f0y, st.Epot,
+                                               st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+            else
+                NonBondedForces.lj_forces_soa_noE!(st.rx, st.ry, st.f0x, st.f0y,
+                                                   st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+            end
         else
-            NonBondedForces.lj_forces_soa_noE!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
+            if compute_energy
+                NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.Epot,
                                                st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+            else
+                NonBondedForces.lj_forces_soa_noE!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
+                                                   st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+            end
         end
     end
 
@@ -328,8 +334,13 @@ function step_graph!(st::SimulationState, dt::Float32; compute_energy::Bool=true
         end
     end
 
-    if D == 2
-        CUDA.@captured begin
+    # Set f0 from previous fx via buffer swap if available; otherwise compute once before capture
+    if st.step > 1
+        st.f0x, st.fx = st.fx, st.f0x
+        st.f0y, st.fy = st.fy, st.f0y
+        if D == 3; st.f0z, st.fz = st.fz, st.f0z; end
+    else
+        if D == 2
             if compute_energy
                 NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.f0x, st.f0y, st.Epot,
                                                st.nbh, st.box2::Definitions.Box2, st.pair_lj)
@@ -337,6 +348,19 @@ function step_graph!(st::SimulationState, dt::Float32; compute_energy::Bool=true
                 NonBondedForces.lj_forces_soa_noE!(st.rx, st.ry, st.f0x, st.f0y,
                                                    st.nbh, st.box2::Definitions.Box2, st.pair_lj)
             end
+        else
+            if compute_energy
+                NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.Epot,
+                                               st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+            else
+                NonBondedForces.lj_forces_soa_noE!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
+                                                   st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+            end
+        end
+    end
+
+    if D == 2
+        CUDA.@captured begin
             Integrators.vv_prepare_noise!(st.rf_x, st.rf_y, st.vv.noise_scale; beta_z=nothing)
             Integrators.vv_positions_soa!(st.rx, st.ry, st.vx, st.vy, st.f0x, st.f0y,
                                           st.rf_x, st.rf_y, st.vv, dt, st.box2::Definitions.Box2)
@@ -352,13 +376,6 @@ function step_graph!(st::SimulationState, dt::Float32; compute_energy::Bool=true
         end
     else
         CUDA.@captured begin
-            if compute_energy
-                NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.Epot,
-                                               st.nbh, st.box3::Definitions.Box3, st.pair_lj)
-            else
-                NonBondedForces.lj_forces_soa_noE!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
-                                                   st.nbh, st.box3::Definitions.Box3, st.pair_lj)
-            end
             Integrators.vv_prepare_noise!(st.rf_x, st.rf_y, st.vv.noise_scale; beta_z=st.rf_z)
             Integrators.vv_positions_soa!(st.rx, st.ry, st.rz, st.vx, st.vy, st.vz,
                                           st.f0x, st.f0y, st.f0z,
