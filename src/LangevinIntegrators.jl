@@ -1,4 +1,4 @@
-module Integrators
+module LangevinIntegrators
 
 using CUDA
 using ..Definitions
@@ -7,8 +7,7 @@ export VVParams,
        vv_prepare_noise!,
        vv_positions_soa!,
        vv_velocities_soa!,
-       vv_step_fused_2d!, vv_step_fused_3d!,
-       em_step_soa!
+       vv_step_fused_2d!, vv_step_fused_3d!
 
 # ------------------------------------------------------------------------------
 # Parameters

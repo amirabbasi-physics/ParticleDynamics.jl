@@ -4,7 +4,8 @@ using CUDA
 using ..Definitions
 using ..NeighborLists
 using ..NonBondedForces
-using ..Integrators
+using ..LangevinIntegrators
+using ..BrownianIntegrators
 
 const NL_CHECK_STRIDE = 20  # only check NL rebuild every N steps to cut overhead
 
@@ -45,7 +46,7 @@ mutable struct SimulationState
     pair_lj::Definitions.LJParams{Float32}
 
     # integrator params
-    vv::Integrators.VVParams{Float32}
+    vv::LangevinIntegrators.VVParams{Float32}
 
     # observables buffers
     Epot::CuArray{Float32,1}
@@ -123,7 +124,7 @@ function build_simulation(; D::Int, N::Int,
                            sigma::Float32=1f0,
                            gamma::Float32=1f0,
                            mass::Float32=1f0,
-                           noise_scale::CuArray{Float32,1},
+                           noise_scale::Union{CuArray{Float32,1},Nothing}=nothing,
                            init_temperature::Float32 = 1f0)
 
     # Allocate SoA buffers
@@ -175,7 +176,14 @@ function build_simulation(; D::Int, N::Int,
     end
 
     lj = Definitions.LJParams{Float32}(epsilon, sigma, cutoff)
-    vv = Integrators.VVParams{Float32}(gamma, mass, noise_scale)
+    # Noise scale: if not provided (e.g., Brownian runs), use zeros
+    local ns::CuArray{Float32,1}
+    if noise_scale === nothing
+        ns = CUDA.fill(0.0f0, N)
+    else
+        ns = noise_scale
+    end
+    vv = LangevinIntegrators.VVParams{Float32}(gamma, mass, ns)
 
     Epot = CUDA.CuArray{Float32}(undef, N); fill!(Epot, 0f0)
     dq   = CUDA.CuArray{Float32}(undef, N); fill!(dq, 0f0)
@@ -261,14 +269,14 @@ function step!(st::SimulationState, dt::Float32; compute_energy::Bool=true)
 
     # Prepare noise ONCE for the step and reuse in both updates
     if D == 2
-        Integrators.vv_prepare_noise!(st.rf_x, st.rf_y, st.vv.noise_scale; beta_z=nothing)
-        Integrators.vv_positions_soa!(st.rx, st.ry, st.vx, st.vy, st.f0x, st.f0y,
-                                      st.rf_x, st.rf_y, st.vv, dt, st.box2::Definitions.Box2)
+        LangevinIntegrators.vv_prepare_noise!(st.rf_x, st.rf_y, st.vv.noise_scale; beta_z=nothing)
+        LangevinIntegrators.vv_positions_soa!(st.rx, st.ry, st.vx, st.vy, st.f0x, st.f0y,
+                                              st.rf_x, st.rf_y, st.vv, dt, st.box2::Definitions.Box2)
     else
-        Integrators.vv_prepare_noise!(st.rf_x, st.rf_y, st.vv.noise_scale; beta_z=st.rf_z)
-        Integrators.vv_positions_soa!(st.rx, st.ry, st.rz, st.vx, st.vy, st.vz,
-                                      st.f0x, st.f0y, st.f0z,
-                                      st.rf_x, st.rf_y, st.rf_z, st.vv, dt, st.box3::Definitions.Box3)
+        LangevinIntegrators.vv_prepare_noise!(st.rf_x, st.rf_y, st.vv.noise_scale; beta_z=st.rf_z)
+        LangevinIntegrators.vv_positions_soa!(st.rx, st.ry, st.rz, st.vx, st.vy, st.vz,
+                                              st.f0x, st.f0y, st.f0z,
+                                              st.rf_x, st.rf_y, st.rf_z, st.vv, dt, st.box3::Definitions.Box3)
     end
 
     # Forces at t + dt (write into fx,fy[,fz])
@@ -280,8 +288,8 @@ function step!(st::SimulationState, dt::Float32; compute_energy::Bool=true)
             NonBondedForces.lj_forces_soa_noE!(st.rx, st.ry, st.fx, st.fy,
                                                st.nbh, st.box2::Definitions.Box2, st.pair_lj)
         end
-        Integrators.vv_velocities_soa!(st.vx, st.vy, st.f0x, st.f0y, st.fx, st.fy,
-                                       st.rf_x, st.rf_y, st.dq, st.Ekin, st.vv, dt)
+        LangevinIntegrators.vv_velocities_soa!(st.vx, st.vy, st.f0x, st.f0y, st.fx, st.fy,
+                                               st.rf_x, st.rf_y, st.dq, st.Ekin, st.vv, dt)
     else
         if compute_energy
             NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot,
@@ -290,10 +298,10 @@ function step!(st::SimulationState, dt::Float32; compute_energy::Bool=true)
             NonBondedForces.lj_forces_soa_noE!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz,
                                                st.nbh, st.box3::Definitions.Box3, st.pair_lj)
         end
-        Integrators.vv_velocities_soa!(st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z,
-                                       st.fx, st.fy, st.fz,
-                                       st.rf_x, st.rf_y, st.rf_z,
-                                       st.dq, st.Ekin, st.vv, dt)
+        LangevinIntegrators.vv_velocities_soa!(st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z,
+                                               st.fx, st.fy, st.fz,
+                                               st.rf_x, st.rf_y, st.rf_z,
+                                               st.dq, st.Ekin, st.vv, dt)
     end
 
     st.step += 1
@@ -361,9 +369,9 @@ function step_graph!(st::SimulationState, dt::Float32; compute_energy::Bool=true
 
     if D == 2
         CUDA.@captured begin
-            Integrators.vv_prepare_noise!(st.rf_x, st.rf_y, st.vv.noise_scale; beta_z=nothing)
-            Integrators.vv_positions_soa!(st.rx, st.ry, st.vx, st.vy, st.f0x, st.f0y,
-                                          st.rf_x, st.rf_y, st.vv, dt, st.box2::Definitions.Box2)
+            LangevinIntegrators.vv_prepare_noise!(st.rf_x, st.rf_y, st.vv.noise_scale; beta_z=nothing)
+            LangevinIntegrators.vv_positions_soa!(st.rx, st.ry, st.vx, st.vy, st.f0x, st.f0y,
+                                                  st.rf_x, st.rf_y, st.vv, dt, st.box2::Definitions.Box2)
             if compute_energy
                 NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.fx, st.fy, st.Epot,
                                                st.nbh, st.box2::Definitions.Box2, st.pair_lj)
@@ -371,15 +379,15 @@ function step_graph!(st::SimulationState, dt::Float32; compute_energy::Bool=true
                 NonBondedForces.lj_forces_soa_noE!(st.rx, st.ry, st.fx, st.fy,
                                                    st.nbh, st.box2::Definitions.Box2, st.pair_lj)
             end
-            Integrators.vv_velocities_soa!(st.vx, st.vy, st.f0x, st.f0y, st.fx, st.fy,
-                                           st.rf_x, st.rf_y, st.dq, st.Ekin, st.vv, dt)
+            LangevinIntegrators.vv_velocities_soa!(st.vx, st.vy, st.f0x, st.f0y, st.fx, st.fy,
+                                                   st.rf_x, st.rf_y, st.dq, st.Ekin, st.vv, dt)
         end
     else
         CUDA.@captured begin
-            Integrators.vv_prepare_noise!(st.rf_x, st.rf_y, st.vv.noise_scale; beta_z=st.rf_z)
-            Integrators.vv_positions_soa!(st.rx, st.ry, st.rz, st.vx, st.vy, st.vz,
-                                          st.f0x, st.f0y, st.f0z,
-                                          st.rf_x, st.rf_y, st.rf_z, st.vv, dt, st.box3::Definitions.Box3)
+            LangevinIntegrators.vv_prepare_noise!(st.rf_x, st.rf_y, st.vv.noise_scale; beta_z=st.rf_z)
+            LangevinIntegrators.vv_positions_soa!(st.rx, st.ry, st.rz, st.vx, st.vy, st.vz,
+                                                  st.f0x, st.f0y, st.f0z,
+                                                  st.rf_x, st.rf_y, st.rf_z, st.vv, dt, st.box3::Definitions.Box3)
             if compute_energy
                 NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot,
                                                st.nbh, st.box3::Definitions.Box3, st.pair_lj)
@@ -387,15 +395,103 @@ function step_graph!(st::SimulationState, dt::Float32; compute_energy::Bool=true
                 NonBondedForces.lj_forces_soa_noE!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz,
                                                    st.nbh, st.box3::Definitions.Box3, st.pair_lj)
             end
-            Integrators.vv_velocities_soa!(st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z,
-                                           st.fx, st.fy, st.fz,
-                                           st.rf_x, st.rf_y, st.rf_z,
-                                           st.dq, st.Ekin, st.vv, dt)
+            LangevinIntegrators.vv_velocities_soa!(st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z,
+                                                   st.fx, st.fy, st.fz,
+                                                   st.rf_x, st.rf_y, st.rf_z,
+                                                   st.dq, st.Ekin, st.vv, dt)
         end
     end
 
     st.step += 1
     return nothing
+end
+
+"""
+    step!(st, vv::LangevinIntegrators.VVParams{Float32}, dt; compute_energy=true)
+
+Run one Langevin (GJF/Velocity-Verlet style) step using the provided integrator
+parameters instead of `st.vv`. This allows passing different noise scales or
+parameters without rebuilding the simulation.
+"""
+function step!(st::SimulationState, vv::LangevinIntegrators.VVParams{Float32}, dt::Float32; compute_energy::Bool=true)
+    old = st.vv
+    st.vv = vv
+    try
+        return step!(st, dt; compute_energy)
+    finally
+        st.vv = old
+    end
+end
+
+"""
+    step!(st, bp::BrownianIntegrators.BrownianParams{Float32}, dt; compute_energy=true)
+
+Brownian dynamics (overdamped) Euler–Maruyama midpoint step with Sekimoto heat.
+This uses positions-only dynamics (no kinetic energy). Velocities buffers in the
+state are reused as temporary storage for midpoint positions.
+"""
+function step!(st::SimulationState, bp::BrownianIntegrators.BrownianParams{Float32}, dt::Float32; compute_energy::Bool=true)
+    D = st.rz === nothing ? 2 : 3
+
+    do_check = (st.step % NL_CHECK_STRIDE == 0)
+    if do_check
+        rebuild_needed = if D == 2
+            NeighborLists.update_needed!(st.nbh, st.rx, st.ry; skin=st.nbh.skin, Lx=st.box2[1], Ly=st.box2[2], step=st.step)
+        else
+            NeighborLists.update_needed!(st.nbh, st.rx, st.ry, st.rz; skin=st.nbh.skin, Lx=st.box3[1], Ly=st.box3[2], Lz=st.box3[3], step=st.step)
+        end
+        if rebuild_needed
+            if D == 2
+                NeighborLists.update_neighbors_inplace!(st.nbh, st.rx, st.ry; box=st.box2, step=st.step)
+            else
+                NeighborLists.update_neighbors_inplace!(st.nbh, st.rx, st.ry, st.rz; box=st.box3, step=st.step)
+            end
+        end
+    end
+
+    if st.step == 0
+        if D == 2
+            NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+        else
+            NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+        end
+    end
+
+    μ = 1f0 / bp.γ
+    Dth = bp.kT / bp.γ
+    sqrt2Ddt = sqrt(2f0*Dth*dt)
+
+    if D == 2
+        BrownianIntegrators.bd_prepare_midpoint_2d!(st.rx, st.ry, st.fx, st.fy, st.rf_x, st.rf_y, st.vx, st.vy, μ, sqrt2Ddt, dt, st.box2::Definitions.Box2)
+        NonBondedForces.lj_forces_soa_noE!(st.vx, st.vy, st.f0x, st.f0y, st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+        BrownianIntegrators.bd_finish_step_2d!(st.rx, st.ry, st.f0x, st.f0y, st.rf_x, st.rf_y, μ, sqrt2Ddt, dt, st.dq, st.box2::Definitions.Box2)
+        if compute_energy
+            NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+        else
+            NonBondedForces.lj_forces_soa_noE!(st.rx, st.ry, st.fx, st.fy, st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+        end
+    else
+        BrownianIntegrators.bd_prepare_midpoint_3d!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.rf_x, st.rf_y, st.rf_z, st.vx, st.vy, st.vz, μ, sqrt2Ddt, dt, st.box3::Definitions.Box3)
+        NonBondedForces.lj_forces_soa_noE!(st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z, st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+        BrownianIntegrators.bd_finish_step_3d!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.rf_x, st.rf_y, st.rf_z, μ, sqrt2Ddt, dt, st.dq, st.box3::Definitions.Box3)
+        if compute_energy
+            NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+        else
+            NonBondedForces.lj_forces_soa_noE!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+        end
+    end
+
+    st.step += 1
+    return nothing
+end
+
+"""
+    step_bd!(st, dt, bp; compute_energy=true)
+
+Deprecated thin wrapper. Use `step!(st, bp, dt; ...)` instead.
+"""
+function step_bd!(st::SimulationState, dt::Float32, bp::BrownianIntegrators.BrownianParams{Float32}; compute_energy::Bool=true)
+    return step!(st, bp, dt; compute_energy)
 end
 
 end # module
