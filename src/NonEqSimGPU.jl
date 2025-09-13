@@ -10,6 +10,7 @@ include("Initialize.jl")
 include("NeighborLists.jl")
 include("NonBondedForces.jl")
 include("LangevinIntegrators.jl")
+include("BrownianIntegrators.jl")
 include("Simulation.jl")
 include("Writers.jl")
 
