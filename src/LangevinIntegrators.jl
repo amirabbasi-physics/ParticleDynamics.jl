@@ -3,7 +3,7 @@ module Integrators
 using CUDA
 using ..Definitions
 
-export VVParams, EMParams,
+export VVParams,
        vv_prepare_noise!,
        vv_positions_soa!,
        vv_velocities_soa!,
@@ -18,10 +18,6 @@ struct VVParams{T}
     gamma::T                 # friction coefficient
     mass::T                  # particle mass
     noise_scale::CuArray{Float32,1}   # per-particle noise scale sqrt(2*gamma*kT*dt)
-end
-
-struct EMParams{T}
-    noise_scale::CuArray{Float32,1}
 end
 
 # ------------------------------------------------------------------------------
@@ -275,45 +271,6 @@ function vv_velocities_soa!(
     N = length(vx); threads = (N < 100_000) ? 128 : 256; blocks = cld(N, threads)
     k = CUDA.@cuda launch=false _vv_vel3!(vx, vy, vz, f0x, f0y, f0z, fx, fy, fz, beta_x, beta_y, beta_z, dq, Ekin, params.gamma, params.mass, dt)
     k(vx, vy, vz, f0x, f0y, f0z, fx, fy, fz, beta_x, beta_y, beta_z, dq, Ekin, params.gamma, params.mass, dt; threads, blocks)
-    return nothing
-end
-
-# ------------------------------------------------------------------------------
-# Euler–Maruyama (unchanged; still generates noise inside kernel)
-# ------------------------------------------------------------------------------
-
-function _em2!(
-    rx::CuDeviceVector{Float32}, ry::CuDeviceVector{Float32},
-    vx::CuDeviceVector{Float32}, vy::CuDeviceVector{Float32},
-    fx::CuDeviceVector{Float32}, fy::CuDeviceVector{Float32},
-    dq::CuDeviceVector{Float32},
-    dt::Float32, noise_scale::CuDeviceVector{Float32},
-    Lx::Float32, Ly::Float32
-)
-    i = (blockIdx().x-1)*blockDim().x + threadIdx().x
-    N = length(rx); if i > N; return; end
-    # local noise for EM (not shared across substeps)
-    beta_x = noise_scale[i] * randn(Float32)
-    beta_y = noise_scale[i] * randn(Float32)
-    vx[i] = fx[i] + beta_x
-    vy[i] = fy[i] + beta_y
-    x = rx[i] + dt*vx[i]
-    y = ry[i] + dt*vy[i]
-    x = (x + Lx/2); x -= floor(x/Lx)*Lx; x -= Lx/2
-    y = (y + Ly/2); y -= floor(y/Ly)*Ly; y -= Ly/2
-    rx[i] = x; ry[i] = y
-    dq[i] = dq[i] + (fx[i]*vx[i] + fy[i]*vy[i])
-    return
-end
-
-function em_step_soa!(rx::CuArray{Float32,1}, ry::CuArray{Float32,1},
-                      vx::CuArray{Float32,1}, vy::CuArray{Float32,1},
-                      fx::CuArray{Float32,1}, fy::CuArray{Float32,1},
-                      dq::CuArray{Float32,1},
-                      params::EMParams{Float32}, dt::Float32, box::Definitions.Box2)
-    N = length(rx); threads = (N < 100_000) ? 128 : 256; blocks = cld(N,threads)
-    k = CUDA.@cuda launch=false _em2!(rx, ry, vx, vy, fx, fy, dq, dt, params.noise_scale, box[1], box[2])
-    k(rx, ry, vx, vy, fx, fy, dq, dt, params.noise_scale, box[1], box[2]; threads, blocks)
     return nothing
 end
 

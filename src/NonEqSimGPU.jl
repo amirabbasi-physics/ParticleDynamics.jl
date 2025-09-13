@@ -9,7 +9,7 @@ include("Definitions.jl")
 include("Initialize.jl")
 include("NeighborLists.jl")
 include("NonBondedForces.jl")
-include("Integrators.jl")
+include("LangevinIntegrators.jl")
 include("Simulation.jl")
 include("Writers.jl")
 
