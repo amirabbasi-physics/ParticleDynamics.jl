@@ -165,6 +165,8 @@ function lj_forces_soa_noE!(rx::CuArray{Float32,1}, ry::CuArray{Float32,1}, rz::
 end
 
 
+ 
+
 @inline function lj_pair_3d(dx::Float32, dy::Float32, dz::Float32, r2::Float32, ϵ::Float32, σ::Float32)
     invr2 = 1f0 / r2
     s2    = (σ*σ) * invr2
