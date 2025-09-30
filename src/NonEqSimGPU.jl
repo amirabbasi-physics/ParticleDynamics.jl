@@ -12,7 +12,10 @@ include("NonBondedForces.jl")
 include("LangevinIntegrators.jl")
 include("BrownianIntegrators.jl")
 include("Simulation.jl")
+include("Filters.jl")
 include("Writers.jl")
+
+export Filters
 
 println("##########################################################")
 println("                  NonEqSimGPU (SoA) Loaded                ")

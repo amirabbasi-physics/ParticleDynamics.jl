@@ -1,92 +1,76 @@
 using NonEqSimGPU
+using NonEqSimGPU: Simulation
+using NonEqSimGPU.Filters
 using CUDA
-using StaticArrays
 using Test
-using LinearAlgebra
+
+CUDA.allowscalar(false)
 
 @testset "NonEqSimGPU.jl" begin
-    
-    function test_update_positions_lf!()
-        Npart = 40000
-        dt = 0.1f0
-        box = SVector{3,Float32}(10.0, 10.0, 10.0)
-        r = CuVector([SVector{3,Float32}(rand(Float32, 3) .* 10.0f0 .- 5.0f0) for _ in 1:Npart])
-        v = CuVector([SVector{3,Float32}(rand(Float32, 3) .* 2.0f0 .- 1.0f0) for _ in 1:Npart])
-        r_old = Array(r)  # Convert to array for easy manipulation
-        v_old = Array(v)
-    
-        # Call the function to be tested
-        update_positions_lf!(r, v, dt, box)
-    
-        # Calculate expected new positions
-        expected_positions = [mod.((r_old[i] .+ (dt/2) .* v_old[i]) .+ box ./ 2, box) .- box ./ 2 for i in 1:Npart]
-    
-        # Convert GPU array to CPU array for comparison
-        r_new = Array(r)
-    
-        # Compare actual positions with expected ones
-        @test all(isapprox.(r_new, expected_positions))
-    end
-    
-    test_update_positions_lf!()
+    @testset "Filters" begin
+        N = 16
+        dt = 0.002f0
+        st = Simulation.build_simulation(D=3,
+                                         N=N,
+                                         box=(20f0, 20f0, 20f0),
+                                         cutoff=2.5f0,
+                                         skin=0.3f0,
+                                         cap=Int32(32),
+                                         neigh_interval=5,
+                                         epsilon=1f0,
+                                         sigma=1f0,
+                                         gamma=1f0,
+                                         init_temperature=1f0)
 
+        type_host = vcat(fill(Int32(1), N ÷ 2), fill(Int32(2), N - N ÷ 2))
+        st.typeid .= CuArray(type_host)
 
-    """
-    N = 2
-    T = Float32
-    I = Int32
+        cold_filter = Filters.TypeIDs(1)
+        hot_filter  = Filters.TypeIDs(2)
 
-    function cpu_neighbor_list(r::Vector{SVector{N,T}}, neigh_cut_off::T, box::SVector{N,T})
-        Npart = length(r)
-        NNeigh = Npart - 1
-        neighbors = zeros(I, Npart, NNeigh)
-        ncut_off² = neigh_cut_off^2
+        cold_sel = Filters.selection(st, cold_filter)
+        hot_sel  = Filters.selection(st, hot_filter)
 
-        for i = 1:Npart
-            pos₁ = r[i]
-            idx = 0
+        @test Filters.count(st, cold_filter) == N ÷ 2
+        @test Filters.count(st, hot_filter) == N - N ÷ 2
+        @test Filters.resolve(cold_filter, st) == cold_sel.host
 
-            for j = 1:Npart
-                if j != i
-                    pos₂ = r[j]
-                    dx = pos₁[1] - pos₂[1]
-                    dy = pos₁[2] - pos₂[2]
+        Filters.set_langevin_temperature!(st, dt,
+            cold_filter => 0.5f0,
+            hot_filter  => 2.0f0)
 
-                    dx = (2abs(dx) > box[1]) ? dx - sign(dx) * box[1] : dx
-                    dy = (2abs(dy) > box[2]) ? dy - sign(dy) * box[2] : dy
+        ns = Array(st.vv.noise_scale)
+        scale_cold = sqrt(2f0 * st.vv.gamma * 0.5f0 * dt)
+        scale_hot  = sqrt(2f0 * st.vv.gamma * 2.0f0 * dt)
 
-                    dr² = dx*dx + dy*dy
+        @test all(abs.(ns[cold_sel.host] .- scale_cold) .< 1f-6)
+        @test all(abs.(ns[hot_sel.host]  .- scale_hot)  .< 1f-6)
 
-                    if 0 < dr² < ncut_off²
-                        idx += 1
-                        neighbors[i, idx] = j
-                    end
-                end
-            end
-        end
+        Filters.assign_scalar!(st.dq, st; filter=cold_filter, value=1.0f0)
+        Filters.assign_scalar!(st.dq, st; filter=hot_filter, value=2.0f0)
+        CUDA.synchronize()
 
-        return neighbors
-    end
+        dq_host = Array(st.dq)
+        @test all(dq_host[cold_sel.host] .== 1.0f0)
+        @test all(dq_host[hot_sel.host]  .== 2.0f0)
 
-    function test_neighbor_list()
-        Npart = 40000
-        box = @SVector [100.0f0, 100.0f0]
-        r_host = [10*rand(SVector{N,T}) - box/2 for _ in 1:Npart]
-        r = CuArray(r_host)
-        neigh_cut_off = 5.0f0
+        values = Float32.(1:Filters.count(cold_sel))
+        Filters.assign_values!(st.dq, st; filter=cold_filter, values=values)
+        CUDA.synchronize()
 
-        neighbors_host = cpu_neighbor_list(r_host, neigh_cut_off, box)
-        Neighbors = CUDA.zeros(I, Npart, Npart-1)
+        dq_host = Array(st.dq)
+        @test dq_host[cold_sel.host] == values
+        @test Filters.sum(st.dq, st, cold_filter) ≈ Base.sum(values) atol=1f-5
+        @test Filters.sum(dq_host, hot_sel.host) ≈ Base.sum(fill(2.0f0, Filters.count(hot_sel))) atol=1f-5
 
-        neighbor_list!(r, Neighbors, neigh_cut_off, box)
+        gathered = Filters.gather(st.dq, st, cold_filter)
+        @test gathered == values
 
-        @test Array(Neighbors) == neighbors_host
+        idx_sel = Filters.selection(st, Filters.Indices(collect(1:3:10)))
+        Filters.assign_scalar!(st.dq, idx_sel, 5.0f0)
+        CUDA.synchronize()
+        dq_host = Array(st.dq)
+        @test all(dq_host[idx_sel.host] .== 5.0f0)
     end
 
-    test_neighbor_list()
-    """
-
-
-    
-    
 end

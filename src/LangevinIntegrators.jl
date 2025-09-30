@@ -184,6 +184,7 @@ function _vv_vel2!(
     fx::CuDeviceVector{Float32},  fy::CuDeviceVector{Float32},
     beta_x::CuDeviceVector{Float32}, beta_y::CuDeviceVector{Float32},
     dq::CuDeviceVector{Float32},  Ekin::CuDeviceVector{Float32},
+    noise_scale::CuDeviceVector{Float32},
     gamma::Float32, mass::Float32, dt::Float32
 )
     i = (blockIdx().x-1)*blockDim().x + threadIdx().x
@@ -202,9 +203,15 @@ function _vv_vel2!(
     vny = a * vpy + (dt / (2f0 * mass)) * (a * f0y[i] + fy[i]) + (b / mass) * beta_y[i]
 
 
-    Ekin[i] = 0.5f0 * mass * (vnx * vnx + vny * vny)
-    #TODO We need to add temperature to the kernel to compute dq as  dq[i] = (gamma/m)* (2*temperature - Ekin[i])
-    dq[i] = (2.f0 * gamma / mass) * (1.0f0 - Ekin[i])  # Placeholder for correct heat bookkeeping
+    # Kinetic energy and heat exchange with the bath
+    v2 = vnx * vnx + vny * vny
+    Ekin[i] = 0.5f0 * mass * v2
+    # infer per-particle bath temperature from noise_scale: s^2 = 2 γ kT Δt (k_B=1)
+    s = noise_scale[i]
+    Tbath = (s * s) / (2f0 * gamma * dt)
+    Ddof = 2f0
+    # dq > 0: heat from particle to bath; dq < 0: heat absorbed from bath
+    dq[i] = dq[i] + gamma * (v2 - Ddof * Tbath / mass) * dt
 
     vx[i] = vnx; vy[i] = vny
     return
@@ -216,6 +223,7 @@ function _vv_vel3!(
     fx::CuDeviceVector{Float32},  fy::CuDeviceVector{Float32},  fz::CuDeviceVector{Float32},
     beta_x::CuDeviceVector{Float32}, beta_y::CuDeviceVector{Float32}, beta_z::CuDeviceVector{Float32},
     dq::CuDeviceVector{Float32},  Ekin::CuDeviceVector{Float32},
+    noise_scale::CuDeviceVector{Float32},
     gamma::Float32, mass::Float32, dt::Float32
 )
     i = (blockIdx().x-1)*blockDim().x + threadIdx().x
@@ -235,9 +243,13 @@ function _vv_vel3!(
     vnz = a * vpz + (dt / (2f0 * mass)) * (a * f0z[i] + fz[i]) + (b / mass) * beta_z[i]
 
 
-    Ekin[i] = 0.5f0 * mass * (vnx * vnx + vny * vny + vnz * vnz)
-    #TODO We need to add temperature to the kernel to compute dq as  dq[i] = (gamma/m)* (2*temperature - Ekin[i])
-    dq[i] = (2.f0 * gamma / mass) * (1.5f0 - Ekin[i])  # Placeholder for correct heat bookkeeping
+    v2 = vnx * vnx + vny * vny + vnz * vnz
+    Ekin[i] = 0.5f0 * mass * v2
+    # per-particle bath temperature from noise_scale
+    s = noise_scale[i]
+    Tbath = (s * s) / (2f0 * gamma * dt)
+    Ddof = 3f0
+    dq[i] = dq[i] + gamma * (v2 - Ddof * Tbath / mass) * dt
 
     vx[i] = vnx; vy[i] = vny; vz[i] = vnz
     return
@@ -253,8 +265,8 @@ function vv_velocities_soa!(
     params::VVParams{Float32}, dt::Float32
 )
     N = length(vx); threads = (N < 100_000) ? 128 : 256; blocks = cld(N, threads)
-    k = CUDA.@cuda launch=false _vv_vel2!(vx, vy, f0x, f0y, fx, fy, beta_x, beta_y, dq, Ekin, params.gamma, params.mass, dt)
-    k(vx, vy, f0x, f0y, fx, fy, beta_x, beta_y, dq, Ekin, params.gamma, params.mass, dt; threads, blocks)
+    k = CUDA.@cuda launch=false _vv_vel2!(vx, vy, f0x, f0y, fx, fy, beta_x, beta_y, dq, Ekin, params.noise_scale, params.gamma, params.mass, dt)
+    k(vx, vy, f0x, f0y, fx, fy, beta_x, beta_y, dq, Ekin, params.noise_scale, params.gamma, params.mass, dt; threads, blocks)
     return nothing
 end
 
@@ -268,8 +280,8 @@ function vv_velocities_soa!(
     params::VVParams{Float32}, dt::Float32
 )
     N = length(vx); threads = (N < 100_000) ? 128 : 256; blocks = cld(N, threads)
-    k = CUDA.@cuda launch=false _vv_vel3!(vx, vy, vz, f0x, f0y, f0z, fx, fy, fz, beta_x, beta_y, beta_z, dq, Ekin, params.gamma, params.mass, dt)
-    k(vx, vy, vz, f0x, f0y, f0z, fx, fy, fz, beta_x, beta_y, beta_z, dq, Ekin, params.gamma, params.mass, dt; threads, blocks)
+    k = CUDA.@cuda launch=false _vv_vel3!(vx, vy, vz, f0x, f0y, f0z, fx, fy, fz, beta_x, beta_y, beta_z, dq, Ekin, params.noise_scale, params.gamma, params.mass, dt)
+    k(vx, vy, vz, f0x, f0y, f0z, fx, fy, fz, beta_x, beta_y, beta_z, dq, Ekin, params.noise_scale, params.gamma, params.mass, dt; threads, blocks)
     return nothing
 end
 
