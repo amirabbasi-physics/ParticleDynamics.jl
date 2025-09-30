@@ -46,14 +46,14 @@ end
 
 # Simulation parameters
 N = 10_000
-BOX = (150.0f0, 150.0f0)
+BOX = (200.0f0, 200.0f0)
 SIGMA = 1f0
 EPS   = 100f0
 RCUT  = Float32(2^(1/6) * SIGMA)
 GAMMA = 100f0
 DT    = 0.00001f0
-NSTEPS = 10_000_000
-LOG_INTERVAL = 1_000_000
+NSTEPS = 1_000_000
+LOG_INTERVAL = 100_000
 
 T_COLD = 1.f0
 T_HOT  = 1000.0f0

@@ -21,6 +21,12 @@ struct LJParams{T}
     rcut::T
 end
 
+# Parameters for LJ with type-based size mixing (σ_ij = 0.5(σ_i+σ_j))
+struct LJMixParams{T}
+    ϵ::T              # global epsilon (can be extended later to per-type)
+    rcut_factor::T    # factor applied to σ_ij to get cutoff (e.g., 2^(1/6))
+end
+
 @inline clamp_cap(idx::IntX, cap::IntX) = ifelse(idx <= cap, idx, IntX(0))
 
 # ---------------- PBC wrappers (SoA) ----------------

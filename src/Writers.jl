@@ -282,7 +282,7 @@ Usage (2D):
 
 Usage (3D) is identical; z-components are written when present.
 """
-function write_gsd_frame!(h, st; diameter::Real=1.0, types_names::Vector{String}=["A"], step::Int=0)
+function write_gsd_frame!(h, st; diameter=1.0, types_names=["A"], step::Int=0)
     N = length(st.rx)
 
     # positions and velocities (N×3 Float32)
@@ -311,9 +311,18 @@ function write_gsd_frame!(h, st; diameter::Real=1.0, types_names::Vector{String}
     GSDFiles.write_configuration_dimensions!(h, D)
     GSDFiles.write_configuration_box!(h, Float32.(box6))
     GSDFiles.write_particles_N!(h, N)
-    GSDFiles.write_particles_types!(h, types_names)
+    GSDFiles.write_particles_types!(h, Vector{String}(types_names))
     GSDFiles.write_particles_typeid!(h, tid_0based)
-    GSDFiles.write_particles_diameter!(h, fill(Float32(diameter), N))
+    local diam::Vector{Float32}
+    if diameter isa Number
+        diam = fill(Float32(diameter), N)
+    elseif diameter isa AbstractVector
+        @assert length(diameter) == N "diameter vector length $(length(diameter)) must equal N=$(N)"
+        diam = Float32.(collect(diameter))
+    else
+        error("Unsupported diameter type: $(typeof(diameter))")
+    end
+    GSDFiles.write_particles_diameter!(h, diam)
     GSDFiles.write_particles_position!(h, Float32.(posM))
     GSDFiles.write_particles_velocity!(h, Float32.(velM))
     GSDFiles.end_frame!(h)

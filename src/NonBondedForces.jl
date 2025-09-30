@@ -164,6 +164,57 @@ function lj_forces_soa_noE!(rx::CuArray{Float32,1}, ry::CuArray{Float32,1}, rz::
     return nothing
 end
 
+# Overloads for stencil neighbor lists (reuse the same CSR kernels)
+function lj_forces_soa_noE!(rx::CuArray{Float32,1}, ry::CuArray{Float32,1},
+                            fx::CuArray{Float32,1}, fy::CuArray{Float32,1},
+                            nbh::NeighborLists.StencilNeighborMatrix,
+                            box::Definitions.Box2, params::Definitions.LJParams{Float32})
+    N = length(rx)
+    threads = (N < 50_000) ? 64 : ((N < 200_000) ? 128 : 256)
+    blocks  = cld(N, threads)
+
+    cutoff2 = params.rcut * params.rcut
+    Lx = Float32(box[1]); Ly = Float32(box[2])
+    halfLx = 0.5f0*Lx; halfLy = 0.5f0*Ly
+
+    k = CUDA.@cuda launch=false _lj2_csr_noE_kernel!(
+        rx, ry, fx, fy,
+        nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+        Lx, Ly, halfLx, halfLy,
+        params.ϵ, params.σ, cutoff2
+    )
+    k(rx, ry, fx, fy,
+      nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+      Lx, Ly, halfLx, halfLy,
+      params.ϵ, params.σ, cutoff2; threads, blocks)
+    return nothing
+end
+
+function lj_forces_soa_noE!(rx::CuArray{Float32,1}, ry::CuArray{Float32,1}, rz::CuArray{Float32,1},
+                            fx::CuArray{Float32,1}, fy::CuArray{Float32,1}, fz::CuArray{Float32,1},
+                            nbh::NeighborLists.StencilNeighborMatrix,
+                            box::Definitions.Box3, params::Definitions.LJParams{Float32})
+    N = length(rx)
+    threads = (N < 50_000) ? 64 : ((N < 200_000) ? 128 : 256)
+    blocks  = cld(N, threads)
+
+    cutoff2 = params.rcut * params.rcut
+    Lx = Float32(box[1]); Ly = Float32(box[2]); Lz = Float32(box[3])
+    halfLx = 0.5f0*Lx; halfLy = 0.5f0*Ly; halfLz = 0.5f0*Lz
+
+    k = CUDA.@cuda launch=false _lj3_csr_noE_kernel!(
+        rx, ry, rz, fx, fy, fz,
+        nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+        Lx, Ly, Lz, halfLx, halfLy, halfLz,
+        params.ϵ, params.σ, cutoff2
+    )
+    k(rx, ry, rz, fx, fy, fz,
+      nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+      Lx, Ly, Lz, halfLx, halfLy, halfLz,
+      params.ϵ, params.σ, cutoff2; threads, blocks)
+    return nothing
+end
+
 
  
 
@@ -217,6 +268,262 @@ function _lj2_csr_kernel!(
 
     fx[i] = accx; fy[i] = accy; Epot[i] = eacc
     return
+end
+
+# ───────────────────────────────────────────────────────────────────────────────
+# Mixed-σ LJ (per-particle size; Lorentz mixing, global ϵ)
+# ───────────────────────────────────────────────────────────────────────────────
+
+function _lj2_csr_kernel_mixed!(
+    rx::CuDeviceVector{Float32}, ry::CuDeviceVector{Float32},
+    fx::CuDeviceVector{Float32}, fy::CuDeviceVector{Float32},
+    Epot::CuDeviceVector{Float32},
+    neighbors_index::CuDeviceVector{Int32},
+    neighbors_flat::CuDeviceVector{Int32},
+    counts::CuDeviceVector{Int32},
+    Lx::Float32, Ly::Float32, halfLx::Float32, halfLy::Float32,
+    ϵ::Float32,
+    σp::CuDeviceVector{Float32}, rcut_factor::Float32
+)
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    xi = rx[i]; yi = ry[i]
+    accx = 0f0; accy = 0f0; eacc = 0f0
+    base  = neighbors_index[i]
+    nlist = counts[i]
+    σi = σp[i]
+    @inbounds for t in 0:Int(nlist-1)
+        j = neighbors_flat[base + t + 1]
+        dx = mic_fast(xi - rx[j], halfLx, Lx)
+        dy = mic_fast(yi - ry[j], halfLy, Ly)
+        r2 = muladd(dx, dx, dy*dy)
+        σij = 0.5f0 * (σi + σp[j])
+        rcut_ij = rcut_factor * σij
+        if (r2 > 0f0) & (r2 < rcut_ij*rcut_ij)
+            invr2 = 1f0 / r2
+            s2    = (σij*σij) * invr2
+            s6    = s2*s2*s2
+            s12   = s6*s6
+            f_over_r = 24f0*ϵ*(2f0*s12 - s6)*invr2
+            accx += f_over_r * dx
+            accy += f_over_r * dy
+            eacc += 0.5f0 * (4f0*ϵ*(s12 - s6))
+        end
+    end
+    fx[i] = accx; fy[i] = accy; Epot[i] = eacc
+    return
+end
+
+function _lj3_csr_kernel_mixed!(
+    rx::CuDeviceVector{Float32}, ry::CuDeviceVector{Float32}, rz::CuDeviceVector{Float32},
+    fx::CuDeviceVector{Float32}, fy::CuDeviceVector{Float32}, fz::CuDeviceVector{Float32},
+    Epot::CuDeviceVector{Float32},
+    neighbors_index::CuDeviceVector{Int32},
+    neighbors_flat::CuDeviceVector{Int32},
+    counts::CuDeviceVector{Int32},
+    Lx::Float32, Ly::Float32, Lz::Float32, halfLx::Float32, halfLy::Float32, halfLz::Float32,
+    ϵ::Float32,
+    σp::CuDeviceVector{Float32}, rcut_factor::Float32
+)
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    xi = rx[i]; yi = ry[i]; zi = rz[i]
+    accx = 0f0; accy = 0f0; accz = 0f0; eacc = 0f0
+    base  = neighbors_index[i]
+    nlist = counts[i]
+    σi = σp[i]
+    @inbounds for t in 0:Int(nlist-1)
+        j = neighbors_flat[base + t + 1]
+        dx = mic_fast(xi - rx[j], halfLx, Lx)
+        dy = mic_fast(yi - ry[j], halfLy, Ly)
+        dz = mic_fast(zi - rz[j], halfLz, Lz)
+        r2 = muladd(dx, dx, muladd(dy, dy, dz*dz))
+        σij = 0.5f0 * (σi + σp[j])
+        rcut_ij = rcut_factor * σij
+        if (r2 > 0f0) & (r2 < rcut_ij*rcut_ij)
+            invr2 = 1f0 / r2
+            s2    = (σij*σij) * invr2
+            s6    = s2*s2*s2
+            s12   = s6*s6
+            f_over_r = 24f0*ϵ*(2f0*s12 - s6)*invr2
+            accx += f_over_r * dx
+            accy += f_over_r * dy
+            accz += f_over_r * dz
+            eacc += 0.5f0 * (4f0*ϵ*(s12 - s6))
+        end
+    end
+    fx[i] = accx; fy[i] = accy; fz[i] = accz; Epot[i] = eacc
+    return
+end
+
+function _lj2_csr_noE_kernel_mixed!(
+    rx::CuDeviceVector{Float32}, ry::CuDeviceVector{Float32},
+    fx::CuDeviceVector{Float32}, fy::CuDeviceVector{Float32},
+    neighbors_index::CuDeviceVector{Int32},
+    neighbors_flat::CuDeviceVector{Int32},
+    counts::CuDeviceVector{Int32},
+    Lx::Float32, Ly::Float32, halfLx::Float32, halfLy::Float32,
+    ϵ::Float32,
+    σp::CuDeviceVector{Float32}, rcut_factor::Float32
+)
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    xi = rx[i]; yi = ry[i]
+    accx = 0f0; accy = 0f0
+    base  = neighbors_index[i]
+    nlist = counts[i]
+    σi = σp[i]
+    @inbounds for t in 0:Int(nlist-1)
+        j = neighbors_flat[base + t + 1]
+        dx = mic_fast(xi - rx[j], halfLx, Lx)
+        dy = mic_fast(yi - ry[j], halfLy, Ly)
+        r2 = muladd(dx, dx, dy*dy)
+        σij = 0.5f0 * (σi + σp[j])
+        rcut_ij = rcut_factor * σij
+        if (r2 > 0f0) & (r2 < rcut_ij*rcut_ij)
+            invr2 = 1f0 / r2
+            s2    = (σij*σij) * invr2
+            s6    = s2*s2*s2
+            s12   = s6*s6
+            f_over_r = 24f0*ϵ*(2f0*s12 - s6)*invr2
+            accx += f_over_r * dx
+            accy += f_over_r * dy
+        end
+    end
+    fx[i] = accx; fy[i] = accy
+    return
+end
+
+function _lj3_csr_noE_kernel_mixed!(
+    rx::CuDeviceVector{Float32}, ry::CuDeviceVector{Float32}, rz::CuDeviceVector{Float32},
+    fx::CuDeviceVector{Float32}, fy::CuDeviceVector{Float32}, fz::CuDeviceVector{Float32},
+    neighbors_index::CuDeviceVector{Int32},
+    neighbors_flat::CuDeviceVector{Int32},
+    counts::CuDeviceVector{Int32},
+    Lx::Float32, Ly::Float32, Lz::Float32, halfLx::Float32, halfLy::Float32, halfLz::Float32,
+    ϵ::Float32,
+    σp::CuDeviceVector{Float32}, rcut_factor::Float32
+)
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    xi = rx[i]; yi = ry[i]; zi = rz[i]
+    accx = 0f0; accy = 0f0; accz = 0f0
+    base  = neighbors_index[i]
+    nlist = counts[i]
+    σi = σp[i]
+    @inbounds for t in 0:Int(nlist-1)
+        j = neighbors_flat[base + t + 1]
+        dx = mic_fast(xi - rx[j], halfLx, Lx)
+        dy = mic_fast(yi - ry[j], halfLy, Ly)
+        dz = mic_fast(zi - rz[j], halfLz, Lz)
+        r2 = muladd(dx, dx, muladd(dy, dy, dz*dz))
+        σij = 0.5f0 * (σi + σp[j])
+        rcut_ij = rcut_factor * σij
+        if (r2 > 0f0) & (r2 < rcut_ij*rcut_ij)
+            invr2 = 1f0 / r2
+            s2    = (σij*σij) * invr2
+            s6    = s2*s2*s2
+            s12   = s6*s6
+            f_over_r = 24f0*ϵ*(2f0*s12 - s6)*invr2
+            accx += f_over_r * dx
+            accy += f_over_r * dy
+            accz += f_over_r * dz
+        end
+    end
+    fx[i] = accx; fy[i] = accy; fz[i] = accz
+    return
+end
+
+function lj_forces_soa_mixed!(rx::CuArray{Float32,1}, ry::CuArray{Float32,1},
+                              fx::CuArray{Float32,1}, fy::CuArray{Float32,1}, Epot::CuArray{Float32,1},
+                              nbh::NeighborLists.AbstractNeighborMatrix,
+                              box::Definitions.Box2,
+                              ϵ::Float32,
+                              σp::CuArray{Float32,1}, rcut_factor::Float32)
+    N = length(rx)
+    threads = (N < 100_000) ? 128 : 256
+    blocks  = cld(N, threads)
+    Lx = Float32(box[1]); Ly = Float32(box[2])
+    halfLx = 0.5f0*Lx; halfLy = 0.5f0*Ly
+    k = CUDA.@cuda launch=false _lj2_csr_kernel_mixed!(
+        rx, ry, fx, fy, Epot,
+        nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+        Lx, Ly, halfLx, halfLy,
+        ϵ, σp, rcut_factor)
+    k(rx, ry, fx, fy, Epot,
+      nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+      Lx, Ly, halfLx, halfLy,
+      ϵ, σp, rcut_factor; threads, blocks)
+    return nothing
+end
+
+function lj_forces_soa_mixed!(rx::CuArray{Float32,1}, ry::CuArray{Float32,1}, rz::CuArray{Float32,1},
+                              fx::CuArray{Float32,1}, fy::CuArray{Float32,1}, fz::CuArray{Float32,1}, Epot::CuArray{Float32,1},
+                              nbh::NeighborLists.AbstractNeighborMatrix,
+                              box::Definitions.Box3,
+                              ϵ::Float32,
+                              σp::CuArray{Float32,1}, rcut_factor::Float32)
+    N = length(rx)
+    threads = (N < 100_000) ? 128 : 256
+    blocks  = cld(N, threads)
+    Lx = Float32(box[1]); Ly = Float32(box[2]); Lz = Float32(box[3])
+    halfLx = 0.5f0*Lx; halfLy = 0.5f0*Ly; halfLz = 0.5f0*Lz
+    k = CUDA.@cuda launch=false _lj3_csr_kernel_mixed!(
+        rx, ry, rz, fx, fy, fz, Epot,
+        nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+        Lx, Ly, Lz, halfLx, halfLy, halfLz,
+        ϵ, σp, rcut_factor)
+    k(rx, ry, rz, fx, fy, fz, Epot,
+      nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+      Lx, Ly, Lz, halfLx, halfLy, halfLz,
+      ϵ, σp, rcut_factor; threads, blocks)
+    return nothing
+end
+
+function lj_forces_soa_noE_mixed!(rx::CuArray{Float32,1}, ry::CuArray{Float32,1},
+                                  fx::CuArray{Float32,1}, fy::CuArray{Float32,1},
+                                  nbh::NeighborLists.AbstractNeighborMatrix,
+                                  box::Definitions.Box2,
+                                  ϵ::Float32,
+                                  σp::CuArray{Float32,1}, rcut_factor::Float32)
+    N = length(rx)
+    threads = (N < 50_000) ? 64 : ((N < 200_000) ? 128 : 256)
+    blocks  = cld(N, threads)
+    Lx = Float32(box[1]); Ly = Float32(box[2])
+    halfLx = 0.5f0*Lx; halfLy = 0.5f0*Ly
+    k = CUDA.@cuda launch=false _lj2_csr_noE_kernel_mixed!(
+        rx, ry, fx, fy,
+        nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+        Lx, Ly, halfLx, halfLy,
+        ϵ, σp, rcut_factor)
+    k(rx, ry, fx, fy,
+      nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+      Lx, Ly, halfLx, halfLy,
+      ϵ, σp, rcut_factor; threads, blocks)
+    return nothing
+end
+
+function lj_forces_soa_noE_mixed!(rx::CuArray{Float32,1}, ry::CuArray{Float32,1}, rz::CuArray{Float32,1},
+                                  fx::CuArray{Float32,1}, fy::CuArray{Float32,1}, fz::CuArray{Float32,1},
+                                  nbh::NeighborLists.AbstractNeighborMatrix,
+                                  box::Definitions.Box3,
+                                  ϵ::Float32,
+                                  σp::CuArray{Float32,1}, rcut_factor::Float32)
+    N = length(rx)
+    threads = (N < 50_000) ? 64 : ((N < 200_000) ? 128 : 256)
+    blocks  = cld(N, threads)
+    Lx = Float32(box[1]); Ly = Float32(box[2]); Lz = Float32(box[3])
+    halfLx = 0.5f0*Lx; halfLy = 0.5f0*Ly; halfLz = 0.5f0*Lz
+    k = CUDA.@cuda launch=false _lj3_csr_noE_kernel_mixed!(
+        rx, ry, rz, fx, fy, fz,
+        nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+        Lx, Ly, Lz, halfLx, halfLy, halfLz,
+        ϵ, σp, rcut_factor)
+    k(rx, ry, rz, fx, fy, fz,
+      nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+      Lx, Ly, Lz, halfLx, halfLy, halfLz,
+      ϵ, σp, rcut_factor; threads, blocks)
+    return nothing
 end
 
 function _lj3_csr_kernel!(
@@ -375,6 +682,59 @@ function lj_forces_soa!(rx::CuArray{Float32,1}, ry::CuArray{Float32,1}, rz::CuAr
     return nothing
 end
 
+# Overloads for stencil neighbor lists (CSR paths)
+function lj_forces_soa!(rx::CuArray{Float32,1}, ry::CuArray{Float32,1},
+                        fx::CuArray{Float32,1}, fy::CuArray{Float32,1},
+                        Epot::CuArray{Float32,1},
+                        nbh::NeighborLists.StencilNeighborMatrix,
+                        box::Definitions.Box2, params::Definitions.LJParams{Float32})
+    N = length(rx)
+    threads = (N < 100_000) ? 128 : 256
+    blocks  = cld(N, threads)
+
+    cutoff2 = params.rcut * params.rcut
+    Lx = Float32(box[1]); Ly = Float32(box[2])
+    halfLx = 0.5f0*Lx; halfLy = 0.5f0*Ly
+
+    k = CUDA.@cuda launch=false _lj2_csr_kernel!(
+        rx, ry, fx, fy, Epot,
+        nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+        Lx, Ly, halfLx, halfLy,
+        params.ϵ, params.σ, cutoff2
+    )
+    k(rx, ry, fx, fy, Epot,
+      nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+      Lx, Ly, halfLx, halfLy,
+      params.ϵ, params.σ, cutoff2; threads, blocks)
+    return nothing
+end
+
+function lj_forces_soa!(rx::CuArray{Float32,1}, ry::CuArray{Float32,1}, rz::CuArray{Float32,1},
+                        fx::CuArray{Float32,1}, fy::CuArray{Float32,1}, fz::CuArray{Float32,1},
+                        Epot::CuArray{Float32,1},
+                        nbh::NeighborLists.StencilNeighborMatrix,
+                        box::Definitions.Box3, params::Definitions.LJParams{Float32})
+    N = length(rx)
+    threads = (N < 100_000) ? 128 : 256
+    blocks  = cld(N, threads)
+
+    cutoff2 = params.rcut * params.rcut
+    Lx = Float32(box[1]); Ly = Float32(box[2]); Lz = Float32(box[3])
+    halfLx = 0.5f0*Lx; halfLy = 0.5f0*Ly; halfLz = 0.5f0*Lz
+
+    k = CUDA.@cuda launch=false _lj3_csr_kernel!(
+        rx, ry, rz, fx, fy, fz, Epot,
+        nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+        Lx, Ly, Lz, halfLx, halfLy, halfLz,
+        params.ϵ, params.σ, cutoff2
+    )
+    k(rx, ry, rz, fx, fy, fz, Epot,
+      nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+      Lx, Ly, Lz, halfLx, halfLy, halfLz,
+      params.ϵ, params.σ, cutoff2; threads, blocks)
+    return nothing
+end
+
 # ---- 2D, legacy matrix neighbor list (fallback)
 function lj_forces_soa!(rx::CuArray{Float32,1}, ry::CuArray{Float32,1},
                         fx::CuArray{Float32,1}, fy::CuArray{Float32,1},
@@ -430,6 +790,261 @@ function lj_forces_soa!(rx::CuArray{Float32,1}, ry::CuArray{Float32,1}, rz::CuAr
     k(rx, ry, rz, fx, fy, fz, Epot, nbh.neighbors, cap,
       Lx, Ly, Lz, halfLx, halfLy, halfLz,
       params.ϵ, params.σ, cutoff2; threads, blocks)
+    return nothing
+end
+
+
+
+# Pairwise-per-type LJ (sigma_ij and epsilon_ij per pair, with rcut_ij)
+function _lj2_csr_kernel_pairs!(
+    rx::CuDeviceVector{Float32}, ry::CuDeviceVector{Float32},
+    fx::CuDeviceVector{Float32}, fy::CuDeviceVector{Float32}, Epot::CuDeviceVector{Float32},
+    neighbors_index::CuDeviceVector{Int32}, neighbors_flat::CuDeviceVector{Int32}, counts::CuDeviceVector{Int32},
+    Lx::Float32, Ly::Float32, halfLx::Float32, halfLy::Float32,
+    typeid::CuDeviceVector{Int32},
+    sigma_pair::CuDeviceMatrix{Float32}, epsilon_pair::CuDeviceMatrix{Float32}, rcut_pair::CuDeviceMatrix{Float32}
+)
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    xi = rx[i]; yi = ry[i]
+    accx = 0f0; accy = 0f0; eacc = 0f0
+    base  = neighbors_index[i]
+    nlist = counts[i]
+    ti = typeid[i]
+    @inbounds for t in 0:Int(nlist-1)
+        j = neighbors_flat[base + t + 1]
+        dx = mic_fast(xi - rx[j], halfLx, Lx)
+        dy = mic_fast(yi - ry[j], halfLy, Ly)
+        r2 = muladd(dx, dx, dy*dy)
+        tj = typeid[j]
+        σij = sigma_pair[ti, tj]
+        εij = epsilon_pair[ti, tj]
+        rc = rcut_pair[ti, tj]
+        if (r2 > 0f0) & (r2 < rc*rc)
+            invr2 = 1f0 / r2
+            s2    = (σij*σij) * invr2
+            s6    = s2*s2*s2
+            s12   = s6*s6
+            f_over_r = 24f0*εij*(2f0*s12 - s6)*invr2
+            accx += f_over_r * dx
+            accy += f_over_r * dy
+            eacc += 0.5f0 * (4f0*εij*(s12 - s6))
+        end
+    end
+    fx[i] = accx; fy[i] = accy; Epot[i] = eacc
+    return
+end
+
+function _lj3_csr_kernel_pairs!(
+    rx::CuDeviceVector{Float32}, ry::CuDeviceVector{Float32}, rz::CuDeviceVector{Float32},
+    fx::CuDeviceVector{Float32}, fy::CuDeviceVector{Float32}, fz::CuDeviceVector{Float32}, Epot::CuDeviceVector{Float32},
+    neighbors_index::CuDeviceVector{Int32}, neighbors_flat::CuDeviceVector{Int32}, counts::CuDeviceVector{Int32},
+    Lx::Float32, Ly::Float32, Lz::Float32, halfLx::Float32, halfLy::Float32, halfLz::Float32,
+    typeid::CuDeviceVector{Int32},
+    sigma_pair::CuDeviceMatrix{Float32}, epsilon_pair::CuDeviceMatrix{Float32}, rcut_pair::CuDeviceMatrix{Float32}
+)
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    xi = rx[i]; yi = ry[i]; zi = rz[i]
+    accx = 0f0; accy = 0f0; accz = 0f0; eacc = 0f0
+    base  = neighbors_index[i]
+    nlist = counts[i]
+    ti = typeid[i]
+    @inbounds for t in 0:Int(nlist-1)
+        j = neighbors_flat[base + t + 1]
+        dx = mic_fast(xi - rx[j], halfLx, Lx)
+        dy = mic_fast(yi - ry[j], halfLy, Ly)
+        dz = mic_fast(zi - rz[j], halfLz, Lz)
+        r2 = muladd(dx, dx, muladd(dy, dy, dz*dz))
+        tj = typeid[j]
+        σij = sigma_pair[ti, tj]
+        εij = epsilon_pair[ti, tj]
+        rc = rcut_pair[ti, tj]
+        if (r2 > 0f0) & (r2 < rc*rc)
+            invr2 = 1f0 / r2
+            s2    = (σij*σij) * invr2
+            s6    = s2*s2*s2
+            s12   = s6*s6
+            f_over_r = 24f0*εij*(2f0*s12 - s6)*invr2
+            accx += f_over_r * dx
+            accy += f_over_r * dy
+            accz += f_over_r * dz
+            eacc += 0.5f0 * (4f0*εij*(s12 - s6))
+        end
+    end
+    fx[i] = accx; fy[i] = accy; fz[i] = accz; Epot[i] = eacc
+    return
+end
+
+function _lj2_csr_noE_kernel_pairs!(
+    rx::CuDeviceVector{Float32}, ry::CuDeviceVector{Float32},
+    fx::CuDeviceVector{Float32}, fy::CuDeviceVector{Float32},
+    neighbors_index::CuDeviceVector{Int32}, neighbors_flat::CuDeviceVector{Int32}, counts::CuDeviceVector{Int32},
+    Lx::Float32, Ly::Float32, halfLx::Float32, halfLy::Float32,
+    typeid::CuDeviceVector{Int32},
+    sigma_pair::CuDeviceMatrix{Float32}, epsilon_pair::CuDeviceMatrix{Float32}, rcut_pair::CuDeviceMatrix{Float32}
+)
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    xi = rx[i]; yi = ry[i]
+    accx = 0f0; accy = 0f0
+    base  = neighbors_index[i]
+    nlist = counts[i]
+    ti = typeid[i]
+    @inbounds for t in 0:Int(nlist-1)
+        j = neighbors_flat[base + t + 1]
+        dx = mic_fast(xi - rx[j], halfLx, Lx)
+        dy = mic_fast(yi - ry[j], halfLy, Ly)
+        r2 = muladd(dx, dx, dy*dy)
+        tj = typeid[j]
+        σij = sigma_pair[ti, tj]
+        εij = epsilon_pair[ti, tj]
+        rc = rcut_pair[ti, tj]
+        if (r2 > 0f0) & (r2 < rc*rc)
+            invr2 = 1f0 / r2
+            s2    = (σij*σij) * invr2
+            s6    = s2*s2*s2
+            s12   = s6*s6
+            f_over_r = 24f0*εij*(2f0*s12 - s6)*invr2
+            accx += f_over_r * dx
+            accy += f_over_r * dy
+        end
+    end
+    fx[i] = accx; fy[i] = accy
+    return
+end
+
+function _lj3_csr_noE_kernel_pairs!(
+    rx::CuDeviceVector{Float32}, ry::CuDeviceVector{Float32}, rz::CuDeviceVector{Float32},
+    fx::CuDeviceVector{Float32}, fy::CuDeviceVector{Float32}, fz::CuDeviceVector{Float32},
+    neighbors_index::CuDeviceVector{Int32}, neighbors_flat::CuDeviceVector{Int32}, counts::CuDeviceVector{Int32},
+    Lx::Float32, Ly::Float32, Lz::Float32, halfLx::Float32, halfLy::Float32, halfLz::Float32,
+    typeid::CuDeviceVector{Int32},
+    sigma_pair::CuDeviceMatrix{Float32}, epsilon_pair::CuDeviceMatrix{Float32}, rcut_pair::CuDeviceMatrix{Float32}
+)
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    xi = rx[i]; yi = ry[i]; zi = rz[i]
+    accx = 0f0; accy = 0f0; accz = 0f0
+    base  = neighbors_index[i]
+    nlist = counts[i]
+    ti = typeid[i]
+    @inbounds for t in 0:Int(nlist-1)
+        j = neighbors_flat[base + t + 1]
+        dx = mic_fast(xi - rx[j], halfLx, Lx)
+        dy = mic_fast(yi - ry[j], halfLy, Ly)
+        dz = mic_fast(zi - rz[j], halfLz, Lz)
+        r2 = muladd(dx, dx, muladd(dy, dy, dz*dz))
+        tj = typeid[j]
+        σij = sigma_pair[ti, tj]
+        εij = epsilon_pair[ti, tj]
+        rc = rcut_pair[ti, tj]
+        if (r2 > 0f0) & (r2 < rc*rc)
+            invr2 = 1f0 / r2
+            s2    = (σij*σij) * invr2
+            s6    = s2*s2*s2
+            s12   = s6*s6
+            f_over_r = 24f0*εij*(2f0*s12 - s6)*invr2
+            accx += f_over_r * dx
+            accy += f_over_r * dy
+            accz += f_over_r * dz
+        end
+    end
+    fx[i] = accx; fy[i] = accy; fz[i] = accz
+    return
+end
+
+function lj_forces_soa_pairs!(rx::CuArray{Float32,1}, ry::CuArray{Float32,1},
+                              fx::CuArray{Float32,1}, fy::CuArray{Float32,1}, Epot::CuArray{Float32,1},
+                              nbh::NeighborLists.AbstractNeighborMatrix,
+                              box::Definitions.Box2,
+                              typeid::CuArray{Int32,1},
+                              sigma_pair::CuArray{Float32,2}, epsilon_pair::CuArray{Float32,2}, rcut_pair::CuArray{Float32,2})
+    N = length(rx)
+    threads = (N < 100_000) ? 128 : 256
+    blocks  = cld(N, threads)
+    Lx = Float32(box[1]); Ly = Float32(box[2])
+    halfLx = 0.5f0*Lx; halfLy = 0.5f0*Ly
+    k = CUDA.@cuda launch=false _lj2_csr_kernel_pairs!(
+        rx, ry, fx, fy, Epot,
+        nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+        Lx, Ly, halfLx, halfLy,
+        typeid, sigma_pair, epsilon_pair, rcut_pair)
+    k(rx, ry, fx, fy, Epot,
+      nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+      Lx, Ly, halfLx, halfLy,
+      typeid, sigma_pair, epsilon_pair, rcut_pair; threads, blocks)
+    return nothing
+end
+
+function lj_forces_oa_pairs_bugfix() end  # keep file parsable if above adds no trailing newline
+
+function lj_forces_soa_pairs!(rx::CuArray{Float32,1}, ry::CuArray{Float32,1}, rz::CuArray{Float32,1},
+                              fx::CuArray{Float32,1}, fy::CuArray{Float32,1}, fz::CuArray{Float32,1}, Epot::CuArray{Float32,1},
+                              nbh::NeighborLists.AbstractNeighborMatrix,
+                              box::Definitions.Box3,
+                              typeid::CuArray{Int32,1},
+                              sigma_pair::CuArray{Float32,2}, epsilon_pair::CuArray{Float32,2}, rcut_pair::CuArray{Float32,2})
+    N = length(rx)
+    threads = (N < 100_000) ? 128 : 256
+    blocks  = cld(N, threads)
+    Lx = Float32(box[1]); Ly = Float32(box[2]); Lz = Float32(box[3])
+    halfLx = 0.5f0*Lx; halfLy = 0.5f0*Ly; halfLz = 0.5f0*Lz
+    k = CUDA.@cuda launch=false _lj3_csr_kernel_pairs!(
+        rx, ry, rz, fx, fy, fz, Epot,
+        nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+        Lx, Ly, Lz, halfLx, halfLy, halfLz,
+        typeid, sigma_pair, epsilon_pair, rcut_pair)
+    k(rx, ry, rz, fx, fy, fz, Epot,
+      nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+      Lx, Ly, Lz, halfLx, halfLy, halfLz,
+      typeid, sigma_pair, epsilon_pair, rcut_pair; threads, blocks)
+    return nothing
+end
+
+function lj_forces_soa_noE_pairs!(rx::CuArray{Float32,1}, ry::CuArray{Float32,1},
+                                  fx::CuArray{Float32,1}, fy::CuArray{Float32,1},
+                                  nbh::NeighborLists.AbstractNeighborMatrix,
+                                  box::Definitions.Box2,
+                                  typeid::CuArray{Int32,1},
+                                  sigma_pair::CuArray{Float32,2}, epsilon_pair::CuArray{Float32,2}, rcut_pair::CuArray{Float32,2})
+    N = length(rx)
+    threads = (N < 50_000) ? 64 : ((N < 200_000) ? 128 : 256)
+    blocks  = cld(N, threads)
+    Lx = Float32(box[1]); Ly = Float32(box[2])
+    halfLx = 0.5f0*Lx; halfLy = 0.5f0*Ly
+    k = CUDA.@cuda launch=false _lj2_csr_noE_kernel_pairs!(
+        rx, ry, fx, fy,
+        nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+        Lx, Ly, halfLx, halfLy,
+        typeid, sigma_pair, epsilon_pair, rcut_pair)
+    k(rx, ry, fx, fy,
+      nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+      Lx, Ly, halfLx, halfLy,
+      typeid, sigma_pair, epsilon_pair, rcut_pair; threads, blocks)
+    return nothing
+end
+
+function lj_forces_soa_noE_pairs!(rx::CuArray{Float32,1}, ry::CuArray{Float32,1}, rz::CuArray{Float32,1},
+                                  fx::CuArray{Float32,1}, fy::CuArray{Float32,1}, fz::CuArray{Float32,1},
+                                  nbh::NeighborLists.AbstractNeighborMatrix,
+                                  box::Definitions.Box3,
+                                  typeid::CuArray{Int32,1},
+                                  sigma_pair::CuArray{Float32,2}, epsilon_pair::CuArray{Float32,2}, rcut_pair::CuArray{Float32,2})
+    N = length(rx)
+    threads = (N < 50_000) ? 64 : ((N < 200_000) ? 128 : 256)
+    blocks  = cld(N, threads)
+    Lx = Float32(box[1]); Ly = Float32(box[2]); Lz = Float32(box[3])
+    halfLx = 0.5f0*Lx; halfLy = 0.5f0*Ly; halfLz = 0.5f0*Lz
+    k = CUDA.@cuda launch=false _lj3_csr_noE_kernel_pairs!(
+        rx, ry, rz, fx, fy, fz,
+        nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+        Lx, Ly, Lz, halfLx, halfLy, halfLz,
+        typeid, sigma_pair, epsilon_pair, rcut_pair)
+    k(rx, ry, rz, fx, fy, fz,
+      nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+      Lx, Ly, Lz, halfLx, halfLy, halfLz,
+      typeid, sigma_pair, epsilon_pair, rcut_pair; threads, blocks)
     return nothing
 end
 
