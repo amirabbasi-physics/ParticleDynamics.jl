@@ -39,11 +39,19 @@ mutable struct SimulationState
     box3::Union{Definitions.Box3,Nothing}
 
     # neighbor list
-    nbh::NeighborLists.NeighborMatrix
+    nbh::NeighborLists.AbstractNeighborMatrix
     neigh_interval::Int
 
-    # pair params
+    # pair params (global LJ)
     pair_lj::Definitions.LJParams{Float32}
+    # optional per-particle size (mixed interactions)
+    sigma_particle::Union{Nothing,CuArray{Float32,1}}
+    rcut_factor::Float32
+    # optional per-type pair parameters
+    sigma_pair::Union{Nothing,CuArray{Float32,2}}
+    epsilon_pair::Union{Nothing,CuArray{Float32,2}}
+    rcut_pair::Union{Nothing,CuArray{Float32,2}}
+    
 
     # integrator params
     vv::LangevinIntegrators.VVParams{Float32}
@@ -196,7 +204,10 @@ function build_simulation(; D::Int, N::Int,
                          typeid,
                          nothing,   # box2
                          nothing,   # box3
-                         nbh, neigh_interval, lj, vv,
+                         nbh, neigh_interval, lj,
+                         nothing, Float32(2.0f0^(1/6)),
+                         nothing, nothing, nothing,
+                         vv,
                          Epot, dq, Ekin, 0)
 
     # Assign the appropriate box directly (no extra tuple layer)
@@ -249,20 +260,44 @@ function step!(st::SimulationState, dt::Float32; compute_energy::Bool=true)
         if D == 3; st.f0z, st.fz = st.fz, st.f0z; end
     else
         if D == 2
-            if compute_energy
-                NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.f0x, st.f0y, st.Epot,
-                                               st.nbh, st.box2::Definitions.Box2, st.pair_lj)
-            else
-                NonBondedForces.lj_forces_soa_noE!(st.rx, st.ry, st.f0x, st.f0y,
+            if st.sigma_particle === nothing
+                if compute_energy
+                    NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.f0x, st.f0y, st.Epot,
                                                    st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+                else
+                    NonBondedForces.lj_forces_soa_noE!(st.rx, st.ry, st.f0x, st.f0y,
+                                                       st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+                end
+            else
+                if compute_energy
+                    NonBondedForces.lj_forces_soa_mixed!(st.rx, st.ry, st.f0x, st.f0y, st.Epot,
+                                                          st.nbh, st.box2::Definitions.Box2,
+                                                          st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
+                else
+                    NonBondedForces.lj_forces_soa_noE_mixed!(st.rx, st.ry, st.f0x, st.f0y,
+                                                               st.nbh, st.box2::Definitions.Box2,
+                                                               st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
+                end
             end
         else
-            if compute_energy
-                NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.Epot,
-                                               st.nbh, st.box3::Definitions.Box3, st.pair_lj)
-            else
-                NonBondedForces.lj_forces_soa_noE!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
+            if st.sigma_particle === nothing
+                if compute_energy
+                    NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.Epot,
                                                    st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+                else
+                    NonBondedForces.lj_forces_soa_noE!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
+                                                       st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+                end
+            else
+                if compute_energy
+                    NonBondedForces.lj_forces_soa_mixed!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.Epot,
+                                                          st.nbh, st.box3::Definitions.Box3,
+                                                          st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
+                else
+                    NonBondedForces.lj_forces_soa_noE_mixed!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
+                                                               st.nbh, st.box3::Definitions.Box3,
+                                                               st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
+                end
             end
         end
     end
@@ -281,22 +316,66 @@ function step!(st::SimulationState, dt::Float32; compute_energy::Bool=true)
 
     # Forces at t + dt (write into fx,fy[,fz])
     if D == 2
-        if compute_energy
-            NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.fx, st.fy, st.Epot,
-                                           st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+        if st.sigma_pair !== nothing
+            if compute_energy
+                NonBondedForces.lj_forces_soa_pairs!(st.rx, st.ry, st.fx, st.fy, st.Epot,
+                                                     st.nbh, st.box2::Definitions.Box2,
+                                                     st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
+            else
+                NonBondedForces.lj_forces_soa_noE_pairs!(st.rx, st.ry, st.fx, st.fy,
+                                                          st.nbh, st.box2::Definitions.Box2,
+                                                          st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
+            end
+        elseif st.sigma_particle !== nothing
+            if compute_energy
+                NonBondedForces.lj_forces_soa_mixed!(st.rx, st.ry, st.fx, st.fy, st.Epot,
+                                                      st.nbh, st.box2::Definitions.Box2,
+                                                      st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
+            else
+                NonBondedForces.lj_forces_soa_noE_mixed!(st.rx, st.ry, st.fx, st.fy,
+                                                           st.nbh, st.box2::Definitions.Box2,
+                                                           st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
+            end
         else
-            NonBondedForces.lj_forces_soa_noE!(st.rx, st.ry, st.fx, st.fy,
+            if compute_energy
+                NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.fx, st.fy, st.Epot,
                                                st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+            else
+                NonBondedForces.lj_forces_soa_noE!(st.rx, st.ry, st.fx, st.fy,
+                                                   st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+            end
         end
         LangevinIntegrators.vv_velocities_soa!(st.vx, st.vy, st.f0x, st.f0y, st.fx, st.fy,
                                                st.rf_x, st.rf_y, st.dq, st.Ekin, st.vv, dt)
     else
-        if compute_energy
-            NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot,
-                                           st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+        if st.sigma_pair !== nothing
+            if compute_energy
+                NonBondedForces.lj_forces_soa_pairs!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot,
+                                                     st.nbh, st.box3::Definitions.Box3,
+                                                     st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
+            else
+                NonBondedForces.lj_forces_soa_noE_pairs!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz,
+                                                          st.nbh, st.box3::Definitions.Box3,
+                                                          st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
+            end
+        elseif st.sigma_particle !== nothing
+            if compute_energy
+                NonBondedForces.lj_forces_soa_mixed!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot,
+                                                      st.nbh, st.box3::Definitions.Box3,
+                                                      st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
+            else
+                NonBondedForces.lj_forces_soa_noE_mixed!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz,
+                                                           st.nbh, st.box3::Definitions.Box3,
+                                                           st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
+            end
         else
-            NonBondedForces.lj_forces_soa_noE!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz,
+            if compute_energy
+                NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot,
                                                st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+            else
+                NonBondedForces.lj_forces_soa_noE!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz,
+                                                   st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+            end
         end
         LangevinIntegrators.vv_velocities_soa!(st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z,
                                                st.fx, st.fy, st.fz,
@@ -451,9 +530,21 @@ function step!(st::SimulationState, bp::BrownianIntegrators.BrownianParams{Float
 
     if st.step == 0
         if D == 2
-            NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+            if st.sigma_particle === nothing
+                NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+            else
+                NonBondedForces.lj_forces_soa_mixed!(st.rx, st.ry, st.fx, st.fy, st.Epot,
+                                                      st.nbh, st.box2::Definitions.Box2,
+                                                      st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
+            end
         else
-            NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+            if st.sigma_particle === nothing
+                NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+            else
+                NonBondedForces.lj_forces_soa_mixed!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot,
+                                                      st.nbh, st.box3::Definitions.Box3,
+                                                      st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
+            end
         end
     end
 
@@ -463,21 +554,57 @@ function step!(st::SimulationState, bp::BrownianIntegrators.BrownianParams{Float
 
     if D == 2
         BrownianIntegrators.bd_prepare_midpoint_2d!(st.rx, st.ry, st.fx, st.fy, st.rf_x, st.rf_y, st.vx, st.vy, μ, sqrt2Ddt, dt, st.box2::Definitions.Box2)
-        NonBondedForces.lj_forces_soa_noE!(st.vx, st.vy, st.f0x, st.f0y, st.nbh, st.box2::Definitions.Box2, st.pair_lj)
-        BrownianIntegrators.bd_finish_step_2d!(st.rx, st.ry, st.f0x, st.f0y, st.rf_x, st.rf_y, μ, sqrt2Ddt, dt, st.dq, st.box2::Definitions.Box2)
-        if compute_energy
-            NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+        if st.sigma_particle === nothing
+            NonBondedForces.lj_forces_soa_noE!(st.vx, st.vy, st.f0x, st.f0y, st.nbh, st.box2::Definitions.Box2, st.pair_lj)
         else
-            NonBondedForces.lj_forces_soa_noE!(st.rx, st.ry, st.fx, st.fy, st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+            NonBondedForces.lj_forces_soa_noE_mixed!(st.vx, st.vy, st.f0x, st.f0y,
+                                                     st.nbh, st.box2::Definitions.Box2,
+                                                     st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
+        end
+        BrownianIntegrators.bd_finish_step_2d!(st.rx, st.ry, st.f0x, st.f0y, st.rf_x, st.rf_y, μ, sqrt2Ddt, dt, st.dq, st.box2::Definitions.Box2)
+        if st.sigma_particle === nothing
+            if compute_energy
+                NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+            else
+                NonBondedForces.lj_forces_soa_noE!(st.rx, st.ry, st.fx, st.fy, st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+            end
+        else
+            if compute_energy
+                NonBondedForces.lj_forces_soa_mixed!(st.rx, st.ry, st.fx, st.fy, st.Epot,
+                                                      st.nbh, st.box2::Definitions.Box2,
+                                                      st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
+            else
+                NonBondedForces.lj_forces_soa_noE_mixed!(st.rx, st.ry, st.fx, st.fy,
+                                                           st.nbh, st.box2::Definitions.Box2,
+                                                           st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
+            end
         end
     else
         BrownianIntegrators.bd_prepare_midpoint_3d!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.rf_x, st.rf_y, st.rf_z, st.vx, st.vy, st.vz, μ, sqrt2Ddt, dt, st.box3::Definitions.Box3)
-        NonBondedForces.lj_forces_soa_noE!(st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z, st.nbh, st.box3::Definitions.Box3, st.pair_lj)
-        BrownianIntegrators.bd_finish_step_3d!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.rf_x, st.rf_y, st.rf_z, μ, sqrt2Ddt, dt, st.dq, st.box3::Definitions.Box3)
-        if compute_energy
-            NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+        if st.sigma_particle === nothing
+            NonBondedForces.lj_forces_soa_noE!(st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z, st.nbh, st.box3::Definitions.Box3, st.pair_lj)
         else
-            NonBondedForces.lj_forces_soa_noE!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+            NonBondedForces.lj_forces_soa_noE_mixed!(st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z,
+                                                     st.nbh, st.box3::Definitions.Box3,
+                                                     st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
+        end
+        BrownianIntegrators.bd_finish_step_3d!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.rf_x, st.rf_y, st.rf_z, μ, sqrt2Ddt, dt, st.dq, st.box3::Definitions.Box3)
+        if st.sigma_particle === nothing
+            if compute_energy
+                NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+            else
+                NonBondedForces.lj_forces_soa_noE!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+            end
+        else
+            if compute_energy
+                NonBondedForces.lj_forces_soa_mixed!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot,
+                                                      st.nbh, st.box3::Definitions.Box3,
+                                                      st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
+            else
+                NonBondedForces.lj_forces_soa_noE_mixed!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz,
+                                                           st.nbh, st.box3::Definitions.Box3,
+                                                           st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
+            end
         end
     end
 
