@@ -4,7 +4,9 @@ using CUDA
 using StaticArrays
 
 export FloatX, IntX, Dim2, Dim3, Box2, Box3,
-       LJParams, wrap_pbc2!, wrap_pbc3!, clamp_cap
+       LJParams, wrap_pbc2!, wrap_pbc3!, clamp_cap,
+       HarmonicBondParams, FENEParams,
+       SoftRepulsiveParams
 
 const FloatX = Float32
 const IntX   = Int32
@@ -25,6 +27,23 @@ end
 struct LJMixParams{T}
     ϵ::T              # global epsilon (can be extended later to per-type)
     rcut_factor::T    # factor applied to σ_ij to get cutoff (e.g., 2^(1/6))
+end
+
+# Bonded interaction parameters
+struct HarmonicBondParams{T}
+    k::T     # spring constant
+    r0::T    # equilibrium distance
+end
+
+struct FENEParams{T}
+    k::T     # spring constant
+    R0::T    # maximum extension parameter
+end
+
+# Nonbonded soft repulsive harmonic parameters
+struct SoftRepulsiveParams{T}
+    ϵ::T
+    σ::T
 end
 
 @inline clamp_cap(idx::IntX, cap::IntX) = ifelse(idx <= cap, idx, IntX(0))

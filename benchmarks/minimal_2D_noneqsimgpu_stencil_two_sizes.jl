@@ -43,19 +43,19 @@ function randomize_types!(st; ratio::Float64=0.5)
 end
 
 # Simulation parameters
-N = 10_000
-BOX = (200.0f0, 200.0f0)
-SIGMA_TYPE = Dict(1 => 2.0f0, 2 => 1.0f0)  # different particle sizes
-EPS   = 100f0
+N = 40_000
+BOX = (800.0f0, 800.0f0)
+SIGMA_TYPE = Dict(1 => 5.0f0, 2 => 1.0f0)  # different particle sizes
+EPS   = 1000f0
 SIGMA_REF = 1.0f0
 RCUT_REF  = Float32(2^(1/6) * SIGMA_REF)   # used by the LJ kernel (single-σ for now)
 GAMMA = 100f0
-DT    = 0.00001f0
-NSTEPS = 1_000_000
-LOG_INTERVAL = 100_000
+DT    = 0.000002f0
+NSTEPS = 10_000_000
+LOG_INTERVAL = 1_000_000
 
 T_TYPE1 = 1.0f0
-T_TYPE2 = 100.0f0
+T_TYPE2 = 200.0f0
 T_mean = 0.5f0 * (T_TYPE1 + T_TYPE2)
 
 st = Simulation.build_simulation(D=2,
@@ -81,8 +81,8 @@ Filters.set_langevin_temperature!(st, DT,
     Filters.TypeIDs(2) => T_TYPE2)
 
 # User-specified per-pair parameters (no default mixing)
-SIGMA_PAIR = Float32[2.0 1.5;
-                     1.5 1.0]
+SIGMA_PAIR = Float32[5.0 3.0;
+                     3.0 1.0]
 EPS_PAIR   = Float32[EPS EPS;
                      EPS EPS]
 RCUT_FACTOR = Float32(2^(1/6))
