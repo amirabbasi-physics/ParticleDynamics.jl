@@ -36,6 +36,7 @@ mutable struct NeighborMatrix <: AbstractNeighborMatrix
     particle_ids_sorted::CuArray{Int32,1} # length N, 1-based ids sorted by cell
     cell_ids_sorted::CuArray{Int32,1}     # length N, sorted cell ids [0..ncell-1]
     cell_offsets::CuArray{Int32,1}        # length ncell+1, starts into *_sorted
+    cell_of_particle::CuArray{Int32,1}    # length N, maps pid -> cell id (unsorted)
 
     # workspace (preallocated each build; reused every update)
     packed_keys::CuArray{UInt64,1}        # length N, (cid<<32)|(i-1)
@@ -143,6 +144,7 @@ mutable struct StencilNeighborMatrix <: AbstractNeighborMatrix
     particle_ids_sorted::CuArray{Int32,1}
     cell_ids_sorted::CuArray{Int32,1}
     cell_offsets::CuArray{Int32,1}
+    cell_of_particle::CuArray{Int32,1}
     packed_keys::CuArray{UInt64,1}
 
     # per-particle list radii (rcut_i + skin) and r^2
@@ -172,6 +174,7 @@ end
     cell_ids_sorted     = CUDA.CuArray{Int32}(undef, N)
     ncell = Int(nx)*Int(ny)*Int(nz)
     cell_offsets        = CUDA.fill(Int32(1), ncell+1)
+    cell_of_particle    = CUDA.CuArray{Int32}(undef, N)
     packed_keys         = CUDA.CuArray{UInt64}(undef, N)
 
     rlist   = CUDA.CuArray{Float32}(undef, N)
@@ -186,7 +189,7 @@ end
         cap, skin,
         Int32(N), Int32(D),
         nx, ny, nz, cell_size,
-        particle_ids_sorted, cell_ids_sorted, cell_offsets, packed_keys,
+        particle_ids_sorted, cell_ids_sorted, cell_offsets, cell_of_particle, packed_keys,
         rlist, rlist2,
         rref_x, rref_y, rref_z, dr2, 0, 20
     )
@@ -761,14 +764,18 @@ end
 function _kernel_unpack_sorted!(
     packed::CuDeviceVector{UInt64},
     cell_ids_sorted::CuDeviceVector{Int32},
-    particle_ids_sorted::CuDeviceVector{Int32}
+    particle_ids_sorted::CuDeviceVector{Int32},
+    cell_of_particle::CuDeviceVector{Int32}
 )
     i = (blockIdx().x-1)*blockDim().x + threadIdx().x
     N = length(packed); if i > N; return; end
     @inbounds begin
         pv = packed[i]
-        cell_ids_sorted[i]     = Int32(UInt32(pv >> 32))
-        particle_ids_sorted[i] = Int32(UInt32(pv & 0xFFFF_FFFF)) + 1
+        cid = Int32(UInt32(pv >> 32))
+        pid = Int32(UInt32(pv & 0xFFFF_FFFF)) + 1
+        cell_ids_sorted[i]     = cid
+        particle_ids_sorted[i] = pid
+        cell_of_particle[pid]  = cid
     end
     return
 end
@@ -831,6 +838,7 @@ function _kernel_neighbors2!(
     counts::CuDeviceVector{Int32},
     cell_offsets::CuDeviceVector{Int32}, # len = ncell+1
     particle_ids_sorted::CuDeviceVector{Int32},
+    cell_of_particle::CuDeviceVector{Int32},
     Lx::Float32, Ly::Float32, halfLx::Float32, halfLy::Float32,
     nx::Int32, ny::Int32, inv_cs::Float32,
     cutoff2::Float32, cap::Int32
@@ -838,11 +846,10 @@ function _kernel_neighbors2!(
     i1 = (blockIdx().x-1)*blockDim().x + threadIdx().x
     N = length(rx); if i1 > N; return; end
     @inbounds begin
-        # own cell (no divide)
-        x = rx[i1] + halfLx; x -= floor(x / Lx)*Lx
-        y = ry[i1] + halfLy; y -= floor(y / Ly)*Ly
-        cx = Int32(floor(x * inv_cs)); cx = (cx >= nx) ? (nx-1) : cx
-        cy = Int32(floor(y * inv_cs)); cy = (cy >= ny) ? (ny-1) : cy
+        # own cell from map
+        c0 = cell_of_particle[i1]
+        cx = c0 % nx
+        cy = c0 ÷ nx
 
         base  = neighbors_index[i1]
         found = Int32(0)
@@ -882,6 +889,7 @@ function _kernel_neighbors3!(
     counts::CuDeviceVector{Int32},
     cell_offsets::CuDeviceVector{Int32},
     particle_ids_sorted::CuDeviceVector{Int32},
+    cell_of_particle::CuDeviceVector{Int32},
     Lx::Float32, Ly::Float32, Lz::Float32, halfLx::Float32, halfLy::Float32, halfLz::Float32,
     nx::Int32, ny::Int32, nz::Int32, inv_cs::Float32,
     cutoff2::Float32, cap::Int32
@@ -889,12 +897,11 @@ function _kernel_neighbors3!(
     i1 = (blockIdx().x-1)*blockDim().x + threadIdx().x
     N = length(rx); if i1 > N; return; end
     @inbounds begin
-        x = rx[i1] + halfLx; x -= floor(x / Lx)*Lx
-        y = ry[i1] + halfLy; y -= floor(y / Ly)*Ly
-        z = rz[i1] + halfLz; z -= floor(z / Lz)*Lz
-        cx = Int32(floor(x * inv_cs)); cx = (cx >= nx) ? (nx-1) : cx
-        cy = Int32(floor(y * inv_cs)); cy = (cy >= ny) ? (ny-1) : cy
-        cz = Int32(floor(z * inv_cs)); cz = (cz >= nz) ? (nz-1) : cz
+        c0 = cell_of_particle[i1]
+        cx = c0 % nx
+        tmp = c0 ÷ nx
+        cy = tmp % ny
+        cz = tmp ÷ ny
 
         base  = neighbors_index[i1]
         found = Int32(0)
@@ -952,6 +959,7 @@ function _alloc_neighbor_matrix(N::Int, D::Int, box, cutoff::Float32, skin::Floa
     cell_ids_sorted     = CUDA.CuArray{Int32}(undef, N)
     ncell = Int(nx)*Int(ny)*Int(nz)
     cell_offsets        = CUDA.fill(Int32(1), ncell+1)
+    cell_of_particle    = CUDA.CuArray{Int32}(undef, N)
     packed_keys         = CUDA.CuArray{UInt64}(undef, N)
 
     # Adaptive neighbor list fields
@@ -965,7 +973,7 @@ function _alloc_neighbor_matrix(N::Int, D::Int, box, cutoff::Float32, skin::Floa
         cap, cutoff, skin, cutoff2,
         Int32(N), Int32(D),
         nx, ny, nz, cell_size,
-        particle_ids_sorted, cell_ids_sorted, cell_offsets,
+        particle_ids_sorted, cell_ids_sorted, cell_offsets, cell_of_particle,
         packed_keys,
         rref_x, rref_y, rref_z, dr2, 0, 20  # last_build_step=0, target_interval=20
     )
@@ -986,8 +994,8 @@ function _bin_particles_2d!(nbh::NeighborMatrix,
 
     CUDA.sort!(nbh.packed_keys)
 
-    kunpack = CUDA.@cuda launch=false _kernel_unpack_sorted!(nbh.packed_keys, nbh.cell_ids_sorted, nbh.particle_ids_sorted)
-    kunpack(nbh.packed_keys, nbh.cell_ids_sorted, nbh.particle_ids_sorted; threads=t, blocks=b)
+    kunpack = CUDA.@cuda launch=false _kernel_unpack_sorted!(nbh.packed_keys, nbh.cell_ids_sorted, nbh.particle_ids_sorted, nbh.cell_of_particle)
+    kunpack(nbh.packed_keys, nbh.cell_ids_sorted, nbh.particle_ids_sorted, nbh.cell_of_particle; threads=t, blocks=b)
 
     # cell_offsets on GPU (ncell+1 threads)
     ncell = Int(nbh.nx) * Int(nbh.ny)
@@ -1010,8 +1018,8 @@ function _bin_particles_3d!(nbh::NeighborMatrix,
 
     CUDA.sort!(nbh.packed_keys)
 
-    kunpack = CUDA.@cuda launch=false _kernel_unpack_sorted!(nbh.packed_keys, nbh.cell_ids_sorted, nbh.particle_ids_sorted)
-    kunpack(nbh.packed_keys, nbh.cell_ids_sorted, nbh.particle_ids_sorted; threads=t, blocks=b)
+    kunpack = CUDA.@cuda launch=false _kernel_unpack_sorted!(nbh.packed_keys, nbh.cell_ids_sorted, nbh.particle_ids_sorted, nbh.cell_of_particle)
+    kunpack(nbh.packed_keys, nbh.cell_ids_sorted, nbh.particle_ids_sorted, nbh.cell_of_particle; threads=t, blocks=b)
 
     ncell = Int(nbh.nx) * Int(nbh.ny) * Int(nbh.nz)
     tt,bb = _launchdims(ncell+1)
@@ -1033,8 +1041,8 @@ function _bin_particles_2d!(nbh::StencilNeighborMatrix,
 
     CUDA.sort!(nbh.packed_keys)
 
-    kunpack = CUDA.@cuda launch=false _kernel_unpack_sorted!(nbh.packed_keys, nbh.cell_ids_sorted, nbh.particle_ids_sorted)
-    kunpack(nbh.packed_keys, nbh.cell_ids_sorted, nbh.particle_ids_sorted; threads=t, blocks=b)
+    kunpack = CUDA.@cuda launch=false _kernel_unpack_sorted!(nbh.packed_keys, nbh.cell_ids_sorted, nbh.particle_ids_sorted, nbh.cell_of_particle)
+    kunpack(nbh.packed_keys, nbh.cell_ids_sorted, nbh.particle_ids_sorted, nbh.cell_of_particle; threads=t, blocks=b)
 
     ncell = Int(nbh.nx) * Int(nbh.ny)
     tt,bb = _launchdims(ncell+1)
@@ -1056,8 +1064,8 @@ function _bin_particles_3d!(nbh::StencilNeighborMatrix,
 
     CUDA.sort!(nbh.packed_keys)
 
-    kunpack = CUDA.@cuda launch=false _kernel_unpack_sorted!(nbh.packed_keys, nbh.cell_ids_sorted, nbh.particle_ids_sorted)
-    kunpack(nbh.packed_keys, nbh.cell_ids_sorted, nbh.particle_ids_sorted; threads=t, blocks=b)
+    kunpack = CUDA.@cuda launch=false _kernel_unpack_sorted!(nbh.packed_keys, nbh.cell_ids_sorted, nbh.particle_ids_sorted, nbh.cell_of_particle)
+    kunpack(nbh.packed_keys, nbh.cell_ids_sorted, nbh.particle_ids_sorted, nbh.cell_of_particle; threads=t, blocks=b)
 
     ncell = Int(nbh.nx) * Int(nbh.ny) * Int(nbh.nz)
     tt,bb = _launchdims(ncell+1)
@@ -1104,11 +1112,11 @@ function update_neighbors_inplace!(nbh::NeighborMatrix,
     t,b = _launchdims(N)
     knei = CUDA.@cuda launch=false _kernel_neighbors2!(rx, ry,
         nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
-        nbh.cell_offsets, nbh.particle_ids_sorted,
+        nbh.cell_offsets, nbh.particle_ids_sorted, nbh.cell_of_particle,
         Float32(box[1]), Float32(box[2]), halfLx, halfLy,
         nbh.nx, nbh.ny, inv_cs, nbh.cutoff2, nbh.cap)
     knei(rx, ry, nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
-         nbh.cell_offsets, nbh.particle_ids_sorted,
+         nbh.cell_offsets, nbh.particle_ids_sorted, nbh.cell_of_particle,
          Float32(box[1]), Float32(box[2]), halfLx, halfLy,
          nbh.nx, nbh.ny, inv_cs, nbh.cutoff2, nbh.cap; threads=t, blocks=b)
     
@@ -1136,11 +1144,11 @@ function update_neighbors_inplace!(nbh::NeighborMatrix,
     t,b = _launchdims(N)
     knei = CUDA.@cuda launch=false _kernel_neighbors3!(rx, ry, rz,
         nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
-        nbh.cell_offsets, nbh.particle_ids_sorted,
+        nbh.cell_offsets, nbh.particle_ids_sorted, nbh.cell_of_particle,
         Float32(box[1]), Float32(box[2]), Float32(box[3]), halfLx, halfLy, halfLz,
         nbh.nx, nbh.ny, nbh.nz, inv_cs, nbh.cutoff2, nbh.cap)
     knei(rx, ry, rz, nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
-         nbh.cell_offsets, nbh.particle_ids_sorted,
+         nbh.cell_offsets, nbh.particle_ids_sorted, nbh.cell_of_particle,
          Float32(box[1]), Float32(box[2]), Float32(box[3]), halfLx, halfLy, halfLz,
          nbh.nx, nbh.ny, nbh.nz, inv_cs, nbh.cutoff2, nbh.cap; threads=t, blocks=b)
     

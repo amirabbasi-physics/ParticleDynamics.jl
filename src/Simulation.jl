@@ -4,6 +4,7 @@ using CUDA
 using ..Definitions
 using ..NeighborLists
 using ..NonBondedForces
+using ..BondedForces
 using ..LangevinIntegrators
 using ..BrownianIntegrators
 
@@ -52,6 +53,10 @@ mutable struct SimulationState
     epsilon_pair::Union{Nothing,CuArray{Float32,2}}
     rcut_pair::Union{Nothing,CuArray{Float32,2}}
     
+    # bonded interactions (optional)
+    bonds::Union{Nothing,BondedForces.BondList}
+    harmonic_params::Union{Nothing,Definitions.HarmonicBondParams{Float32}}
+    fene_params::Union{Nothing,Definitions.FENEParams{Float32}}
 
     # integrator params
     vv::LangevinIntegrators.VVParams{Float32}
@@ -63,6 +68,10 @@ mutable struct SimulationState
 
     # misc
     step::Int
+    # last integrator used: 1=Langevin, 2=Brownian, 0=unknown
+    last_integrator::UInt8
+    nb_kind::UInt8
+    softrep::Union{Nothing,NonEqSimGPU.Definitions.SoftRepulsiveParams{Float32}}
 end
 
 function zero_forces!(st::SimulationState)
@@ -133,7 +142,12 @@ function build_simulation(; D::Int, N::Int,
                            gamma::Float32=1f0,
                            mass::Float32=1f0,
                            noise_scale::Union{CuArray{Float32,1},Nothing}=nothing,
-                           init_temperature::Float32 = 1f0)
+                           init_temperature::Float32 = 1f0,
+                           bonds::Union{Nothing,Vector{Tuple{Int32,Int32}}}=nothing,
+                           bond_harmonic::Union{Nothing,Definitions.HarmonicBondParams{Float32}}=nothing,
+                           bond_fene::Union{Nothing,Definitions.FENEParams{Float32}}=nothing,
+                           nonbonded::Symbol = :lj,
+                           softrep_params::Union{Nothing,Definitions.SoftRepulsiveParams{Float32}}=nothing)
 
     # Allocate SoA buffers
     rx = CUDA.CuArray{Float32}(undef, N); ry = CUDA.CuArray{Float32}(undef, N)
@@ -197,6 +211,14 @@ function build_simulation(; D::Int, N::Int,
     dq   = CUDA.CuArray{Float32}(undef, N); fill!(dq, 0f0)
     Ekin   = CUDA.CuArray{Float32}(undef, N); fill!(Ekin, 0f0)
 
+    # Build bonds (if provided)
+    local bondlist
+    if bonds === nothing
+        bondlist = nothing
+    else
+        bondlist = BondedForces.build_bondlist(N, bonds)
+    end
+
     # Construct with boxes set to nothing; assign after
     st = SimulationState(rx, ry, rz, vx, vy, vz, fx, fy, fz,
                          f0x, f0y, f0z,
@@ -207,8 +229,9 @@ function build_simulation(; D::Int, N::Int,
                          nbh, neigh_interval, lj,
                          nothing, Float32(2.0f0^(1/6)),
                          nothing, nothing, nothing,
+                         bondlist, bond_harmonic, bond_fene,
                          vv,
-                         Epot, dq, Ekin, 0)
+                         Epot, dq, Ekin, 0, UInt8(0))
 
     # Assign the appropriate box directly (no extra tuple layer)
     if D == 2
@@ -226,6 +249,7 @@ end
 #   One integrator step
 # =========================
 function step!(st::SimulationState, dt::Float32; compute_energy::Bool=true)
+    st.last_integrator = UInt8(1)
     D = st.rz === nothing ? 2 : 3
 
     # NL rebuild policy using new displacement-based algorithm only
@@ -262,11 +286,21 @@ function step!(st::SimulationState, dt::Float32; compute_energy::Bool=true)
         if D == 2
             if st.sigma_particle === nothing
                 if compute_energy
-                    NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.f0x, st.f0y, st.Epot,
-                                                   st.nbh, st.box2::Definitions.Box2, st.pair_lj)
-                else
-                    NonBondedForces.lj_forces_soa_noE!(st.rx, st.ry, st.f0x, st.f0y,
+                    if st.bonds === nothing
+                        NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.f0x, st.f0y, st.Epot,
                                                        st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+                    else
+                        NonBondedForces.lj_forces_soa_excl!(st.rx, st.ry, st.f0x, st.f0y, st.Epot,
+                                                            st.nbh, st.bonds, st.box2::Definitions.Box2, st.pair_lj)
+                    end
+                else
+                    if st.bonds === nothing
+                        NonBondedForces.lj_forces_soa_noE!(st.rx, st.ry, st.f0x, st.f0y,
+                                                           st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+                    else
+                        NonBondedForces.lj_forces_soa_noE_excl!(st.rx, st.ry, st.f0x, st.f0y,
+                                                                st.nbh, st.bonds, st.box2::Definitions.Box2, st.pair_lj)
+                    end
                 end
             else
                 if compute_energy
@@ -279,14 +313,41 @@ function step!(st::SimulationState, dt::Float32; compute_energy::Bool=true)
                                                                st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
                 end
             end
+            # bonded contributions at t
+            if st.bonds !== nothing
+                if st.harmonic_params !== nothing
+                    if compute_energy
+                        BondedForces.harmonic_forces_soa!(st.rx, st.ry, st.f0x, st.f0y, st.Epot, st.bonds, st.box2::Definitions.Box2, st.harmonic_params)
+                    else
+                        BondedForces.harmonic_forces_soa_noE!(st.rx, st.ry, st.f0x, st.f0y, st.bonds, st.box2::Definitions.Box2, st.harmonic_params)
+                    end
+                end
+                if st.fene_params !== nothing
+                    if compute_energy
+                        BondedForces.fene_forces_soa!(st.rx, st.ry, st.f0x, st.f0y, st.Epot, st.bonds, st.box2::Definitions.Box2, st.fene_params)
+                    else
+                        BondedForces.fene_forces_soa_noE!(st.rx, st.ry, st.f0x, st.f0y, st.bonds, st.box2::Definitions.Box2, st.fene_params)
+                    end
+                end
+            end
         else
             if st.sigma_particle === nothing
                 if compute_energy
-                    NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.Epot,
-                                                   st.nbh, st.box3::Definitions.Box3, st.pair_lj)
-                else
-                    NonBondedForces.lj_forces_soa_noE!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
+                    if st.bonds === nothing
+                        NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.Epot,
                                                        st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+                    else
+                        NonBondedForces.lj_forces_soa_excl!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.Epot,
+                                                            st.nbh, st.bonds, st.box3::Definitions.Box3, st.pair_lj)
+                    end
+                else
+                    if st.bonds === nothing
+                        NonBondedForces.lj_forces_soa_noE!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
+                                                           st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+                    else
+                        NonBondedForces.lj_forces_soa_noE_excl!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
+                                                                st.nbh, st.bonds, st.box3::Definitions.Box3, st.pair_lj)
+                    end
                 end
             else
                 if compute_energy
@@ -297,6 +358,23 @@ function step!(st::SimulationState, dt::Float32; compute_energy::Bool=true)
                     NonBondedForces.lj_forces_soa_noE_mixed!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
                                                                st.nbh, st.box3::Definitions.Box3,
                                                                st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
+                end
+            end
+            # bonded contributions at t
+            if st.bonds !== nothing
+                if st.harmonic_params !== nothing
+                    if compute_energy
+                        BondedForces.harmonic_forces_soa!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.Epot, st.bonds, st.box3::Definitions.Box3, st.harmonic_params)
+                    else
+                        BondedForces.harmonic_forces_soa_noE!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.bonds, st.box3::Definitions.Box3, st.harmonic_params)
+                    end
+                end
+                if st.fene_params !== nothing
+                    if compute_energy
+                        BondedForces.fene_forces_soa!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.Epot, st.bonds, st.box3::Definitions.Box3, st.fene_params)
+                    else
+                        BondedForces.fene_forces_soa_noE!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.bonds, st.box3::Definitions.Box3, st.fene_params)
+                    end
                 end
             end
         end
@@ -338,11 +416,38 @@ function step!(st::SimulationState, dt::Float32; compute_energy::Bool=true)
             end
         else
             if compute_energy
-                NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.fx, st.fy, st.Epot,
-                                               st.nbh, st.box2::Definitions.Box2, st.pair_lj)
-            else
-                NonBondedForces.lj_forces_soa_noE!(st.rx, st.ry, st.fx, st.fy,
+                if st.bonds === nothing
+                    NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.fx, st.fy, st.Epot,
                                                    st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+                else
+                    NonBondedForces.lj_forces_soa_excl!(st.rx, st.ry, st.fx, st.fy, st.Epot,
+                                                        st.nbh, st.bonds, st.box2::Definitions.Box2, st.pair_lj)
+                end
+            else
+                if st.bonds === nothing
+                    NonBondedForces.lj_forces_soa_noE!(st.rx, st.ry, st.fx, st.fy,
+                                                       st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+                else
+                    NonBondedForces.lj_forces_soa_noE_excl!(st.rx, st.ry, st.fx, st.fy,
+                                                            st.nbh, st.bonds, st.box2::Definitions.Box2, st.pair_lj)
+                end
+            end
+        end
+        # bonded contributions at t+dt
+        if st.bonds !== nothing
+            if st.harmonic_params !== nothing
+                if compute_energy
+                    BondedForces.harmonic_forces_soa!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.bonds, st.box2::Definitions.Box2, st.harmonic_params)
+                else
+                    BondedForces.harmonic_forces_soa_noE!(st.rx, st.ry, st.fx, st.fy, st.bonds, st.box2::Definitions.Box2, st.harmonic_params)
+                end
+            end
+            if st.fene_params !== nothing
+                if compute_energy
+                    BondedForces.fene_forces_soa!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.bonds, st.box2::Definitions.Box2, st.fene_params)
+                else
+                    BondedForces.fene_forces_soa_noE!(st.rx, st.ry, st.fx, st.fy, st.bonds, st.box2::Definitions.Box2, st.fene_params)
+                end
             end
         end
         LangevinIntegrators.vv_velocities_soa!(st.vx, st.vy, st.f0x, st.f0y, st.fx, st.fy,
@@ -370,11 +475,38 @@ function step!(st::SimulationState, dt::Float32; compute_energy::Bool=true)
             end
         else
             if compute_energy
-                NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot,
-                                               st.nbh, st.box3::Definitions.Box3, st.pair_lj)
-            else
-                NonBondedForces.lj_forces_soa_noE!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz,
+                if st.bonds === nothing
+                    NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot,
                                                    st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+                else
+                    NonBondedForces.lj_forces_soa_excl!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot,
+                                                        st.nbh, st.bonds, st.box3::Definitions.Box3, st.pair_lj)
+                end
+            else
+                if st.bonds === nothing
+                    NonBondedForces.lj_forces_soa_noE!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz,
+                                                       st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+                else
+                    NonBondedForces.lj_forces_soa_noE_excl!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz,
+                                                            st.nbh, st.bonds, st.box3::Definitions.Box3, st.pair_lj)
+                end
+            end
+        end
+        # bonded contributions at t+dt
+        if st.bonds !== nothing
+            if st.harmonic_params !== nothing
+                if compute_energy
+                    BondedForces.harmonic_forces_soa!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.bonds, st.box3::Definitions.Box3, st.harmonic_params)
+                else
+                    BondedForces.harmonic_forces_soa_noE!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.bonds, st.box3::Definitions.Box3, st.harmonic_params)
+                end
+            end
+            if st.fene_params !== nothing
+                if compute_energy
+                    BondedForces.fene_forces_soa!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.bonds, st.box3::Definitions.Box3, st.fene_params)
+                else
+                    BondedForces.fene_forces_soa_noE!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.bonds, st.box3::Definitions.Box3, st.fene_params)
+                end
             end
         end
         LangevinIntegrators.vv_velocities_soa!(st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z,
@@ -510,6 +642,7 @@ This uses positions-only dynamics (no kinetic energy). Velocities buffers in the
 state are reused as temporary storage for midpoint positions.
 """
 function step!(st::SimulationState, bp::BrownianIntegrators.BrownianParams{Float32}, dt::Float32; compute_energy::Bool=true)
+    st.last_integrator = UInt8(2)
     D = st.rz === nothing ? 2 : 3
 
     do_check = (st.step % NL_CHECK_STRIDE == 0)
@@ -555,18 +688,38 @@ function step!(st::SimulationState, bp::BrownianIntegrators.BrownianParams{Float
     if D == 2
         BrownianIntegrators.bd_prepare_midpoint_2d!(st.rx, st.ry, st.fx, st.fy, st.rf_x, st.rf_y, st.vx, st.vy, μ, sqrt2Ddt, dt, st.box2::Definitions.Box2)
         if st.sigma_particle === nothing
-            NonBondedForces.lj_forces_soa_noE!(st.vx, st.vy, st.f0x, st.f0y, st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+            if st.bonds === nothing
+                NonBondedForces.lj_forces_soa_noE!(st.vx, st.vy, st.f0x, st.f0y, st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+            else
+                NonBondedForces.lj_forces_soa_noE_excl!(st.vx, st.vy, st.f0x, st.f0y, st.nbh, st.bonds, st.box2::Definitions.Box2, st.pair_lj)
+            end
         else
             NonBondedForces.lj_forces_soa_noE_mixed!(st.vx, st.vy, st.f0x, st.f0y,
                                                      st.nbh, st.box2::Definitions.Box2,
                                                      st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
         end
+        if st.bonds !== nothing
+            if st.harmonic_params !== nothing
+                BondedForces.harmonic_forces_soa_noE!(st.vx, st.vy, st.f0x, st.f0y, st.bonds, st.box2::Definitions.Box2, st.harmonic_params)
+            end
+            if st.fene_params !== nothing
+                BondedForces.fene_forces_soa_noE!(st.vx, st.vy, st.f0x, st.f0y, st.bonds, st.box2::Definitions.Box2, st.fene_params)
+            end
+        end
         BrownianIntegrators.bd_finish_step_2d!(st.rx, st.ry, st.f0x, st.f0y, st.rf_x, st.rf_y, μ, sqrt2Ddt, dt, st.dq, st.box2::Definitions.Box2)
         if st.sigma_particle === nothing
             if compute_energy
-                NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+                if st.bonds === nothing
+                    NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+                else
+                    NonBondedForces.lj_forces_soa_excl!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.nbh, st.bonds, st.box2::Definitions.Box2, st.pair_lj)
+                end
             else
-                NonBondedForces.lj_forces_soa_noE!(st.rx, st.ry, st.fx, st.fy, st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+                if st.bonds === nothing
+                    NonBondedForces.lj_forces_soa_noE!(st.rx, st.ry, st.fx, st.fy, st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+                else
+                    NonBondedForces.lj_forces_soa_noE_excl!(st.rx, st.ry, st.fx, st.fy, st.nbh, st.bonds, st.box2::Definitions.Box2, st.pair_lj)
+                end
             end
         else
             if compute_energy
@@ -579,21 +732,57 @@ function step!(st::SimulationState, bp::BrownianIntegrators.BrownianParams{Float
                                                            st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
             end
         end
+        if st.bonds !== nothing
+            if st.harmonic_params !== nothing
+                if compute_energy
+                    BondedForces.harmonic_forces_soa!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.bonds, st.box2::Definitions.Box2, st.harmonic_params)
+                else
+                    BondedForces.harmonic_forces_soa_noE!(st.rx, st.ry, st.fx, st.fy, st.bonds, st.box2::Definitions.Box2, st.harmonic_params)
+                end
+            end
+            if st.fene_params !== nothing
+                if compute_energy
+                    BondedForces.fene_forces_soa!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.bonds, st.box2::Definitions.Box2, st.fene_params)
+                else
+                    BondedForces.fene_forces_soa_noE!(st.rx, st.ry, st.fx, st.fy, st.bonds, st.box2::Definitions.Box2, st.fene_params)
+                end
+            end
+        end
     else
         BrownianIntegrators.bd_prepare_midpoint_3d!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.rf_x, st.rf_y, st.rf_z, st.vx, st.vy, st.vz, μ, sqrt2Ddt, dt, st.box3::Definitions.Box3)
         if st.sigma_particle === nothing
-            NonBondedForces.lj_forces_soa_noE!(st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z, st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+            if st.bonds === nothing
+                NonBondedForces.lj_forces_soa_noE!(st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z, st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+            else
+                NonBondedForces.lj_forces_soa_noE_excl!(st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z, st.nbh, st.bonds, st.box3::Definitions.Box3, st.pair_lj)
+            end
         else
             NonBondedForces.lj_forces_soa_noE_mixed!(st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z,
                                                      st.nbh, st.box3::Definitions.Box3,
                                                      st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
         end
+        if st.bonds !== nothing
+            if st.harmonic_params !== nothing
+                BondedForces.harmonic_forces_soa_noE!(st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z, st.bonds, st.box3::Definitions.Box3, st.harmonic_params)
+            end
+            if st.fene_params !== nothing
+                BondedForces.fene_forces_soa_noE!(st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z, st.bonds, st.box3::Definitions.Box3, st.fene_params)
+            end
+        end
         BrownianIntegrators.bd_finish_step_3d!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.rf_x, st.rf_y, st.rf_z, μ, sqrt2Ddt, dt, st.dq, st.box3::Definitions.Box3)
         if st.sigma_particle === nothing
             if compute_energy
-                NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+                if st.bonds === nothing
+                    NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+                else
+                    NonBondedForces.lj_forces_soa_excl!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.nbh, st.bonds, st.box3::Definitions.Box3, st.pair_lj)
+                end
             else
-                NonBondedForces.lj_forces_soa_noE!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+                if st.bonds === nothing
+                    NonBondedForces.lj_forces_soa_noE!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+                else
+                    NonBondedForces.lj_forces_soa_noE_excl!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.nbh, st.bonds, st.box3::Definitions.Box3, st.pair_lj)
+                end
             end
         else
             if compute_energy
@@ -604,6 +793,22 @@ function step!(st::SimulationState, bp::BrownianIntegrators.BrownianParams{Float
                 NonBondedForces.lj_forces_soa_noE_mixed!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz,
                                                            st.nbh, st.box3::Definitions.Box3,
                                                            st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
+            end
+        end
+        if st.bonds !== nothing
+            if st.harmonic_params !== nothing
+                if compute_energy
+                    BondedForces.harmonic_forces_soa!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.bonds, st.box3::Definitions.Box3, st.harmonic_params)
+                else
+                    BondedForces.harmonic_forces_soa_noE!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.bonds, st.box3::Definitions.Box3, st.harmonic_params)
+                end
+            end
+            if st.fene_params !== nothing
+                if compute_energy
+                    BondedForces.fene_forces_soa!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.bonds, st.box3::Definitions.Box3, st.fene_params)
+                else
+                    BondedForces.fene_forces_soa_noE!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.bonds, st.box3::Definitions.Box3, st.fene_params)
+                end
             end
         end
     end

@@ -282,14 +282,18 @@ Usage (2D):
 
 Usage (3D) is identical; z-components are written when present.
 """
-function write_gsd_frame!(h, st; diameter=1.0, types_names=["A"], step::Int=0)
+function write_gsd_frame!(h, st; diameter=1.0, types_names=["A"], step::Int=0, write_forces::Union{Nothing,Bool}=nothing)
     N = length(st.rx)
 
     # positions and velocities (N×3 Float32)
     posM = st.rz === nothing ? _soa_to_posmat(st.rx, st.ry) :
                                _soa_to_posmat(st.rx, st.ry, st.rz)
-    velM = st.vz === nothing ? _soa_to_velmat(st.vx, st.vy) :
-                               _soa_to_velmat(st.vx, st.vy, st.vz)
+    # velocities are undefined for Brownian dynamics; skip when last_integrator==2
+    write_vel = !(hasproperty(st, :last_integrator) && st.last_integrator == UInt8(2))
+    if write_vel
+        velM = st.vz === nothing ? _soa_to_velmat(st.vx, st.vy) :
+                                   _soa_to_velmat(st.vx, st.vy, st.vz)
+    end
 
     # dimensionality & box
     if st.box3 === nothing
@@ -324,7 +328,74 @@ function write_gsd_frame!(h, st; diameter=1.0, types_names=["A"], step::Int=0)
     end
     GSDFiles.write_particles_diameter!(h, diam)
     GSDFiles.write_particles_position!(h, Float32.(posM))
-    GSDFiles.write_particles_velocity!(h, Float32.(velM))
+    if write_vel
+        GSDFiles.write_particles_velocity!(h, Float32.(velM))
+    end
+
+    # Forces: default is false for both Brownian and Langevin; enable only if user asks
+    local do_forces::Bool
+    do_forces = (write_forces === true)
+    if do_forces
+        # Build Nx3 Float32 forces
+        FX = Vector{Float32}(undef, N); FY = Vector{Float32}(undef, N)
+        copyto!(FX, st.fx); copyto!(FY, st.fy)
+        FZ = st.fz === nothing ? fill(0.0f0, N) : (tmp=Vector{Float32}(undef,N); copyto!(tmp, st.fz); tmp)
+        CUDA.synchronize()
+        F = Array{Float32}(undef, N, 3)
+        @inbounds for i in 1:N
+            F[i,1] = FX[i]; F[i,2] = FY[i]; F[i,3] = FZ[i]
+        end
+        # Flatten row-major for GSD chunk
+        row = Vector{Float32}(undef, N*3)
+        k = 1
+        @inbounds for i in 1:N
+            row[k] = F[i,1]; row[k+1] = F[i,2]; row[k+2] = F[i,3]
+            k += 3
+        end
+        GSDFiles.write_chunk_raw!(h.user, "particles/force";
+                                  type_code=GSDFiles.GSD_TYPE_FLOAT,
+                                  N=N, M=3, data=row)
+    end
+
+    # Optional: bonded interactions (HOOMD bonds group)
+    if hasproperty(st, :bonds) && (st.bonds !== nothing)
+        # Download CSR adjacency to host
+        idx    = Vector{Int32}(undef, length(st.bonds.index));    copyto!(idx, st.bonds.index)
+        counts = Vector{Int32}(undef, length(st.bonds.counts));   copyto!(counts, st.bonds.counts)
+        flat   = Vector{Int32}(undef, length(st.bonds.flat));     copyto!(flat, st.bonds.flat)
+        CUDA.synchronize()
+
+        # Build unique bond list as pairs (i,j) with j>i, convert to 0-based
+        pairs = Vector{NTuple{2,UInt32}}()
+        pairs_size = 0
+        for i in 1:length(idx)
+            base = Int(idx[i])
+            nb   = Int(counts[i])
+            for t in 0:(nb-1)
+                j = Int(flat[base + t + 1])
+                if j > i
+                    push!(pairs, (UInt32(i-1), UInt32(j-1)))
+                    pairs_size += 1
+                end
+            end
+        end
+        if pairs_size > 0
+            # bonds: one type named "bond"; typeid all zeros
+            GSDFiles.write_bonds_N!(h, pairs_size)
+            GSDFiles.write_bonds_types!(h, ["bond"])  # single type
+            GSDFiles.write_bonds_typeid!(h, fill(UInt32(0), pairs_size))
+            # group matrix Nb×2
+            grp = Array{UInt32}(undef, pairs_size, 2)
+            @inbounds for k in 1:pairs_size
+                grp[k,1] = pairs[k][1]
+                grp[k,2] = pairs[k][2]
+            end
+            GSDFiles.write_bonds_group!(h, grp)
+        else
+            # No bonds; ensure bonds/N=0 for clarity (optional)
+            GSDFiles.write_bonds_N!(h, 0)
+        end
+    end
     GSDFiles.end_frame!(h)
     return h
 end

@@ -45,13 +45,13 @@ function randomize_types!(st; ratio::Float64=0.5)
 end
 
 # Simulation parameters
-N = 10_000
-BOX = (200.0f0, 200.0f0)
+N = 40_000
+BOX = (400.0f0, 400.0f0)
 SIGMA = 1f0
 EPS   = 100f0
 RCUT  = Float32(2^(1/6) * SIGMA)
 GAMMA = 100f0
-DT    = 0.00001f0
+DT    = 0.000002f0
 NSTEPS = 1_000_000
 LOG_INTERVAL = 100_000
 
