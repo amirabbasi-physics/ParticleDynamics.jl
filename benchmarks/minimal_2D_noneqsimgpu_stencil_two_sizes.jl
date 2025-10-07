@@ -51,8 +51,8 @@ SIGMA_REF = 1.0f0
 RCUT_REF  = Float32(2^(1/6) * SIGMA_REF)   # used by the LJ kernel (single-σ for now)
 GAMMA = 100f0
 DT    = 0.000002f0
-NSTEPS = 10_000_000
-LOG_INTERVAL = 1_000_000
+NSTEPS = 1_000_000
+LOG_INTERVAL = 1_00_000
 
 T_TYPE1 = 1.0f0
 T_TYPE2 = 200.0f0
