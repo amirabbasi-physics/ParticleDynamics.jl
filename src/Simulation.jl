@@ -213,7 +213,7 @@ end
 # =========================
 #   Build simulation
 # =========================
-function build_simulation(; D::Int, N::Int,
+function build_simulation(;N::Int,
                            box,
                            cutoff::Real=1.0,
                            skin::Real=0.4,
@@ -227,12 +227,13 @@ function build_simulation(; D::Int, N::Int,
                            dt::Real=0.001,
                            mass::Real=1,
                            bonds::Union{Nothing,Vector{Tuple{Int32,Int32}}}=nothing,
-                           bond_harmonic::Union{Nothing,Definitions.HarmonicBondParams{Real}}=nothing,
-                           bond_fene::Union{Nothing,Definitions.FENEParams{Real}}=nothing,
                            bonding::Union{Nothing,Definitions.BondPotential}=nothing,
                            nonbonded::Symbol = :lj,
                            softrep_params::Union{Nothing,Definitions.SoftRepulsiveParams{Real}}=nothing,
                            precision::Symbol = :f32)
+
+    # Dimension from box
+    D = length(box)
     
     if precision == :f32
         T = Float32
@@ -356,12 +357,6 @@ function build_simulation(; D::Int, N::Int,
         else
             bond_spec = nothing
         end
-    elseif bond_harmonic !== nothing
-        bh = bond_harmonic
-        bond_spec = Definitions.HarmonicBond{T}(Definitions.HarmonicBondParams{T}(T(bh.k), T(bh.r0)))
-    elseif bond_fene !== nothing
-        bf = bond_fene
-        bond_spec = Definitions.FENEBond{T}(Definitions.FENEParams{T}(T(bf.k), T(bf.R0)))
     else
         bond_spec = nothing
     end
@@ -1355,12 +1350,14 @@ function step!(st::SimulationState{T}, bp::BrownianIntegrators.BrownianParams{T}
         end
     end
 
-    μ = one(T) / bp.γ
-    Dth = bp.kT / bp.γ
-    sqrt2Ddt = sqrt(2f0*Dth*dtT)
-
     if D == 2
-        BrownianIntegrators.bd_prepare_midpoint_2d!(st.rx, st.ry, st.fx, st.fy, st.rf_x, st.rf_y, st.vx, st.vy, μ, sqrt2Ddt, dtT, st.box2::Definitions.Box2)
+        # Draw midpoint noise and compute midpoint positions into vx,vy
+        BrownianIntegrators.bd_prepare_midpoint_2d!(
+            st.rx, st.ry, st.fx, st.fy,
+            st.rf_x, st.rf_y,  # noise vectors (standard normals)
+            st.vx, st.vy,      # reuse velocity buffers as midpoint positions
+            bp.gamma, bp.noise_scale,
+            dtT, st.box2::Definitions.Box2)
         if st.nb_kind == NB_KIND_LJ
             if st.sigma_particle === nothing
                 if st.bonds === nothing
@@ -1392,7 +1389,12 @@ function step!(st::SimulationState{T}, bp::BrownianIntegrators.BrownianParams{T}
         if st.bonds !== nothing
             _apply_bonds2!(st, st.f0x, st.f0y, nothing, false)
         end
-        BrownianIntegrators.bd_finish_step_2d!(st.rx, st.ry, st.f0x, st.f0y, st.rf_x, st.rf_y, μ, sqrt2Ddt, dtT, st.dq, st.box2::Definitions.Box2)
+        # Finalize step using forces at midpoint (in f0*) and same noise
+        BrownianIntegrators.bd_finish_step_2d!(
+            st.rx, st.ry, st.f0x, st.f0y,
+            st.rf_x, st.rf_y,
+            bp.gamma, bp.noise_scale,
+            dtT, st.dq, st.box2::Definitions.Box2)
         if st.nb_kind == NB_KIND_LJ
             if st.sigma_particle === nothing
                 if compute_energy
@@ -1466,7 +1468,12 @@ function step!(st::SimulationState{T}, bp::BrownianIntegrators.BrownianParams{T}
             end
         end
     else
-        BrownianIntegrators.bd_prepare_midpoint_3d!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.rf_x, st.rf_y, st.rf_z, st.vx, st.vy, st.vz, μ, sqrt2Ddt, dtT, st.box3::Definitions.Box3)
+        BrownianIntegrators.bd_prepare_midpoint_3d!(
+            st.rx, st.ry, st.rz, st.fx, st.fy, st.fz,
+            st.rf_x, st.rf_y, st.rf_z,
+            st.vx, st.vy, st.vz,
+            bp.gamma, bp.noise_scale,
+            dtT, st.box3::Definitions.Box3)
         if st.nb_kind == NB_KIND_LJ
             if st.sigma_particle === nothing
                 if st.bonds === nothing
@@ -1498,7 +1505,12 @@ function step!(st::SimulationState{T}, bp::BrownianIntegrators.BrownianParams{T}
         if st.bonds !== nothing
             _apply_bonds3!(st, st.f0x, st.f0y, st.f0z, nothing, false)
         end
-        BrownianIntegrators.bd_finish_step_3d!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.rf_x, st.rf_y, st.rf_z, μ, sqrt2Ddt, dtT, st.dq, st.box3::Definitions.Box3)
+        BrownianIntegrators.bd_finish_step_3d!(
+            st.rx, st.ry, st.rz,
+            st.f0x, st.f0y, st.f0z,
+            st.rf_x, st.rf_y, st.rf_z,
+            bp.gamma, bp.noise_scale,
+            dtT, st.dq, st.box3::Definitions.Box3)
         if st.nb_kind == NB_KIND_LJ
             if st.sigma_particle === nothing
                 if compute_energy

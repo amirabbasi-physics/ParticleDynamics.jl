@@ -110,17 +110,17 @@ fene_bond(;k::Real = 300.0, r0::Real = 1.5) = FENEBond(FENEParams(float(k), floa
 
 # Stokes friction coefficient for a sphere
 # γ = 6 * π * η * R (where η is viscosity, R is radius)
-function StokesFrictionCoefficient(viscosity::T, radius::T) where {T<:AbstractFloat}
-    return T(6 * π * viscosity * radius)
+function StokesFrictionCoefficient(viscosity::Real, radius::Real)
+    return 6 * π * viscosity * radius
 end
 
 # Mass of a sphere given density and radius
-function SphereMass(density::T, radius::T) where {T<:AbstractFloat}
-    return T((4/3) * π * radius^3 * density)
+function SphereMass(density::Real, radius::Real) 
+    return (4/3) * π * radius^3 * density
 end
 
 # Inertial time (mass/friction)
-function InertialTime(mass::T, frictioncoefficient::T) where {T<:AbstractFloat}
+function InertialTime(mass::Real, frictioncoefficient::Real) 
     return mass / frictioncoefficient
 end
 
@@ -128,8 +128,13 @@ end
 # where d is dimension (2 or 3)
 # Thus DiffusiveTime = 4*R^2 * γ / (2*d*kT)
 # Note: this is 2x the time to diffuse its own radius
-function DiffusiveTime(radius::T, temperature::T, frictioncoefficient::T, dimension::T) where {T<:AbstractFloat}
+function DiffusiveTime(radius::Real, frictioncoefficient::Real, dimension::Real)
+    temperature = 1.0  # in reduced units kT=1, Pay attention that this is the same for paticles with different temperatures.
     return 4*(radius^2 * frictioncoefficient) / (2 * dimension * temperature)
+end
+
+function gamma_reduced(diffusive_time::Real, inertial_time::Real)
+    return sqrt(diffusive_time / inertial_time)
 end
 
 end # module
