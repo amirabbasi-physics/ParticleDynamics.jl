@@ -4,11 +4,12 @@ using Base: Set
 using CUDA
 using CUDA: CuArray, CuDeviceVector
 using ..Simulation: SimulationState
+using ..BrownianIntegrators
 
 export Filter, All, TypeIDs, Indices, Selection,
        resolve, resolve_gpu, selection, count,
        assign_scalar!, assign_values!, gather, sum,
-       set_noise_scale!, set_langevin_temperature!
+       set_noise_scale!, set_langevin_temperature!, set_friction!
 
 abstract type Filter end
 
@@ -117,6 +118,32 @@ function _gather_kernel!(out::CuDeviceVector{T}, src::CuDeviceVector{T}, idx::Cu
     i > N && return
     j = Int(idx[i])
     out[i] = src[j]
+    return
+end
+
+function _set_noise_gamma_kernel!(noise_scale::CuDeviceVector{T},
+                                  gamma::CuDeviceVector{T},
+                                  idx::CuDeviceVector{Int32},
+                                  dt::T, temperature::T) where {T<:AbstractFloat}
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    N = length(idx)
+    i > N && return
+    j = Int(idx[i])
+    g = gamma[j]
+    noise_scale[j] = sqrt(T(2) * g * temperature * dt)
+    return
+end
+
+function _set_noise_from_gamma!(noise_scale::CuArray{T,1},
+                                 gamma::CuArray{T,1},
+                                 idx::CuArray{Int32,1},
+                                 dt::T, temperature::T) where {T<:AbstractFloat}
+    N = length(idx)
+    N == 0 && return
+    threads = min(256, N)
+    blocks = cld(N, threads)
+    k = CUDA.@cuda launch=false _set_noise_gamma_kernel!(noise_scale, gamma, idx, dt, temperature)
+    CUDA.@sync k(noise_scale, gamma, idx, dt, temperature; threads, blocks)
     return
 end
 
@@ -301,12 +328,12 @@ function set_noise_scale!(st::SimulationState, value::Real; filter::Filter=All()
 end
 
 function set_noise_scale!(st::SimulationState, value::Real, sel::Selection)
-    assign_scalar!(st.vv.noise_scale, sel.device, Float32(value))
+    assign_scalar!(st.vv.noise_scale, sel.device, value)
     return sel
 end
 
 function set_noise_scale!(st::SimulationState, value::Real, idx::CuArray{Int32,1})
-    assign_scalar!(st.vv.noise_scale, idx, Float32(value))
+    assign_scalar!(st.vv.noise_scale, idx, value)
     return idx
 end
 
@@ -324,6 +351,104 @@ function set_noise_scale!(st::SimulationState, pairs::Pair{<:Filter,<:Real}...)
     return st
 end
 
+function set_noise_scale!(bp::BrownianIntegrators.BrownianParams{T}, sel::Selection, value::Real) where {T<:AbstractFloat}
+    assign_scalar!(bp.noise_scale, sel.device, value)
+    return sel
+end
+
+function set_noise_scale!(bp::BrownianIntegrators.BrownianParams{T}, idx::CuArray{Int32,1}, value::Real) where {T<:AbstractFloat}
+    assign_scalar!(bp.noise_scale, idx, value)
+    return idx
+end
+
+function set_noise_scale!(bp::BrownianIntegrators.BrownianParams{T}, st::SimulationState, filter::Filter, value::Real) where {T<:AbstractFloat}
+    sel = selection(st, filter)
+    set_noise_scale!(bp, sel, value)
+    return sel
+end
+
+function set_noise_scale!(bp::BrownianIntegrators.BrownianParams{T}, st::SimulationState; filter::Filter=All(), value::Real) where {T<:AbstractFloat}
+    return set_noise_scale!(bp, st, filter, value)
+end
+
+function set_noise_scale!(bp::BrownianIntegrators.BrownianParams{T}, st::SimulationState, mapping::AbstractDict{<:Filter,<:Real}) where {T<:AbstractFloat}
+    for (f, val) in mapping
+        set_noise_scale!(bp, st, f, val)
+    end
+    return bp
+end
+
+function set_noise_scale!(bp::BrownianIntegrators.BrownianParams{T}, st::SimulationState, pairs::Pair{<:Filter,<:Real}...) where {T<:AbstractFloat}
+    for (f, val) in pairs
+        set_noise_scale!(bp, st, f, val)
+    end
+    return bp
+end
+
+function set_friction!(st::SimulationState, value::Real; filter::Filter=All())
+    sel = selection(st, filter)
+    set_friction!(st, value, sel)
+    return sel
+end
+
+function set_friction!(st::SimulationState, value::Real, sel::Selection)
+    assign_scalar!(st.vv.gamma, sel.device, value)
+    return sel
+end
+
+function set_friction!(st::SimulationState, value::Real, idx::CuArray{Int32,1})
+    assign_scalar!(st.vv.gamma, idx, value)
+    return idx
+end
+
+function set_friction!(st::SimulationState, mapping::AbstractDict{<:Filter,<:Real})
+    for (f, val) in mapping
+        set_friction!(st, val; filter=f)
+    end
+    return st
+end
+
+function set_friction!(st::SimulationState, pairs::Pair{<:Filter,<:Real}...)
+    for (f, val) in pairs
+        set_friction!(st, val; filter=f)
+    end
+    return st
+end
+
+function set_friction!(bp::BrownianIntegrators.BrownianParams{T}, sel::Selection, value::Real) where {T<:AbstractFloat}
+    assign_scalar!(bp.gamma, sel.device, value)
+    return sel
+end
+
+function set_friction!(bp::BrownianIntegrators.BrownianParams{T}, idx::CuArray{Int32,1}, value::Real) where {T<:AbstractFloat}
+    assign_scalar!(bp.gamma, idx, value)
+    return idx
+end
+
+function set_friction!(bp::BrownianIntegrators.BrownianParams{T}, st::SimulationState, filter::Filter, value::Real) where {T<:AbstractFloat}
+    sel = selection(st, filter)
+    set_friction!(bp, sel, value)
+    return sel
+end
+
+function set_friction!(bp::BrownianIntegrators.BrownianParams{T}, st::SimulationState; filter::Filter=All(), value::Real) where {T<:AbstractFloat}
+    return set_friction!(bp, st, filter, value)
+end
+
+function set_friction!(bp::BrownianIntegrators.BrownianParams{T}, st::SimulationState, mapping::AbstractDict{<:Filter,<:Real}) where {T<:AbstractFloat}
+    for (f, val) in mapping
+        set_friction!(bp, st, f, val)
+    end
+    return bp
+end
+
+function set_friction!(bp::BrownianIntegrators.BrownianParams{T}, st::SimulationState, pairs::Pair{<:Filter,<:Real}...) where {T<:AbstractFloat}
+    for (f, val) in pairs
+        set_friction!(bp, st, f, val)
+    end
+    return bp
+end
+
 function set_langevin_temperature!(st::SimulationState, dt::Real, temperature::Real; filter::Filter=All())
     sel = selection(st, filter)
     set_langevin_temperature!(st, dt, temperature, sel)
@@ -331,20 +456,18 @@ function set_langevin_temperature!(st::SimulationState, dt::Real, temperature::R
 end
 
 function set_langevin_temperature!(st::SimulationState, dt::Real, temperature::Real, sel::Selection)
-    γ = Float32(st.vv.gamma)
-    Δt = Float32(dt)
-    Tval = Float32(temperature)
-    scale = sqrt(2f0 * γ * Tval * Δt)
-    assign_scalar!(st.vv.noise_scale, sel.device, scale)
+    T = eltype(st.vv.gamma)
+    Δt = convert(T, dt)
+    Tval = convert(T, temperature)
+    _set_noise_from_gamma!(st.vv.noise_scale, st.vv.gamma, sel.device, Δt, Tval)
     return sel
 end
 
 function set_langevin_temperature!(st::SimulationState, dt::Real, temperature::Real, idx::CuArray{Int32,1})
-    γ = Float32(st.vv.gamma)
-    Δt = Float32(dt)
-    Tval = Float32(temperature)
-    scale = sqrt(2f0 * γ * Tval * Δt)
-    assign_scalar!(st.vv.noise_scale, idx, scale)
+    T = eltype(st.vv.gamma)
+    Δt = convert(T, dt)
+    Tval = convert(T, temperature)
+    _set_noise_from_gamma!(st.vv.noise_scale, st.vv.gamma, idx, Δt, Tval)
     return idx
 end
 
@@ -360,6 +483,40 @@ function set_langevin_temperature!(st::SimulationState, dt::Real, pairs::Pair{<:
         set_langevin_temperature!(st, dt, temp; filter=f)
     end
     return st
+end
+
+function set_langevin_temperature!(bp::BrownianIntegrators.BrownianParams{T}, st::SimulationState, dt::Real, temperature::Real; filter::Filter=All()) where {T<:AbstractFloat}
+    sel = selection(st, filter)
+    set_langevin_temperature!(bp, st, dt, temperature, sel)
+    return sel
+end
+
+function set_langevin_temperature!(bp::BrownianIntegrators.BrownianParams{T}, st::SimulationState, dt::Real, temperature::Real, sel::Selection) where {T<:AbstractFloat}
+    Δt = convert(T, dt)
+    Tval = convert(T, temperature)
+    _set_noise_from_gamma!(bp.noise_scale, bp.gamma, sel.device, Δt, Tval)
+    return sel
+end
+
+function set_langevin_temperature!(bp::BrownianIntegrators.BrownianParams{T}, st::SimulationState, dt::Real, temperature::Real, idx::CuArray{Int32,1}) where {T<:AbstractFloat}
+    Δt = convert(T, dt)
+    Tval = convert(T, temperature)
+    _set_noise_from_gamma!(bp.noise_scale, bp.gamma, idx, Δt, Tval)
+    return idx
+end
+
+function set_langevin_temperature!(bp::BrownianIntegrators.BrownianParams{T}, st::SimulationState, dt::Real, mapping::AbstractDict{<:Filter,<:Real}) where {T<:AbstractFloat}
+    for (f, temp) in mapping
+        set_langevin_temperature!(bp, st, dt, temp; filter=f)
+    end
+    return bp
+end
+
+function set_langevin_temperature!(bp::BrownianIntegrators.BrownianParams{T}, st::SimulationState, dt::Real, pairs::Pair{<:Filter,<:Real}...) where {T<:AbstractFloat}
+    for (f, temp) in pairs
+        set_langevin_temperature!(bp, st, dt, temp; filter=f)
+    end
+    return bp
 end
 
 end # module Filters

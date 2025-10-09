@@ -1,5 +1,4 @@
 using NonEqSimGPU
-using NonEqSimGPU: Simulation, Definitions, BondedForces, Writers
 using CUDA
 
 # Simple 2D polymer chain with bonded interactions (FENE or harmonic)
@@ -43,43 +42,39 @@ dt = 0.0005f0
 N_steps = 1000000
 N_log = 10000
 
-# Langevin noise scale per particle: sqrt(2γT) (mass=1)
-noise_scale = CUDA.fill(sqrt(2f0*gamma*temperature*dt), N)
-
 # Bonds: linear chain
 bonds = make_linear_chain_bonds(N)
 
 # Choose one type of bonded interaction
 use_fene = true
-bond_harmonic = use_fene ? nothing : Definitions.HarmonicBondParams{Float32}(30f0, 1.0f0)
-bond_fene     = use_fene ? Definitions.FENEParams{Float32}(300f0, 1.5f0) : nothing
+bonding = use_fene ? fene_bond(300f0, 1.5f0) : harmonic_bond(30f0, 1.0f0)
 
 # ---- Build ----
-st = Simulation.build_simulation(D = 2, N=N, box=box, cutoff=r_cut, skin=0.4f0, cap=cap,
+st = build_simulation(D = 2, N=N, box=box, cutoff=r_cut, skin=0.4f0, cap=cap,
                                  neigh_interval=1,
                                  epsilon=epsilon, sigma=sigma,
-                                 gamma=gamma, noise_scale=noise_scale, init_temperature=temperature,
-                                 bonds=bonds, bond_harmonic=bond_harmonic, bond_fene=bond_fene,
+                                 gamma=gamma, temperature=temperature, dt=dt,
+                                 bonds=bonds, bonding=bonding,
                                  nonbonded=:wca)
 
 # ---- Initialize positions ----
 init_chain_line!(st, box)
 
 gsd_path = joinpath(@__DIR__, "polymer2d.gsd")
-gsdh = Writers.gsd_open(gsd_path)
+gsdh = gsd_open(gsd_path)
 types = ["C"]
-Writers.write_gsd_frame!(gsdh, st; diameter=sigma, types_names=types, step=st.step)
+write_gsd_frame!(gsdh, st; diameter=sigma, types_names=types, step=st.step)
 
 @time for s in 1:N_steps
     if s % N_log == 0
-        Simulation.step!(st, dt)
-        Writers.write_observables_csv!(joinpath(@__DIR__, "obs2d_polymer.csv"), s; Epot=st.Epot, Ekin=st.Ekin, dq=st.dq)
-        Writers.write_gsd_frame!(gsdh, st; diameter=sigma, types_names=types, step=st.step)
+        step!(st, dt)
+        write_observables_csv!(joinpath(@__DIR__, "obs2d_polymer.csv"), s; Epot=st.Epot, Ekin=st.Ekin, dq=st.dq)
+        write_gsd_frame!(gsdh, st; diameter=sigma, types_names=types, step=st.step)
         @info "polymer step" step=s Epot_sum=sum(st.Epot) Ekin_sum=sum(st.Ekin)
     else
-        Simulation.step!(st, dt, compute_energy=false)
+        step!(st, dt, compute_energy=false)
     end
 end
 
-Writers.gsd_close(gsdh)
+gsd_close(gsdh)
 println("Done. GSD: $gsd_path")

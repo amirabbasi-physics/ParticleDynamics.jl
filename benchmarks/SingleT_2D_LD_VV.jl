@@ -1,7 +1,5 @@
 using NonEqSimGPU
-using NonEqSimGPU: Simulation
-using NonEqSimGPU.Filters
-using NonEqSimGPU.Writers
+using NonEqSimGPU: Filters
 using CUDA
 using Random
 using Printf
@@ -46,7 +44,7 @@ function main()
     # Single temperature (expect ⟨Q_tot⟩ ≈ 0)
     t_bath = 1000.0f0
 
-    st = Simulation.build_simulation(D=2,
+    st = build_simulation(D=2,
                                      N=n,
                                      box=(box[1], box[2]),
                                      cutoff=rcut,
@@ -69,9 +67,9 @@ function main()
     output_dir = @__DIR__
     csv_path = joinpath(output_dir, "obs2d_singleT_VV.csv")
     gsd_path = joinpath(output_dir, "traj2d_singleT_VV.gsd")
-    gsdh = Writers.gsd_open(gsd_path)
+    gsdh = gsd_open(gsd_path)
     type_names = ["C"]
-    Writers.write_gsd_frame!(gsdh, st; diameter=sigma, types_names=type_names, step=st.step)
+    write_gsd_frame!(gsdh, st; diameter=sigma, types_names=type_names, step=st.step)
     open(csv_path, "w") do io
         println(io, "step,Ekin_avg,Qtot,dQ_interval,elapsed_s,steps_per_sec,eta_s")
     end
@@ -88,7 +86,7 @@ function main()
     println("Benchmark goal: In a single-temperature bath, total heat Qtot fluctuates around 0.")
 
     for step in 1:nsteps
-        Simulation.step!(st, st.vv, dt; compute_energy=false)
+        step!(st, vv(st), dt; compute_energy=false)
 
         if step % log_interval == 0
             # total kinetic energy per particle and heat exchanged with bath
@@ -106,7 +104,7 @@ function main()
                 @printf(io, "%d,%.7e,%.7e,%.7e,%.3f,%.3f,%.3f\n", step, Ekin_avg, Qtot, dQ, elapsed, steps_per_sec, eta)
             end
 
-            Writers.write_gsd_frame!(gsdh, st; diameter=sigma, types_names=type_names, step=st.step)
+            write_gsd_frame!(gsdh, st; diameter=sigma, types_names=type_names, step=st.step)
 
             @info "progress (singleT)" step=step Ekin_avg=Ekin_avg Qtot=Qtot dQ=dQ steps_per_sec=steps_per_sec eta_s=eta
 
@@ -119,7 +117,7 @@ function main()
 
     total_time = time() - start_time
     println("Total wall time ≈ $(round(total_time, digits=2)) s")
-    Writers.gsd_close(gsdh)
+    gsd_close(gsdh)
     println("Wrote observables to $(csv_path)")
     println("Wrote trajectory to $(gsd_path)")
 end

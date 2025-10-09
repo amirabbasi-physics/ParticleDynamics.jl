@@ -46,9 +46,9 @@ Append simple observables to CSV (host side).
 Columns: step,Etot,Kavg,Qtot
 """
 function write_observables_csv!(path::AbstractString, step::Int;
-                                Epot::CuArray{Float32,1},
-                                Ekin::CuArray{Float32,1},
-                                dq::CuArray{Float32,1})
+                                Epot::CuArray{T,1},
+                                Ekin::CuArray{T,1},
+                                dq::CuArray{T,1}) where {T<:AbstractFloat}
     Etot = sum(Array(Epot))
     Kavg = sum(Array(Ekin))
     Qtot = sum(Array(dq))
@@ -108,10 +108,10 @@ function write!(w::CSVWriter, st, step::Int, _dt::Real)
 
     N = length(st.rx)
     X = Array(st.rx); Y = Array(st.ry)
-    Z = st.rz === nothing ? fill(0.0f0, N) : Array(st.rz)
+    Z = st.rz === nothing ? fill(zero(eltype(st.rx)), N) : Array(st.rz)
 
     VX = Array(st.vx); VY = Array(st.vy)
-    VZ = st.vz === nothing ? fill(0.0f0, N) : Array(st.vz)
+    VZ = st.vz === nothing ? fill(zero(eltype(st.vx)), N) : Array(st.vz)
 
     TID = Array(st.typeid)
 
@@ -163,7 +163,7 @@ function write!(w::XYZWriter, st, step::Int, _dt::Real)
     _ensure_xyz_open!(w)
     N = length(st.rx)
     X = Array(st.rx); Y = Array(st.ry)
-    Z = st.rz === nothing ? fill(0.0f0, N) : Array(st.rz)
+    Z = st.rz === nothing ? fill(zero(eltype(st.rx)), N) : Array(st.rz)
 
     println(w.io, N)
     println(w.io, "step=$step")
@@ -176,12 +176,12 @@ end
 """
 Direct helper: write an XYZ snapshot without a writer object.
 """
-function write_xyz!(path::AbstractString; rx::CuArray{Float32,1},
-                    ry::CuArray{Float32,1},
-                    rz::Union{Nothing,CuArray{Float32,1}}=nothing,
-                    atomsym::AbstractString="A")
+function write_xyz!(path::AbstractString; rx::CuArray{T,1},
+                    ry::CuArray{T,1},
+                    rz::Union{Nothing,CuArray{T,1}}=nothing,
+                    atomsym::AbstractString="A") where {T<:AbstractFloat}
     X = Array(rx); Y = Array(ry)
-    Z = rz === nothing ? fill(0.0f0, length(X)) : Array(rz)
+    Z = rz === nothing ? fill(zero(T), length(X)) : Array(rz)
     N = length(X)
     open(path, "a") do io
         @printf(io, "%d\n", N)
@@ -215,31 +215,31 @@ gsd_close(h) = GSDFiles.close_gsd(h)
 
 # -- internal helpers -----------------------------------------------------
 
-@inline function _pack_box2(box::Tuple{Float32,Float32})
+@inline function _pack_box2(box::Tuple{T,T}) where {T<:AbstractFloat}
     # HOOMD box: (Lx, Ly, Lz, xy, xz, yz)
-    return SVector{6,Float32}(box[1], box[2], 0f0, 0f0, 0f0, 0f0)
+    return SVector{6,T}(box[1], box[2], zero(T), zero(T), zero(T), zero(T))
 end
 
-@inline function _pack_box3(box::Tuple{Float32,Float32,Float32})
-    return SVector{6,Float32}(box[1], box[2], box[3], 0f0, 0f0, 0f0)
+@inline function _pack_box3(box::Tuple{T,T,T}) where {T<:AbstractFloat}
+    return SVector{6,T}(box[1], box[2], box[3], zero(T), zero(T), zero(T))
 end
 
-@inline function _soa_to_posmat(rx::CuArray{Float32,1}, ry::CuArray{Float32,1})
+@inline function _soa_to_posmat(rx::CuArray{T,1}, ry::CuArray{T,1}) where {T<:AbstractFloat}
     # Asynchronous GPU->CPU transfer (non-blocking)
-    X = Vector{Float32}(undef, length(rx))
-    Y = Vector{Float32}(undef, length(ry))
+    X = Vector{T}(undef, length(rx))
+    Y = Vector{T}(undef, length(ry))
     copyto!(X, rx)  # Async copy
     copyto!(Y, ry)  # Async copy
-    Z = fill(0.0f0, length(X))
+    Z = fill(zero(T), length(X))
     CUDA.synchronize()  # Single sync point for both transfers
     return hcat(X, Y, Z)
 end
 
-@inline function _soa_to_posmat(rx::CuArray{Float32,1}, ry::CuArray{Float32,1}, rz::CuArray{Float32,1})
+@inline function _soa_to_posmat(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1}) where {T<:AbstractFloat}
     # Asynchronous GPU->CPU transfer (non-blocking)
-    X = Vector{Float32}(undef, length(rx))
-    Y = Vector{Float32}(undef, length(ry))
-    Z = Vector{Float32}(undef, length(rz))
+    X = Vector{T}(undef, length(rx))
+    Y = Vector{T}(undef, length(ry))
+    Z = Vector{T}(undef, length(rz))
     copyto!(X, rx)  # Async copy
     copyto!(Y, ry)  # Async copy  
     copyto!(Z, rz)  # Async copy
@@ -247,22 +247,22 @@ end
     return hcat(X, Y, Z)
 end
 
-@inline function _soa_to_velmat(vx::CuArray{Float32,1}, vy::CuArray{Float32,1})
+@inline function _soa_to_velmat(vx::CuArray{T,1}, vy::CuArray{T,1}) where {T<:AbstractFloat}
     # Asynchronous GPU->CPU transfer (non-blocking)
-    VX = Vector{Float32}(undef, length(vx))
-    VY = Vector{Float32}(undef, length(vy))
+    VX = Vector{T}(undef, length(vx))
+    VY = Vector{T}(undef, length(vy))
     copyto!(VX, vx)  # Async copy
     copyto!(VY, vy)  # Async copy
-    VZ = fill(0.0f0, length(VX))
+    VZ = fill(zero(T), length(VX))
     CUDA.synchronize()  # Single sync point for both transfers
     return hcat(VX, VY, VZ)
 end
 
-@inline function _soa_to_velmat(vx::CuArray{Float32,1}, vy::CuArray{Float32,1}, vz::CuArray{Float32,1})
+@inline function _soa_to_velmat(vx::CuArray{T,1}, vy::CuArray{T,1}, vz::CuArray{T,1}) where {T<:AbstractFloat}
     # Asynchronous GPU->CPU transfer (non-blocking)
-    VX = Vector{Float32}(undef, length(vx))
-    VY = Vector{Float32}(undef, length(vy))
-    VZ = Vector{Float32}(undef, length(vz))
+    VX = Vector{T}(undef, length(vx))
+    VY = Vector{T}(undef, length(vy))
+    VZ = Vector{T}(undef, length(vz))
     copyto!(VX, vx)  # Async copy
     copyto!(VY, vy)  # Async copy  
     copyto!(VZ, vz)  # Async copy
@@ -283,9 +283,11 @@ Usage (2D):
 Usage (3D) is identical; z-components are written when present.
 """
 function write_gsd_frame!(h, st; diameter=1.0, types_names=["A"], step::Int=0, write_forces::Union{Nothing,Bool}=nothing)
+    # Element type used for numeric conversions
+    T = eltype(st.rx)
     N = length(st.rx)
 
-    # positions and velocities (N×3 Float32)
+    # positions and velocities (N×3 T)
     posM = st.rz === nothing ? _soa_to_posmat(st.rx, st.ry) :
                                _soa_to_posmat(st.rx, st.ry, st.rz)
     # velocities are undefined for Brownian dynamics; skip when last_integrator==2
@@ -298,10 +300,10 @@ function write_gsd_frame!(h, st; diameter=1.0, types_names=["A"], step::Int=0, w
     # dimensionality & box
     if st.box3 === nothing
         D = UInt8(2)
-        box6 = _pack_box2(st.box2::Tuple{Float32,Float32})
+        box6 = _pack_box2(st.box2::Tuple{T,T})
     else
         D = UInt8(3)
-        box6 = _pack_box3(st.box3::Tuple{Float32,Float32,Float32})
+        box6 = _pack_box3(st.box3::Tuple{T,T,T})
     end
 
     # types (async transfer)
@@ -313,40 +315,40 @@ function write_gsd_frame!(h, st; diameter=1.0, types_names=["A"], step::Int=0, w
     # write frame
     GSDFiles.write_configuration_step!(h, UInt64(step))
     GSDFiles.write_configuration_dimensions!(h, D)
-    GSDFiles.write_configuration_box!(h, Float32.(box6))
+    GSDFiles.write_configuration_box!(h, T.(box6))
     GSDFiles.write_particles_N!(h, N)
     GSDFiles.write_particles_types!(h, Vector{String}(types_names))
     GSDFiles.write_particles_typeid!(h, tid_0based)
-    local diam::Vector{Float32}
+    local diam::Vector{T}
     if diameter isa Number
-        diam = fill(Float32(diameter), N)
+        diam = fill(T(diameter), N)
     elseif diameter isa AbstractVector
         @assert length(diameter) == N "diameter vector length $(length(diameter)) must equal N=$(N)"
-        diam = Float32.(collect(diameter))
+        diam = T.(collect(diameter))
     else
         error("Unsupported diameter type: $(typeof(diameter))")
     end
     GSDFiles.write_particles_diameter!(h, diam)
-    GSDFiles.write_particles_position!(h, Float32.(posM))
+    GSDFiles.write_particles_position!(h, T.(posM))
     if write_vel
-        GSDFiles.write_particles_velocity!(h, Float32.(velM))
+        GSDFiles.write_particles_velocity!(h, T.(velM))
     end
 
     # Forces: default is false for both Brownian and Langevin; enable only if user asks
     local do_forces::Bool
     do_forces = (write_forces === true)
     if do_forces
-        # Build Nx3 Float32 forces
-        FX = Vector{Float32}(undef, N); FY = Vector{Float32}(undef, N)
+        # Build Nx3 T forces
+        FX = Vector{T}(undef, N); FY = Vector{T}(undef, N)
         copyto!(FX, st.fx); copyto!(FY, st.fy)
-        FZ = st.fz === nothing ? fill(0.0f0, N) : (tmp=Vector{Float32}(undef,N); copyto!(tmp, st.fz); tmp)
+        FZ = st.fz === nothing ? fill(zero(T), N) : (tmp=Vector{T}(undef,N); copyto!(tmp, st.fz); tmp)
         CUDA.synchronize()
-        F = Array{Float32}(undef, N, 3)
+        F = Array{T}(undef, N, 3)
         @inbounds for i in 1:N
             F[i,1] = FX[i]; F[i,2] = FY[i]; F[i,3] = FZ[i]
         end
         # Flatten row-major for GSD chunk
-        row = Vector{Float32}(undef, N*3)
+        row = Vector{T}(undef, N*3)
         k = 1
         @inbounds for i in 1:N
             row[k] = F[i,1]; row[k+1] = F[i,2]; row[k+2] = F[i,3]
@@ -405,11 +407,11 @@ Read the **last** frame from a GSD file and return SoA arrays.
 
 Returns:
     step::Int,
-    rx::Vector{Float32}, ry::Vector{Float32}, rz::Union{Nothing,Vector{Float32}},
-    vx::Vector{Float32}, vy::Vector{Float32}, vz::Union{Nothing,Vector{Float32}},
+    rx::Vector{T}, ry::Vector{T}, rz::Union{Nothing,Vector{T}},
+    vx::Vector{T}, vy::Vector{T}, vz::Union{Nothing,Vector{T}},
     typeid_1based::Vector{Int32},
     types_names::Vector{String},
-    box::Union{Tuple{Float32,Float32},Tuple{Float32,Float32,Float32}}
+    box::Union{Tuple{T,T},Tuple{T,T,T}}
 """
 function read_last_gsd(file_path::AbstractString)
     r = GSDFiles.GSDReader(file_path)
@@ -423,22 +425,23 @@ function read_last_gsd(file_path::AbstractString)
         D    = Int(GSDFiles.read_configuration_dimensions(r, fid))
         N    = Int(GSDFiles.read_particles_N(r, fid))
 
-        posM = GSDFiles.read_particles_position(r, fid)  # N×3 Float32
-        velM = GSDFiles.read_particles_velocity(r, fid)  # N×3 Float32
+        posM = GSDFiles.read_particles_position(r, fid)  # N×3
+        velM = GSDFiles.read_particles_velocity(r, fid)  # N×3
+        T = eltype(posM)
 
-        rx = Float32.(posM[:,1]); ry = Float32.(posM[:,2])
-        rz = D == 3 ? Float32.(posM[:,3]) : nothing
+        rx = T.(posM[:,1]); ry = T.(posM[:,2])
+        rz = D == 3 ? T.(posM[:,3]) : nothing
 
-        vx = Float32.(velM[:,1]); vy = Float32.(velM[:,2])
-        vz = D == 3 ? Float32.(velM[:,3]) : nothing
+        vx = T.(velM[:,1]); vy = T.(velM[:,2])
+        vz = D == 3 ? T.(velM[:,3]) : nothing
 
         typeid0 = Vector{UInt32}(GSDFiles.read_particles_typeid(r, fid))
         types   = Vector{String}(GSDFiles.read_particles_types(r, fid))
         typeid1 = Int32.(typeid0 .+ 1)
 
         box6 = GSDFiles.read_configuration_box(r, fid)
-        box  = D == 2 ? (Float32(box6[1]), Float32(box6[2])) :
-                        (Float32(box6[1]), Float32(box6[2]), Float32(box6[3]))
+        box  = D == 2 ? (T(box6[1]), T(box6[2])) :
+                        (T(box6[1]), T(box6[2]), T(box6[3]))
 
         return step, rx, ry, rz, vx, vy, vz, typeid1, types, box
     finally

@@ -1,7 +1,5 @@
 using NonEqSimGPU
-using NonEqSimGPU: Simulation
-using NonEqSimGPU.Filters
-using NonEqSimGPU.Writers
+using NonEqSimGPU: Filters
 using NonEqSimGPU.NeighborLists
 using CUDA
 using Statistics
@@ -54,11 +52,11 @@ DT    = 0.000002f0
 NSTEPS = 1_000_000
 LOG_INTERVAL = 1_00_000
 
-T_TYPE1 = 1.0f0
-T_TYPE2 = 200.0f0
+T_TYPE1 = 10.0
+T_TYPE2 = 200.0
 T_mean = 0.5f0 * (T_TYPE1 + T_TYPE2)
 
-st = Simulation.build_simulation(D=2,
+st = build_simulation(D=2,
                                  N=N,
                                  box=(BOX[1], BOX[2]),
                                  cutoff=RCUT_REF,
@@ -68,7 +66,7 @@ st = Simulation.build_simulation(D=2,
                                  epsilon=EPS,
                                  sigma=SIGMA_REF,
                                  gamma=GAMMA,
-                                 init_temperature=T_mean)
+                                 )
 
 initialize_square_lattice!(st, BOX)
 
@@ -100,7 +98,7 @@ output_dir = @__DIR__
 gsd_path = joinpath(output_dir, "traj2d_stencil_two_sizes.gsd")
 csv_path = joinpath(output_dir, "obs2d_stencil_two_sizes.csv")
 
-gsdh = Writers.gsd_open(gsd_path)
+gsdh = gsd_open(gsd_path)
 type_names = ["C", "H"]
 
 # Per-particle diameters from type ids (use diagonal of SIGMA_PAIR)
@@ -116,7 +114,7 @@ st.sigma_pair   = CuArray(SIGMA_PAIR)
 st.epsilon_pair = CuArray(EPS_PAIR)
 st.rcut_pair    = CuArray(RCUT_PAIR)
 
-Writers.write_gsd_frame!(gsdh, st; diameter=diam_host, types_names=type_names, step=st.step)
+write_gsd_frame!(gsdh, st; diameter=diam_host, types_names=type_names, step=st.step)
 
 open(csv_path, "w") do io
     println(io, "step,neigh_avg_type1,neigh_avg_type2,elapsed_s,steps_per_sec")
@@ -138,7 +136,7 @@ max_runtime = let v = get(ENV, "NEQSIM_MAX_SECONDS", "")
 end
 
 for step in 1:NSTEPS
-    Simulation.step!(st, DT, compute_energy=false)
+    step!(st, DT, compute_energy=false)
     if step % LOG_INTERVAL == 0
         push!(records, step)
         idx_t1 = Filters.resolve(st, Filters.TypeIDs(1))
@@ -159,7 +157,7 @@ for step in 1:NSTEPS
                 diam_host[i] = SIGMA_PAIR[t,t]
             end
         end
-        Writers.write_gsd_frame!(gsdh, st; diameter=diam_host, types_names=type_names, step=st.step)
+        write_gsd_frame!(gsdh, st; diameter=diam_host, types_names=type_names, step=st.step)
         @info "progress" step=step neigh_t1=n1 neigh_t2=n2 steps_per_sec=sps
         if (time() - start_time) >= max_runtime
             @info "Reached max runtime limit" limit_s=max_runtime step=step
@@ -168,6 +166,6 @@ for step in 1:NSTEPS
     end
 end
 
-Writers.gsd_close(gsdh)
+gsd_close(gsdh)
 println("Wrote trajectory to $(gsd_path)")
 println("Wrote observables to $(csv_path)")
