@@ -1,5 +1,4 @@
 using NonEqSimGPU
-using NonEqSimGPU: Simulation, Definitions, Writers
 using CUDA
 
 function initialize_simple_cubic_lattice!(st, box::NTuple{3,Float32})
@@ -48,34 +47,32 @@ N_steps = 10_000_000
 N_log = 1_000_000
 dt = 0.00005f0
 
-noise_scale = CUDA.fill(sqrt(2f0 * gamma * temperature * dt), N)
-
-# ---- Build ----
-st = Simulation.build_simulation(D = 3, N=N, box=box, cutoff=r_cut, skin=0.4f0, cap=cap,
-                                 neigh_interval=1,
-                                 epsilon=epsilon, sigma=sigma,
-                                 gamma=gamma, noise_scale=noise_scale, init_temperature=temperature)
+# ---- Build ---- (noise scale computed internally)
+st = build_simulation(D = 3, N=N, box=box, cutoff=r_cut, skin=0.4f0, cap=cap,
+                      neigh_interval=1,
+                      epsilon=epsilon, sigma=sigma,
+                      gamma=gamma, temperature=temperature, dt=dt)
 
 # ---- Initialize positions ----
 initialize_simple_cubic_lattice!(st, box)
 
 # ---- GSD writer ----
 gsd_path = joinpath(@__DIR__, "traj3d.gsd")
-gsdh = Writers.gsd_open(gsd_path)
+gsdh = gsd_open(gsd_path)
 types = ["C"]
-Writers.write_gsd_frame!(gsdh, st; diameter=sigma, types_names=types, step=st.step)
+write_gsd_frame!(gsdh, st; diameter=sigma, types_names=types, step=st.step)
 
 # ---- Run ----
 @time for s in 1:N_steps
     if s % N_log == 0
-        Simulation.step!(st, dt)
-        Writers.write_observables_csv!(joinpath(@__DIR__, "obs3d.csv"), s; Epot=st.Epot, Ekin=st.Ekin, dq=st.dq)
-        Writers.write_gsd_frame!(gsdh, st; diameter=sigma, types_names=types, step=st.step)
+        step!(st, dt)
+        write_observables_csv!(joinpath(@__DIR__, "obs3d.csv"), s; Epot=st.Epot, Ekin=st.Ekin, dq=st.dq)
+        write_gsd_frame!(gsdh, st; diameter=sigma, types_names=types, step=st.step)
         @info "wrote frame" step=s Epot_sum=sum(st.Epot) Ekin_sum=sum(st.Ekin)
     else
-        Simulation.step!(st, dt, compute_energy=false)
+        step!(st, dt, compute_energy=false)
     end
 end
 
-Writers.gsd_close(gsdh)
+gsd_close(gsdh)
 println("Done. GSD: $gsd_path")

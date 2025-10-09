@@ -1,5 +1,5 @@
 using NonEqSimGPU
-using NonEqSimGPU: Simulation
+using NonEqSimGPU: Simulation, BrownianIntegrators
 using NonEqSimGPU.Filters
 using CUDA
 using Test
@@ -39,12 +39,38 @@ CUDA.allowscalar(false)
             cold_filter => 0.5f0,
             hot_filter  => 2.0f0)
 
+        gamma_host = Array(st.vv.gamma)
         ns = Array(st.vv.noise_scale)
-        scale_cold = sqrt(2f0 * st.vv.gamma * 0.5f0 * dt)
-        scale_hot  = sqrt(2f0 * st.vv.gamma * 2.0f0 * dt)
+        scale_cold = sqrt.(2f0 .* gamma_host[cold_sel.host] .* 0.5f0 .* dt)
+        scale_hot  = sqrt.(2f0 .* gamma_host[hot_sel.host]  .* 2.0f0 .* dt)
 
         @test all(abs.(ns[cold_sel.host] .- scale_cold) .< 1f-6)
         @test all(abs.(ns[hot_sel.host]  .- scale_hot)  .< 1f-6)
+
+        # Modify friction via filters and ensure noise scales track it
+        Filters.set_friction!(st, 2.0f0; filter=cold_filter)
+        Filters.set_langevin_temperature!(st, dt,
+            cold_filter => 0.5f0)
+        gamma_host = Array(st.vv.gamma)
+        ns = Array(st.vv.noise_scale)
+        expected_cold = sqrt.(2f0 .* gamma_host[cold_sel.host] .* 0.5f0 .* dt)
+        @test all(abs.(ns[cold_sel.host] .- expected_cold) .< 1f-6)
+
+        bp = BrownianIntegrators.BrownianParams(st)
+        Filters.set_friction!(bp, st, cold_filter, 3.0f0)
+        gamma_host = Array(bp.gamma)
+        @test all(abs.(gamma_host[cold_sel.host] .- 3.0f0) .< 1f-6)
+        @test all(abs.(Array(st.vv.gamma)[cold_sel.host] .- 3.0f0) .< 1f-6)
+
+        Filters.set_noise_scale!(bp, st, cold_filter, 0.25f0)
+        ns_bp = Array(bp.noise_scale)
+        @test all(abs.(ns_bp[cold_sel.host] .- 0.25f0) .< 1f-6)
+
+        Filters.set_langevin_temperature!(bp, st, dt, 0.75f0; filter=hot_filter)
+        ns_bp = Array(bp.noise_scale)
+        gamma_host = Array(bp.gamma)
+        expected_hot_bp = sqrt.(2f0 .* gamma_host[hot_sel.host] .* 0.75f0 .* dt)
+        @test all(abs.(ns_bp[hot_sel.host] .- expected_hot_bp) .< 1f-6)
 
         Filters.assign_scalar!(st.dq, st; filter=cold_filter, value=1.0f0)
         Filters.assign_scalar!(st.dq, st; filter=hot_filter, value=2.0f0)

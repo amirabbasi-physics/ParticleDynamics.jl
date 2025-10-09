@@ -1,5 +1,5 @@
 using NonEqSimGPU
-using NonEqSimGPU: Simulation
+using NonEqSimGPU: Filters
 using CUDA
 
 function initialize_simple_cubic_lattice!(st, box::NTuple{3,Float32})
@@ -45,38 +45,37 @@ gamma = 10f0
 temperature = 1f0
 dt = 0.00025f0
 
-noise_scale = CUDA.fill(sqrt(2f0 * gamma * temperature * dt), N)
-
 # ---- Build ----
-st = Simulation.build_simulation(D = 3, N=N, box=box, cutoff=r_cut, skin=0.4f0, cap=cap,
+st = build_simulation(D = 3, N=N, box=box, cutoff=r_cut, skin=0.4f0, cap=cap,
                                 neigh_interval=10,
                                 epsilon=epsilon, sigma=sigma,
-                                gamma=gamma, noise_scale=noise_scale, init_temperature=temperature)
+                                gamma=gamma, temperature=temperature, dt=dt)
 
 # ---- Initialize positions ----
 initialize_simple_cubic_lattice!(st, box)
 
+Filters.set_friction!(st, gamma; filter=Filters.All())
+Filters.set_langevin_temperature!(st, dt, temperature; filter=Filters.All())
+
 # ---- Brownian parameters ----
-const BI = NonEqSimGPU.BrownianIntegrators
-bp = BI.BrownianParams{Float32}(gamma, temperature)
+bp = brownian(st)
 
 # ---- GSD writer ----
-using NonEqSimGPU: Writers
 gsd_path = joinpath(@__DIR__, "traj3d_bd.gsd")
-gsdh = Writers.gsd_open(gsd_path)
+gsdh = gsd_open(gsd_path)
 types = ["C"]
-Writers.write_gsd_frame!(gsdh, st; diameter=sigma, types_names=types, step=st.step)
+write_gsd_frame!(gsdh, st; diameter=sigma, types_names=types, step=st.step)
 
 # ---- Run ----
 @time for s in 1:10_000_000
     compute_E = (s % 1000_000 == 0)
-    Simulation.step!(st, bp, dt; compute_energy=compute_E)
+    step!(st, bp, dt; compute_energy=compute_E)
     if compute_E
-        Writers.write_observables_csv!(joinpath(@__DIR__, "obs3d_bd.csv"), s; Epot=st.Epot, Ekin=st.Ekin, dq=st.dq)
-        Writers.write_gsd_frame!(gsdh, st; diameter=sigma, types_names=types, step=st.step)
+        write_observables_csv!(joinpath(@__DIR__, "obs3d_bd.csv"), s; Epot=st.Epot, Ekin=st.Ekin, dq=st.dq)
+        write_gsd_frame!(gsdh, st; diameter=sigma, types_names=types, step=st.step)
         @info "wrote frame (bd)" step=s Epot_sum=sum(st.Epot) Ekin_sum=sum(st.Ekin)
     end
 end
 
-Writers.gsd_close(gsdh)
+gsd_close(gsdh)
 println("Done. GSD (bd): $gsd_path")

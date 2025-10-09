@@ -7,15 +7,15 @@ using ..Definitions
 export init_velocities_maxwell!, center_of_mass_velocity!, subtract_com_velocity!
 
 # Maxwell–Boltzmann velocities on GPU (SoA). RNG inside kernel as requested.
-function init_velocities_maxwell!(vx::CuArray{Definitions.FloatX,1},
-                                  vy::CuArray{Definitions.FloatX,1};
-                                  temperature::Definitions.FloatX = 1f0)
+function init_velocities_maxwell!(vx::CuArray{T,1},
+                                  vy::CuArray{T,1};
+                                  temperature::T = one(T)) where {T<:AbstractFloat}
     function kern(vx, vy, scale)
         i = (blockIdx().x-1)*blockDim().x + threadIdx().x
         N = length(vx); if i > N; return; end
         @inbounds begin
-            vx[i] = CUDA.randn(Definitions.FloatX) * scale
-            vy[i] = CUDA.randn(Definitions.FloatX) * scale
+            vx[i] = CUDA.randn(T) * scale
+            vy[i] = CUDA.randn(T) * scale
         end
         return
     end
@@ -27,17 +27,17 @@ function init_velocities_maxwell!(vx::CuArray{Definitions.FloatX,1},
 end
 
 # 3D variant
-function init_velocities_maxwell!(vx::CuArray{Definitions.FloatX,1},
-                                  vy::CuArray{Definitions.FloatX,1},
-                                  vz::CuArray{Definitions.FloatX,1};
-                                  temperature::Definitions.FloatX = 1f0)
+function init_velocities_maxwell!(vx::CuArray{T,1},
+                                  vy::CuArray{T,1},
+                                  vz::CuArray{T,1};
+                                  temperature::T = one(T)) where {T<:AbstractFloat}
     function kern(vx, vy, vz, scale)
         i = (blockIdx().x-1)*blockDim().x + threadIdx().x
         N = length(vx); if i > N; return; end
         @inbounds begin
-            vx[i] = CUDA.randn(Definitions.FloatX) * scale
-            vy[i] = CUDA.randn(Definitions.FloatX) * scale
-            vz[i] = CUDA.randn(Definitions.FloatX) * scale
+            vx[i] = CUDA.randn(T) * scale
+            vy[i] = CUDA.randn(T) * scale
+            vz[i] = CUDA.randn(T) * scale
         end
         return
     end

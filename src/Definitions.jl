@@ -3,19 +3,20 @@ module Definitions
 using CUDA
 using StaticArrays
 
-export FloatX, IntX, Dim2, Dim3, Box2, Box3,
+export IntX, Dim2, Dim3, Box2, Box3,
        LJParams, wrap_pbc2!, wrap_pbc3!, clamp_cap,
        HarmonicBondParams, FENEParams,
-       SoftRepulsiveParams
-
-const FloatX = Float32
+       SoftRepulsiveParams, LJMixParams,
+       BondPotential, HarmonicBond, FENEBond,
+       StokesFrictionCoefficient, SphereMass, InertialTime, DiffusiveTime
+export harmonic_bond, fene_bond
 const IntX   = Int32
 
 const Dim2 = 2
 const Dim3 = 3
 
-const Box2 = NTuple{2,FloatX}
-const Box3 = NTuple{3,FloatX}
+const Box2{T} = NTuple{2,T}
+const Box3{T} = NTuple{3,T}
 
 struct LJParams{T}
     ϵ::T
@@ -46,17 +47,29 @@ struct SoftRepulsiveParams{T}
     σ::T
 end
 
+# Unified bonded interaction container
+abstract type BondPotential{T<:AbstractFloat} end
+
+struct HarmonicBond{T<:AbstractFloat} <: BondPotential{T}
+    params::HarmonicBondParams{T}
+end
+
+struct FENEBond{T<:AbstractFloat} <: BondPotential{T}
+    params::FENEParams{T}
+end
+
 @inline clamp_cap(idx::IntX, cap::IntX) = ifelse(idx <= cap, idx, IntX(0))
 
 # ---------------- PBC wrappers (SoA) ----------------
 
-@inline function _wrap(x::FloatX, L::FloatX)::FloatX
-    y = x + L*0.5f0
+@inline function _wrap(x::T, L::T)::T where {T<:AbstractFloat}
+    half = T(0.5)
+    y = x + L*half
     y -= floor(y / L) * L
-    return y - L*0.5f0
+    return y - L*half
 end
 
-function wrap_pbc2!(rx::CuArray{FloatX,1}, ry::CuArray{FloatX,1}, box::Box2)
+function wrap_pbc2!(rx::CuArray{T,1}, ry::CuArray{T,1}, box::Box2{T}) where {T<:AbstractFloat}
     function kern(rx, ry, Lx, Ly)
         i = (blockIdx().x-1)*blockDim().x + threadIdx().x
         N = length(rx); if i > N; return; end
@@ -72,7 +85,7 @@ function wrap_pbc2!(rx::CuArray{FloatX,1}, ry::CuArray{FloatX,1}, box::Box2)
     return nothing
 end
 
-function wrap_pbc3!(rx::CuArray{FloatX,1}, ry::CuArray{FloatX,1}, rz::CuArray{FloatX,1}, box::Box3)
+function wrap_pbc3!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1}, box::Box3{T}) where {T<:AbstractFloat}
     function kern(rx, ry, rz, Lx, Ly, Lz)
         i = (blockIdx().x-1)*blockDim().x + threadIdx().x
         N = length(rx); if i > N; return; end
@@ -87,6 +100,36 @@ function wrap_pbc3!(rx::CuArray{FloatX,1}, ry::CuArray{FloatX,1}, rz::CuArray{Fl
     k = CUDA.@cuda launch=false kern(rx, ry, rz, box[1], box[2], box[3])
     CUDA.@sync k(rx, ry, rz, box[1], box[2], box[3]; threads, blocks)
     return nothing
+end
+
+# Convenience constructors for bonds
+harmonic_bond(; k::Real = 100.0, r0::Real = 1.0) = HarmonicBond(HarmonicBondParams(float(k), float(r0)))
+fene_bond(;k::Real = 300.0, r0::Real = 1.5) = FENEBond(FENEParams(float(k), float(r0)))
+
+# ---------------- Physical property calculations ----------------
+
+# Stokes friction coefficient for a sphere
+# γ = 6 * π * η * R (where η is viscosity, R is radius)
+function StokesFrictionCoefficient(viscosity::T, radius::T) where {T<:AbstractFloat}
+    return T(6 * π * viscosity * radius)
+end
+
+# Mass of a sphere given density and radius
+function SphereMass(density::T, radius::T) where {T<:AbstractFloat}
+    return T((4/3) * π * radius^3 * density)
+end
+
+# Inertial time (mass/friction)
+function InertialTime(mass::T, frictioncoefficient::T) where {T<:AbstractFloat}
+    return mass / frictioncoefficient
+end
+
+# Diffusive time to move its own size (4*R^2 / (2*d*D), D=kT/γ)
+# where d is dimension (2 or 3)
+# Thus DiffusiveTime = 4*R^2 * γ / (2*d*kT)
+# Note: this is 2x the time to diffuse its own radius
+function DiffusiveTime(radius::T, temperature::T, frictioncoefficient::T, dimension::T) where {T<:AbstractFloat}
+    return 4*(radius^2 * frictioncoefficient) / (2 * dimension * temperature)
 end
 
 end # module

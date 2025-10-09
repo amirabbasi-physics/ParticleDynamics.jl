@@ -1,8 +1,8 @@
 using NonEqSimGPU
-using NonEqSimGPU: Simulation, Definitions
+using NonEqSimGPU: Filters
 using NonEqSimGPU.Filters
-using NonEqSimGPU.Writers
-using NonEqSimGPU.LangevinIntegrators: BAOABParams
+
+
 using CUDA
 using Random
 using Printf
@@ -62,7 +62,7 @@ function main()
     t_hot  = 100.0f0
     t_mean = 0.5f0 * (t_cold + t_hot)
 
-    st = Simulation.build_simulation(D=2,
+    st = build_simulation(D=2,
                                      N=n,
                                      box=(box[1], box[2]),
                                      cutoff=rcut,
@@ -72,7 +72,7 @@ function main()
                                      gamma=gamma,
                                      init_temperature=t_mean,
                                      nonbonded=:soft_repulsive,
-                                     softrep_params=Definitions.SoftRepulsiveParams{Float32}(soft_epsilon, soft_sigma))
+                                     softrep_params=SoftRepulsiveParams{Float32}(soft_epsilon, soft_sigma))
 
     # positions on a square lattice, then randomize types
     initialize_square_lattice!(st, box)
@@ -102,16 +102,16 @@ function main()
     println(" - OU step uses per-particle β ~ N(0, 2 γ kT Δt) with T set via filters")
 
     # Construct BAOAB params from the current st.vv fields
-    bao = BAOABParams{Float32}(st.vv.gamma, st.vv.mass, st.vv.noise_scale)
+    bao = baoab(st)
 
     # Writers -----------------------------------------------------------------
     output_dir = @__DIR__
     gsd_path = joinpath(output_dir, "traj2d_filters_baoab.gsd")
     csv_path = joinpath(output_dir, "obs2d_filters_baoab.csv")
 
-    gsdh = Writers.gsd_open(gsd_path)
+    gsdh = gsd_open(gsd_path)
     type_names = ["C", "H"]
-    Writers.write_gsd_frame!(gsdh, st; diameter=soft_sigma, types_names=type_names, step=st.step)
+    write_gsd_frame!(gsdh, st; diameter=soft_sigma, types_names=type_names, step=st.step)
 
     open(csv_path, "w") do io
         println(io, "step,Ekin_cold,Ekin_hot,dQ_cold,dQ_hot,elapsed_s,steps_per_sec,eta_s")
@@ -130,7 +130,7 @@ function main()
 
     for step in 1:nsteps
         # Explicit integrator selection: BAOAB
-        Simulation.step!(st, bao, dt; compute_energy=false)
+        step!(st, bao, dt; compute_energy=false)
 
         if step % log_interval == 0
             push!(records, step)
@@ -152,7 +152,7 @@ function main()
                 @printf(io, "%d,%.6f,%.6f,%.6f,%.6f,%.3f,%.3f,%.3f\n", step, kc, kh, qc, qh, elapsed, steps_per_sec, eta)
             end
 
-            Writers.write_gsd_frame!(gsdh, st; diameter=soft_sigma, types_names=type_names, step=st.step)
+            write_gsd_frame!(gsdh, st; diameter=soft_sigma, types_names=type_names, step=st.step)
 
             @info "progress" step=step elapsed_s=elapsed steps_per_sec=steps_per_sec eta_s=eta
 
@@ -179,7 +179,7 @@ function main()
 
     println("Total wall time ≈ $(round(total_time, digits=2)) s")
 
-    Writers.gsd_close(gsdh)
+    gsd_close(gsdh)
     println("Wrote BAOAB trajectory to $(gsd_path)")
     println("Wrote BAOAB observables to $(csv_path)")
 end

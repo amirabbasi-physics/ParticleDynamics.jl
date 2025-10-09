@@ -1,5 +1,5 @@
 using NonEqSimGPU
-using NonEqSimGPU: Simulation, Definitions, BrownianIntegrators, Filters, Writers
+using NonEqSimGPU: Filters
 using CUDA
 using Random
 using Printf
@@ -64,7 +64,7 @@ function main()
     t_hot  = 100.0f0
     t_mean = 0.5f0 * (t_cold + t_hot)
 
-    st = Simulation.build_simulation(D=2,
+    st = build_simulation(D=2,
                                      N=n,
                                      box=(box[1], box[2]),
                                      cutoff=rcut,
@@ -74,7 +74,7 @@ function main()
                                      gamma=gamma,
                                      init_temperature=t_mean,
                                      nonbonded=:soft_repulsive,
-                                     softrep_params=Definitions.SoftRepulsiveParams{Float32}(soft_epsilon, soft_sigma))
+                                     softrep_params=SoftRepulsiveParams{Float32}(soft_epsilon, soft_sigma))
 
     initialize_square_lattice!(st, box)
 
@@ -83,25 +83,29 @@ function main()
     cold_filter = Filters.TypeIDs(1)
     hot_filter  = Filters.TypeIDs(2)
 
+    Filters.set_friction!(st, gamma; filter=Filters.All())
+    Filters.set_langevin_temperature!(st, dt,
+        cold_filter => t_cold,
+        hot_filter  => t_hot)
+
     # ---------------- Integrator info (explicit) ----------------
     println("Integrator: Brownian dynamics (overdamped midpoint, predictor–corrector).")
     println(" - Midpoint: r_mid = r + 0.5 ( μ f(r) Δt + √(2D Δt) ξ )")
     println(" - Final:    Δr = μ f(r_mid) Δt + √(2D Δt) ξ;  r ← r + Δr")
     println(" - Heat increment: dq += f(r_mid) · Δr (Sekimoto)")
-    println(" - Mobility μ = 1/γ, D = kT/γ; here kT is uniform t_mean.")
+    println(" - Mobility μ = 1/γ, D = kT/γ with kT set per filter (cold/hot).")
 
-    # Brownian parameters (uniform bath at t_mean)
-    const BI = BrownianIntegrators
-    bp = BI.BrownianParams{Float32}(gamma, t_mean)
+    # Brownian parameters reference simulation state arrays
+    bp = brownian(st)
 
     # Writers -----------------------------------------------------------------
     output_dir = @__DIR__
     gsd_path = joinpath(output_dir, "traj2d_twoT_BD.gsd")
     csv_path = joinpath(output_dir, "obs2d_twoT_BD.csv")
 
-    gsdh = Writers.gsd_open(gsd_path)
+    gsdh = gsd_open(gsd_path)
     type_names = ["C", "H"]
-    Writers.write_gsd_frame!(gsdh, st; diameter=soft_sigma, types_names=type_names, step=st.step)
+    write_gsd_frame!(gsdh, st; diameter=soft_sigma, types_names=type_names, step=st.step)
 
     open(csv_path, "w") do io
         println(io, "step,dQ_cold,dQ_hot,elapsed_s,steps_per_sec,eta_s")
@@ -117,7 +121,7 @@ function main()
     end
 
     for step in 1:nsteps
-        Simulation.step!(st, bp, dt, compute_energy=false)
+        step!(st, bp, dt, compute_energy=false)
 
         if step % log_interval == 0
             push!(records, step)
@@ -135,7 +139,7 @@ function main()
                 @printf(io, "%d,%.6f,%.6f,%.3f,%.3f,%.3f\n", step, qc, qh, elapsed, steps_per_sec, eta)
             end
 
-            Writers.write_gsd_frame!(gsdh, st; diameter=soft_sigma, types_names=type_names, step=st.step)
+            write_gsd_frame!(gsdh, st; diameter=soft_sigma, types_names=type_names, step=st.step)
 
             @info "progress (BD)" step=step elapsed_s=elapsed steps_per_sec=steps_per_sec eta_s=eta
 
@@ -160,7 +164,7 @@ function main()
 
     println("Total wall time ≈ $(round(total_time, digits=2)) s")
 
-    Writers.gsd_close(gsdh)
+    gsd_close(gsdh)
     println("Wrote BD trajectory to $(gsd_path)")
     println("Wrote BD observables to $(csv_path)")
 end

@@ -17,8 +17,8 @@ function initialize_square_lattice!(st, box::NTuple{2,Float32})
         linear = i - 1
         ix = linear % n_side
         iy = linear ÷ n_side
-        rx_host[i] = (ix + 0.5f0) * spacing_x - box[1] / 2
-        ry_host[i] = (iy + 0.5f0) * spacing_y - box[2] / 2
+        rx_host[i] = (ix + 0.5) * spacing_x - box[1] / 2
+        ry_host[i] = (iy + 0.5) * spacing_y - box[2] / 2
     end
     copyto!(st.rx, rx_host)
     copyto!(st.ry, ry_host)
@@ -27,24 +27,24 @@ end
 
 # ---- Params ----
 N   = 10_000
-box = (200.0f0, 200.0f0)
+box = (200.0, 200.0)
 
 # Soft-repulsive parameters
-sigma = 2.0f0
-epsilon = 10000.0f0
-sr = SoftRepulsiveParams{Float32}(epsilon, sigma)
+sigma = 2.0
+epsilon = 10000.0
+sr = SoftRepulsiveParams{Float64}(epsilon, sigma)
 
 cap = Int32(96)
-gamma = 10f0
-temperature = 1f0
-dt = 1.0f-4
+gamma = 10.0
+temperature = 1.0
+dt = 1.0e-4
 N_steps = 100_000
 N_log = 10_000
 
 # ---- Build base simulation state (use newly wired soft-repulsive nonbonded) ----
-st = build_simulation(D = 2, N=N, box=box, cutoff=sigma, skin=0.5f0, cap=cap,
+st = build_simulation(D = 2, N=N, box=box, cutoff=sigma, skin=0.5, cap=cap,
                                  neigh_interval=1,
-                                 epsilon=1f0, sigma=1f0,
+                                 epsilon=1.0, sigma=1.0,
                                  gamma=gamma, temperature=temperature, dt=dt,
                                  nonbonded=:soft_repulsive, softrep_params=sr)
 

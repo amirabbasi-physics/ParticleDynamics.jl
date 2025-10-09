@@ -1,7 +1,5 @@
 using NonEqSimGPU
-using NonEqSimGPU: Simulation
-using NonEqSimGPU.Filters
-using NonEqSimGPU.Writers
+using NonEqSimGPU: Filters
 using CUDA
 using Random
 using Printf
@@ -64,7 +62,7 @@ T_COLD = 1.0f0
 T_HOT  = 100.0f0
 T_mean = 0.5f0 * (T_COLD + T_HOT)
 
-st = Simulation.build_simulation(D=3,
+st = build_simulation(D=3,
                                  N=N,
                                  box=BOX,
                                  cutoff=RCUT,
@@ -101,9 +99,9 @@ output_dir = @__DIR__
 gsd_path = joinpath(output_dir, "traj_filters.gsd")
 csv_path = joinpath(output_dir, "obs_filters.csv")
 
-gsdh = Writers.gsd_open(gsd_path)
+gsdh = gsd_open(gsd_path)
 type_names = ["C", "H"]
-Writers.write_gsd_frame!(gsdh, st; diameter=SIGMA, types_names=type_names, step=st.step)
+write_gsd_frame!(gsdh, st; diameter=SIGMA, types_names=type_names, step=st.step)
 
 open(csv_path, "w") do io
     println(io, "step,Ekin_cold,Ekin_hot,dQ_cold,dQ_hot,elapsed_s,steps_per_sec,eta_s")
@@ -121,7 +119,7 @@ max_runtime = let v = get(ENV, "NEQSIM_MAX_SECONDS", "")
 end
 
 for step in 1:NSTEPS
-    Simulation.step!(st, DT, compute_energy=false)
+    step!(st, DT, compute_energy=false)
 
     if step % LOG_INTERVAL == 0
         push!(records, step)
@@ -143,7 +141,7 @@ for step in 1:NSTEPS
             @printf(io, "%d,%.6f,%.6f,%.6f,%.6f,%.3f,%.3f,%.3f\n", step, kc, kh, qc, qh, elapsed, steps_per_sec, eta)
         end
 
-        Writers.write_gsd_frame!(gsdh, st; diameter=SIGMA, types_names=type_names, step=st.step)
+        write_gsd_frame!(gsdh, st; diameter=SIGMA, types_names=type_names, step=st.step)
 
         @info "progress" step=step elapsed_s=elapsed steps_per_sec=steps_per_sec eta_s=eta
 
@@ -170,6 +168,6 @@ end
 
 println("Total wall time ≈ $(round(total_time, digits=2)) s")
 
-Writers.gsd_close(gsdh)
+gsd_close(gsdh)
 println("Wrote trajectory to $(gsd_path)")
 println("Wrote observables to $(csv_path)")
