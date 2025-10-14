@@ -306,7 +306,7 @@ Usage (2D):
 
 Usage (3D) is identical; z-components are written when present.
 """
-function write_gsd_frame!(h, st; diameter=1.0, types_names=["A"], step::Int=0, write_forces::Union{Nothing,Bool}=nothing)
+function write_gsd_frame!(h, st; diameter=1.0, types_names=["A"], step::Int=0, write_forces::Bool=false)
     # Element type used for numeric conversions
     T = eltype(st.rx)
     N = length(st.rx)
@@ -315,8 +315,8 @@ function write_gsd_frame!(h, st; diameter=1.0, types_names=["A"], step::Int=0, w
     posM = st.rz === nothing ? _soa_to_posmat(st.rx, st.ry) :
                                _soa_to_posmat(st.rx, st.ry, st.rz)
     # velocities are undefined for Brownian dynamics; skip when last_integrator==2
-    write_velocity = !(hasproperty(st, :last_integrator) && st.last_integrator == UInt8(2))
-    if write_velocity
+    write_velocities = !(hasproperty(st, :last_integrator) && st.last_integrator == UInt8(2))
+    if write_velocities
         velM = st.vz === nothing ? _soa_to_velmat(st.vx, st.vy) :
                                    _soa_to_velmat(st.vx, st.vy, st.vz)
     end
@@ -347,7 +347,7 @@ function write_gsd_frame!(h, st; diameter=1.0, types_names=["A"], step::Int=0, w
     GSDFiles.write_configuration_box!(h, T.(box6))
     GSDFiles.write_particles_N!(h, N)
     GSDFiles.write_particles_types!(h, Vector{String}(types_names))
-    GSDFiles.write_particles_typeid!(h, tid_0based)
+    GSDFiles.write_particles_typeids!(h, tid_0based)
     local diam::Vector{T}
     if diameter isa Number
         diam = fill(T(diameter), N)
@@ -358,14 +358,14 @@ function write_gsd_frame!(h, st; diameter=1.0, types_names=["A"], step::Int=0, w
         error("Unsupported diameter type: $(typeof(diameter))")
     end
     GSDFiles.write_particles_diameter!(h, diam)
-    GSDFiles.write_particles_position!(h, T.(posM))
-    if write_velocity
-        GSDFiles.write_particles_velocity!(h, T.(velM))
+    GSDFiles.write_particles_positions!(h, T.(posM))
+    if write_velocities
+        GSDFiles.write_particles_velocities!(h, T.(velM))
     end
 
     # Forces: default is false for both Brownian and Langevin; enable only if user asks
     if write_forces
-        GSDFiles.write_particles_force!(h, T.(frcM))
+        GSDFiles.write_particles_forces!(h, T.(frcM))
     end
 
     # Optional: bonded interactions (HOOMD bonds group)
@@ -394,7 +394,7 @@ function write_gsd_frame!(h, st; diameter=1.0, types_names=["A"], step::Int=0, w
             # bonds: one type named "bond"; typeid all zeros
             GSDFiles.write_bonds_N!(h, pairs_size)
             GSDFiles.write_bonds_types!(h, ["bond"])  # single type
-            GSDFiles.write_bonds_typeid!(h, fill(UInt32(0), pairs_size))
+            GSDFiles.write_bonds_typeids!(h, fill(UInt32(0), pairs_size))
             # group matrix Nb×2
             grp = Array{UInt32}(undef, pairs_size, 2)
             @inbounds for k in 1:pairs_size
@@ -434,8 +434,8 @@ function read_last_gsd(file_path::AbstractString)
         D    = Int(GSDFiles.read_configuration_dimensions(r, fid))
         N    = Int(GSDFiles.read_particles_N(r, fid))
 
-        posM = GSDFiles.read_particles_position(r, fid)  # N×3
-        velM = GSDFiles.read_particles_velocity(r, fid)  # N×3
+        posM = GSDFiles.read_particles_positions(r, fid)  # N×3
+        velM = GSDFiles.read_particles_velocities(r, fid)  # N×3
         T = eltype(posM)
 
         rx = T.(posM[:,1]); ry = T.(posM[:,2])
@@ -444,7 +444,7 @@ function read_last_gsd(file_path::AbstractString)
         vx = T.(velM[:,1]); vy = T.(velM[:,2])
         vz = D == 3 ? T.(velM[:,3]) : nothing
 
-        typeid0 = Vector{UInt32}(GSDFiles.read_particles_typeid(r, fid))
+        typeid0 = Vector{UInt32}(GSDFiles.read_particles_typeids(r, fid))
         types   = Vector{String}(GSDFiles.read_particles_types(r, fid))
         typeid1 = Int32.(typeid0 .+ 1)
 
