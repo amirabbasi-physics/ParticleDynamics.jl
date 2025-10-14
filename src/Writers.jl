@@ -270,6 +270,30 @@ end
     return hcat(VX, VY, VZ)
 end
 
+
+@inline function _soa_to_frcmat(fx::CuArray{T,1}, fy::CuArray{T,1}) where {T<:AbstractFloat}
+    # Asynchronous GPU->CPU transfer (non-blocking)
+    X = Vector{T}(undef, length(fx))
+    Y = Vector{T}(undef, length(fy))
+    copyto!(X, fx)  # Async copy
+    copyto!(Y, fy)  # Async copy
+    Z = fill(zero(T), length(X))
+    CUDA.synchronize()  # Single sync point for both transfers
+    return hcat(X, Y, Z)
+end
+
+@inline function _soa_to_frcmat(fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1}) where {T<:AbstractFloat}
+    # Asynchronous GPU->CPU transfer (non-blocking)
+    X = Vector{T}(undef, length(fx))
+    Y = Vector{T}(undef, length(fy))
+    Z = Vector{T}(undef, length(fz))
+    copyto!(X, fx)  # Async copy
+    copyto!(Y, fy)  # Async copy
+    copyto!(Z, fz)  # Async copy
+    CUDA.synchronize()  # Single sync point for all transfers
+    return hcat(X, Y, Z)
+end
+
 # -- public API -----------------------------------------------------------
 
 """
@@ -291,10 +315,15 @@ function write_gsd_frame!(h, st; diameter=1.0, types_names=["A"], step::Int=0, w
     posM = st.rz === nothing ? _soa_to_posmat(st.rx, st.ry) :
                                _soa_to_posmat(st.rx, st.ry, st.rz)
     # velocities are undefined for Brownian dynamics; skip when last_integrator==2
-    write_vel = !(hasproperty(st, :last_integrator) && st.last_integrator == UInt8(2))
-    if write_vel
+    write_velocity = !(hasproperty(st, :last_integrator) && st.last_integrator == UInt8(2))
+    if write_velocity
         velM = st.vz === nothing ? _soa_to_velmat(st.vx, st.vy) :
                                    _soa_to_velmat(st.vx, st.vy, st.vz)
+    end
+
+    if write_forces
+        frcM = st.fz === nothing ? _soa_to_frcmat(st.fx, st.fy) :
+                                   _soa_to_frcmat(st.fx, st.fy, st.fz)
     end
 
     # dimensionality & box
@@ -330,33 +359,13 @@ function write_gsd_frame!(h, st; diameter=1.0, types_names=["A"], step::Int=0, w
     end
     GSDFiles.write_particles_diameter!(h, diam)
     GSDFiles.write_particles_position!(h, T.(posM))
-    if write_vel
+    if write_velocity
         GSDFiles.write_particles_velocity!(h, T.(velM))
     end
 
     # Forces: default is false for both Brownian and Langevin; enable only if user asks
-    local do_forces::Bool
-    do_forces = (write_forces === true)
-    if do_forces
-        # Build Nx3 T forces
-        FX = Vector{T}(undef, N); FY = Vector{T}(undef, N)
-        copyto!(FX, st.fx); copyto!(FY, st.fy)
-        FZ = st.fz === nothing ? fill(zero(T), N) : (tmp=Vector{T}(undef,N); copyto!(tmp, st.fz); tmp)
-        CUDA.synchronize()
-        F = Array{T}(undef, N, 3)
-        @inbounds for i in 1:N
-            F[i,1] = FX[i]; F[i,2] = FY[i]; F[i,3] = FZ[i]
-        end
-        # Flatten row-major for GSD chunk
-        row = Vector{T}(undef, N*3)
-        k = 1
-        @inbounds for i in 1:N
-            row[k] = F[i,1]; row[k+1] = F[i,2]; row[k+2] = F[i,3]
-            k += 3
-        end
-        GSDFiles.write_chunk_raw!(h.user, "particles/force";
-                                  type_code=GSDFiles.GSD_TYPE_FLOAT,
-                                  N=N, M=3, data=row)
+    if write_forces
+        GSDFiles.write_particles_force!(h, T.(frcM))
     end
 
     # Optional: bonded interactions (HOOMD bonds group)
