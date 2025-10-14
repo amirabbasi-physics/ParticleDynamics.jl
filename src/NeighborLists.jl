@@ -388,7 +388,7 @@ function _kernel_neighbors3!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::C
                              Lx::T, Ly::T, Lz::T,
                              halfLx::T, halfLy::T, halfLz::T,
                              nx::Int32, ny::Int32, nz::Int32,
-                             cutoff2::T, cap::Int32) where {T<:AbstractFloat}
+                             rl2::T, cap::Int32) where {T<:AbstractFloat}
     i1 = (blockIdx().x-1)*blockDim().x + threadIdx().x
     N = length(rx); if i1 > N; return; end
     @inbounds begin
@@ -415,7 +415,7 @@ function _kernel_neighbors3!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::C
                             dy = mic_fast(ry[j] - ry[i1], halfLy, Ly)
                             dz = mic_fast(rz[j] - rz[i1], halfLz, Lz)
                             r2 = muladd(dx, dx, muladd(dy, dy, dz*dz))
-                            if r2 <= cutoff2 && found < cap
+                            if r2 <= rl2 && found < cap
                                 neighbors_flat[base + found + 1] = j
                                 found += 1
                             end
@@ -687,16 +687,17 @@ function update_neighbors_inplace!(nbh::NeighborMatrix{T},
     inv_cs = one(T) / nbh.cell_size
     halfLx = T(0.5)*box[1]; halfLy = T(0.5)*box[2]
     threads, blocks = _launchdims(Int(nbh.N))
+    rl2 = (nbh.cutoff + nbh.skin) * (nbh.cutoff + nbh.skin)
     knei = CUDA.@cuda launch=false _kernel_neighbors2!(rx, ry,
         nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
         nbh.cell_offsets, nbh.particle_ids_sorted, nbh.cell_of_particle,
         box[1], box[2], halfLx, halfLy,
-        nbh.nx, nbh.ny, nbh.cutoff2, nbh.cap)
+        nbh.nx, nbh.ny, rl2, nbh.cap)
     knei(rx, ry,
          nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
          nbh.cell_offsets, nbh.particle_ids_sorted, nbh.cell_of_particle,
          box[1], box[2], halfLx, halfLy,
-         nbh.nx, nbh.ny, nbh.cutoff2, nbh.cap; threads, blocks)
+         nbh.nx, nbh.ny, rl2, nbh.cap; threads, blocks)
 
     kcopy = CUDA.@cuda launch=false _kernel_copy_refs_2d!(rx, ry, nbh.rref_x, nbh.rref_y)
     kcopy(rx, ry, nbh.rref_x, nbh.rref_y; threads, blocks)
@@ -712,18 +713,19 @@ function update_neighbors_inplace!(nbh::NeighborMatrix{T},
     fill!(nbh.counts, Int32(0))
     threads, blocks = _launchdims(Int(nbh.N))
     halfLx = T(0.5)*box[1]; halfLy = T(0.5)*box[2]; halfLz = T(0.5)*box[3]
+    rl2 = (nbh.cutoff + nbh.skin) * (nbh.cutoff + nbh.skin)
     knei = CUDA.@cuda launch=false _kernel_neighbors3!(rx, ry, rz,
         nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
         nbh.cell_offsets, nbh.particle_ids_sorted, nbh.cell_of_particle,
         box[1], box[2], box[3],
         halfLx, halfLy, halfLz,
-        nbh.nx, nbh.ny, nbh.nz, nbh.cutoff2, nbh.cap)
+        nbh.nx, nbh.ny, nbh.nz, rl2, nbh.cap)
     knei(rx, ry, rz,
          nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
          nbh.cell_offsets, nbh.particle_ids_sorted, nbh.cell_of_particle,
          box[1], box[2], box[3],
          halfLx, halfLy, halfLz,
-         nbh.nx, nbh.ny, nbh.nz, nbh.cutoff2, nbh.cap; threads, blocks)
+         nbh.nx, nbh.ny, nbh.nz, rl2, nbh.cap; threads, blocks)
 
     if nbh.rref_z === nothing
         nbh.rref_z = CUDA.CuArray{T}(undef, Int(nbh.N))
