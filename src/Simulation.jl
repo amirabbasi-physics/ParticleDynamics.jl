@@ -219,6 +219,7 @@ function build_simulation(;N::Int,
                            skin::Real=0.4,
                            cap::Int32=Int32(96),
                            neigh_interval::Int=20,
+                           use_neighborlist::Bool=true,
                            epsilon::Real=1,
                            sigma::Real=1,
                            gamma::Union{Array{Real,1},Real}=1,
@@ -296,11 +297,19 @@ function build_simulation(;N::Int,
 
     typeid = CUDA.fill(Int32(1), N)
 
-    # Neighbors
-    if D == 2
-        nbh = NeighborLists.build_neighbors_dense!(rx, ry; box=(T(box[1]), T(box[2])), cutoff=T(cutoff), cap, skin=T(skin))
+    # Neighbors (dense cell-list or sentinel all-pairs)
+    if use_neighborlist
+        if D == 2
+            nbh = NeighborLists.build_neighbors_dense!(rx, ry; box=(T(box[1]), T(box[2])), cutoff=T(cutoff), cap, skin=T(skin))
+        else
+            nbh = NeighborLists.build_neighbors_dense!(rx, ry, rz; box=(T(box[1]), T(box[2]), T(box[3])), cutoff=T(cutoff), cap, skin=T(skin))
+        end
     else
-        nbh = NeighborLists.build_neighbors_dense!(rx, ry, rz; box=(T(box[1]), T(box[2]), T(box[3])), cutoff=T(cutoff), cap, skin=T(skin))
+        if D == 2
+            nbh = NeighborLists.build_neighbors_allpairs!(rx, ry; box=(T(box[1]), T(box[2])), cutoff=T(cutoff), cap, skin=T(skin))
+        else
+            nbh = NeighborLists.build_neighbors_allpairs!(rx, ry, rz; box=(T(box[1]), T(box[2]), T(box[3])), cutoff=T(cutoff), cap, skin=T(skin))
+        end
     end
 
     lj = Definitions.LJParams{T}(T(epsilon), T(sigma), T(cutoff))

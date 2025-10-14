@@ -120,6 +120,9 @@ function main()
     fid = UInt64(frame-1)
     ents = filter(e -> e.frame == fid, idx)
     alt_names = [
+        # Preferred pluralized name used by current writer
+        "particles/forces",
+        # Backward/compatibility aliases some tools may use
         "particles/force",
         "particles/property/force",
         "particles/net_force",
@@ -152,9 +155,22 @@ function main()
     end
     if !found
         println("No force chunk found in frame ", frame, ". Checked names: ", join(alt_names, ", "))
+        # Hint: search which frames do contain a force chunk
+        frames_with_force = Int[]
+        for nm in alt_names
+            id = find_name_id(names, nm)
+            id === nothing && continue
+            for e in filter(e -> e.id == id, idx)
+                push!(frames_with_force, Int(e.frame)+1)
+            end
+        end
+        if !isempty(frames_with_force)
+            unique!(frames_with_force)
+            sort!(frames_with_force)
+            println("Force chunk present in frames: ", frames_with_force)
+        end
     end
     close(io)
 end
 
 main()
-
