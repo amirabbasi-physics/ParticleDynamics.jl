@@ -412,7 +412,7 @@ function write_gsd_frame!(h, st; diameter=1.0, types_names=["A"], step::Int=0, w
 end
 
 """
-Read the **last** frame from a GSD file and return SoA arrays.
+Read the last valid frame from a GSD file and return SoA arrays.
 
 Returns:
     step::Int,
@@ -420,37 +420,144 @@ Returns:
     vx::Vector{T}, vy::Vector{T}, vz::Union{Nothing,Vector{T}},
     typeid_1based::Vector{Int32},
     types_names::Vector{String},
-    box::Union{Tuple{T,T},Tuple{T,T,T}}
+    box::Union{Tuple{T,T},Tuple{T,T,T}},
+    forceM::Union{Nothing,Matrix{T}}   # N×3 when present
 """
-function read_last_gsd(file_path::AbstractString)
+function read_last_gsd(file_path::AbstractString; step::Union{Nothing,Integer}=nothing)
     r = GSDFiles.open_read(file_path)
     try
-        nf = GSDFiles.nframes(r)
-        nf == 0 && error("No frames in GSD: $file_path")
-        # read last frame (1-based index for read_frame)
-        f = GSDFiles.read_frame(r, nf)
-        step = Int(f.configuration.step)
-        D    = Int(f.configuration.dimensions)
-        N    = Int(f.particles.N)
-        posM = f.particles.position
-        velM = f.particles.velocity
-        T = eltype(posM)
+        # Determine the last frame index directly from the raw index table
+        if isempty(r.index)
+            error("No frames in GSD: $file_path")
+        end
+        last_idx = Int(maximum(e -> e.frame, r.index)) + 1
 
-        rx = T.(posM[:,1]); ry = T.(posM[:,2])
-        rz = D == 3 ? T.(posM[:,3]) : nothing
+        # Now attempt to parse from last_idx backwards in case the tail is partial
+        last_error = nothing
+        candidates = Int[]
+        if step === nothing
+            candidates = collect(last_idx:-1:1)
+        else
+            # try to find frame with matching configuration/step
+            for i in 1:last_idx
+                fid_i = UInt64(i-1)
+                ents_i = GSDFiles._entries_for_frame(r, fid_i)
+                stp_e = GSDFiles._maybe_one(r, ents_i, "configuration/step")
+                if stp_e !== nothing
+                    stp_val = Int(GSDFiles._read_scalar(r.io, stp_e, UInt64))
+                    if stp_val == step
+                        push!(candidates, i)
+                    end
+                end
+            end
+            # If not found, treat step as frame index when valid
+            if isempty(candidates) && 1 <= step <= last_idx
+                push!(candidates, Int(step))
+            end
+        end
+        for idx in candidates
+            try
+                # Gather entries for this frame directly from the index
+                fid = UInt64(idx - 1)
+                ents = GSDFiles._entries_for_frame(r, fid)
 
-        vx = T.(velM[:,1]); vy = T.(velM[:,2])
-        vz = D == 3 ? T.(velM[:,3]) : nothing
+                # Helper: find latest entry for a given name up to this frame
+                function _latest_entry(name::AbstractString)
+                    id = GSDFiles._name_id(r, name)
+                    id === nothing && return nothing
+                    candidates = filter(e -> (e.id == id && e.frame <= fid), r.index)
+                    isempty(candidates) && return nothing
+                    # pick by maximum frame id
+                    best = candidates[argmax(getfield.(candidates, :frame))]
+                    return best
+                end
 
-        typeid0 = Vector{UInt32}(f.particles.typeid)
-        types   = Vector{String}(f.particles.types)
-        typeid1 = Int32.(typeid0 .+ 1)
+                # configuration/*
+                step_e = _latest_entry("configuration/step")
+                dim_e  = _latest_entry("configuration/dimensions")
+                box_e  = _latest_entry("configuration/box")
+                if step_e === nothing || dim_e === nothing || box_e === nothing
+                    throw(ArgumentError("configuration chunks missing"))
+                end
+                step = Int(GSDFiles._read_scalar(r.io, step_e, UInt64))
+                D    = Int(GSDFiles._read_scalar(r.io, dim_e, UInt8))
+                box6 = GSDFiles._read_vec(r.io, box_e, Float32)
 
-        box6 = f.configuration.box
-        box  = D == 2 ? (T(box6[1]), T(box6[2])) :
-                        (T(box6[1]), T(box6[2]), T(box6[3]))
+                # particles/N
+                N_e = _latest_entry("particles/N")
+                N_e === nothing && throw(ArgumentError("particles/N missing"))
+                N = Int(GSDFiles._read_scalar(r.io, N_e, UInt32))
 
-        return step, rx, ry, rz, vx, vy, vz, typeid1, types, box
+                # particles/position (required)
+                pos_e = begin
+                    x = GSDFiles._maybe_one_of(r, ents, ["particles/position", "particles/positions"])
+                    x === nothing ? _latest_entry("particles/position") : x
+                end
+                pos_e === nothing && throw(ArgumentError("particles/position missing"))
+                posM = GSDFiles._read_mat_f32(r.io, pos_e)
+                T = eltype(posM)
+                rx = T.(posM[:,1]); ry = T.(posM[:,2])
+                rz = D == 3 ? T.(posM[:,3]) : nothing
+
+                # particles/velocity (optional)
+                vel_e = GSDFiles._maybe_one_of(r, ents, ["particles/velocity", "particles/velocities"])
+                local vx, vy, vz
+                if vel_e === nothing
+                    vx = fill(zero(T), N); vy = fill(zero(T), N)
+                    vz = D == 3 ? fill(zero(T), N) : nothing
+                    @warn "Velocities missing in GSD frame; using zeros" file=file_path frame_index=idx
+                else
+                    velM = GSDFiles._read_mat_f32(r.io, vel_e)
+                    vx = T.(velM[:,1]); vy = T.(velM[:,2])
+                    vz = D == 3 ? T.(velM[:,3]) : nothing
+                end
+
+                # particles/types + typeid (optional)
+                types_e = _latest_entry("particles/types")
+                local types::Vector{String}
+                types = types_e === nothing ? String[] : GSDFiles._decode_types(r.io, types_e)
+                tid_e = begin
+                    x = GSDFiles._maybe_one_of(r, ents, ["particles/typeid", "particles/typeids"])  # per-frame if available
+                    x === nothing ? _latest_entry("particles/typeid") : x
+                end
+                local typeid1::Vector{Int32}
+                if tid_e === nothing
+                    typeid1 = fill(Int32(1), N)
+                    isempty(types) && (types = ["A"])  # default single type
+                else
+                    tid0 = GSDFiles._read_vec(r.io, tid_e, UInt32)
+                    typeid1 = Int32.(tid0 .+ 1)
+                    isempty(types) && (types = ["A"])  # ensure at least one name
+                end
+
+                # box tuple
+                box  = D == 2 ? (T(box6[1]), T(box6[2])) :
+                                (T(box6[1]), T(box6[2]), T(box6[3]))
+
+                # Build force matrix if present
+                if frc_e === nothing
+                    local_forceM = nothing
+                else
+                    fM = GSDFiles._read_mat_f32(r.io, frc_e)
+                    local_forceM = T.(fM)
+                end
+
+                # Warn if we had to fall back from the last probed frame
+                if idx != last_idx
+                    @warn "Last frame appears incomplete; using previous valid frame" file=file_path chosen_frame=idx last_probe=last_idx
+                end
+                return step, rx, ry, rz, vx, vy, vz, typeid1, types, box, local_forceM
+            catch err
+                last_error = err
+                # try previous frame
+            end
+        end
+        # If we reach here, none of the frames could be read fully
+        if last_error !== nothing
+            throw(last_error)
+        else
+            error("Failed to read any valid frame from $file_path")
+        end
     finally
         GSDFiles.close(r)
     end
