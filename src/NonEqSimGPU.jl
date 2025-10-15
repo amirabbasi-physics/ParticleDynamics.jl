@@ -26,7 +26,7 @@ using .Definitions: LJParams, SoftRepulsiveParams,
 using .Simulation: SimulationState, build_simulation, step!, step_graph!, zero_forces!
 using .Simulation: IntegratorSpec, VVSpec, BAOABSpec, BrownianSpec, vv, baoab, brownian
 using .Writers: InMemoryLogger, CSVWriter, XYZWriter,
-    write_xyz!, write_observables_csv!, gsd_open, gsd_close, write_gsd_frame!, read_last_gsd
+    write_xyz!, write_observables_csv!, gsd_open, gsd_close, write_gsd_frame!, read_gsd_frame!
 using .BondedForces: BondList, build_bondlist
 
 export Filters, BondedForces,

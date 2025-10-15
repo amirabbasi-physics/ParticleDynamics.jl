@@ -8,7 +8,7 @@ using DelimitedFiles
 
 export InMemoryLogger, CSVWriter, XYZWriter, ObservableCSVWriter
 export write_xyz!, write_observables_csv!
-export gsd_open, gsd_close, write_gsd_frame!, read_last_gsd
+export gsd_open, gsd_close, write_gsd_frame!, read_gsd_frame!
 
 # =======================================================================
 # Simple in-memory logger (kept for API completeness)
@@ -412,7 +412,7 @@ function write_gsd_frame!(h, st; diameter=1.0, types_names=["A"], step::Int=0, w
 end
 
 """
-Read the last valid frame from a GSD file and return SoA arrays.
+Read a valid frame from a GSD file and return SoA arrays.
 
 Returns:
     step::Int,
@@ -423,7 +423,7 @@ Returns:
     box::Union{Tuple{T,T},Tuple{T,T,T}},
     forceM::Union{Nothing,Matrix{T}}   # N×3 when present
 """
-function read_last_gsd(file_path::AbstractString; step::Union{Nothing,Integer}=nothing)
+function read_gsd_frame!(file_path::AbstractString; step::Union{Nothing,Integer}=nothing)
     r = GSDFiles.open_read(file_path)
     try
         # Determine the last frame index directly from the raw index table
