@@ -7,6 +7,7 @@ using ..NonBondedForces
 using ..BondedForces
 using ..LangevinIntegrators
 using ..BrownianIntegrators
+ 
 
 const NL_CHECK_STRIDE = 20  # only check NL rebuild every N steps to cut overhead
 
@@ -16,7 +17,7 @@ const NB_KIND_WCA     = UInt8(2)
 const NB_KIND_SOFTREP = UInt8(3)
 
 export SimulationState, build_simulation, step!, step_graph!, step_fused!, zero_forces!
-export IntegratorSpec, VVSpec, BAOABSpec, BrownianSpec, vv, baoab, brownian
+export IntegratorSpec, VVSpec, BAOABSpec, BrownianSpec, EMSpec, vv, baoab, brownian, em
 
 # =========================
 #   Simulation state (SoA)
@@ -69,6 +70,7 @@ mutable struct SimulationState{T<:AbstractFloat}
     # observables buffers
     Epot::CuArray{T,1}
     dq::CuArray{T,1}
+    dU::CuArray{T,1}
     Ekin::CuArray{T,1}
 
     # misc
@@ -96,9 +98,14 @@ struct BrownianSpec{T<:AbstractFloat} <: IntegratorSpec{T}
     params::BrownianIntegrators.BrownianParams{T}
 end
 
+struct EMSpec{T<:AbstractFloat} <: IntegratorSpec{T}
+    params::BrownianIntegrators.EMParams{T}
+end
+
 vv(st::SimulationState{T}) where {T<:AbstractFloat} = VVSpec{T}(st.vv)
 baoab(st::SimulationState{T}) where {T<:AbstractFloat} = BAOABSpec{T}(LangevinIntegrators.BAOABParams{T}(st.vv.gamma, st.vv.mass, st.vv.noise_scale))
 brownian(st::SimulationState{T}) where {T<:AbstractFloat} = BrownianSpec{T}(BrownianIntegrators.BrownianParams(st))
+em(st::SimulationState{T}) where {T<:AbstractFloat} = EMSpec{T}(BrownianIntegrators.EMParams(st.vv.gamma, st.vv.noise_scale))
 """
 BrownianIntegrators.BrownianParams(st)
 
@@ -327,7 +334,8 @@ function build_simulation(;N::Int,
 
     Epot = CUDA.CuArray{T}(undef, N); fill!(Epot, zero(T))
     dq   = CUDA.CuArray{T}(undef, N); fill!(dq, zero(T))
-    Ekin   = CUDA.CuArray{T}(undef, N); fill!(Ekin, zero(T))
+    dU   = CUDA.CuArray{T}(undef, N); fill!(dU, zero(T))
+    Ekin = CUDA.CuArray{T}(undef, N); fill!(Ekin, zero(T))
 
     # Build bonds (if provided)
     local bondlist
@@ -382,7 +390,7 @@ function build_simulation(;N::Int,
                          nothing, nothing, nothing,
                          bondlist, bond_spec,
                          vv,
-                         Epot, dq, Ekin, 0, UInt8(0), nb_tag, srp) 
+                         Epot, dq, dU, Ekin, 0, UInt8(0), nb_tag, srp) 
 
     # Assign the appropriate box directly (no extra tuple layer)
     if D == 2
@@ -676,7 +684,7 @@ function step!(st::SimulationState{T}, dt::Real; compute_energy::Bool=true) wher
         # bonded contributions at t+dt
         _apply_bonds2!(st, st.fx, st.fy, compute_energy ? st.Epot : nothing, compute_energy)
         LangevinIntegrators.vv_velocities_soa!(st.vx, st.vy, st.f0x, st.f0y, st.fx, st.fy,
-                                               st.rf_x, st.rf_y, st.dq, st.Ekin, st.vv, dtT)
+                                               st.rf_x, st.rf_y, st.dq, st.dU, st.Ekin, st.vv, dtT)
     else
         if st.nb_kind == NB_KIND_LJ && st.sigma_pair !== nothing
             if compute_energy
@@ -761,7 +769,7 @@ function step!(st::SimulationState{T}, dt::Real; compute_energy::Bool=true) wher
         LangevinIntegrators.vv_velocities_soa!(st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z,
                                                st.fx, st.fy, st.fz,
                                                st.rf_x, st.rf_y, st.rf_z,
-                                               st.dq, st.Ekin, st.vv, dtT)
+                                               st.dq, st.dU, st.Ekin, st.vv, dtT)
     end
 
     st.step += 1
@@ -898,7 +906,7 @@ function step_graph!(st::SimulationState{T}, dt::Real; compute_energy::Bool=true
                 end
             end
             LangevinIntegrators.vv_velocities_soa!(st.vx, st.vy, st.f0x, st.f0y, st.fx, st.fy,
-                                                   st.rf_x, st.rf_y, st.dq, st.Ekin, st.vv, dtT)
+                                                   st.rf_x, st.rf_y, st.dq, st.dU, st.Ekin, st.vv, dtT)
         end
     else
         CUDA.@captured begin
@@ -935,7 +943,7 @@ function step_graph!(st::SimulationState{T}, dt::Real; compute_energy::Bool=true
             LangevinIntegrators.vv_velocities_soa!(st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z,
                                                    st.fx, st.fy, st.fz,
                                                    st.rf_x, st.rf_y, st.rf_z,
-                                                   st.dq, st.Ekin, st.vv, dtT)
+                                                   st.dq, st.dU, st.Ekin, st.vv, dtT)
         end
     end
 
@@ -973,6 +981,11 @@ end
 function step!(st::SimulationState{T}, spec::BrownianSpec{T}, dt::Real; compute_energy::Bool=true) where {T<:AbstractFloat}
     return step!(st, spec.params, dt; compute_energy)
 end
+
+function step!(st::SimulationState{T}, spec::EMSpec{T}, dt::Real; compute_energy::Bool=true) where {T<:AbstractFloat}
+    return step!(st, spec.params, dt; compute_energy)
+end
+
 
 """
     step!(st, bao::LangevinIntegrators.BAOABParams{T}, dt; compute_energy=true)
@@ -1403,7 +1416,7 @@ function step!(st::SimulationState{T}, bp::BrownianIntegrators.BrownianParams{T}
             st.rx, st.ry, st.f0x, st.f0y,
             st.rf_x, st.rf_y,
             bp.gamma, bp.noise_scale,
-            dtT, st.dq, st.box2::Definitions.Box2)
+            dtT, st.dq, st.dU, st.box2::Definitions.Box2)
         if st.nb_kind == NB_KIND_LJ
             if st.sigma_particle === nothing
                 if compute_energy
@@ -1519,7 +1532,7 @@ function step!(st::SimulationState{T}, bp::BrownianIntegrators.BrownianParams{T}
             st.f0x, st.f0y, st.f0z,
             st.rf_x, st.rf_y, st.rf_z,
             bp.gamma, bp.noise_scale,
-            dtT, st.dq, st.box3::Definitions.Box3)
+            dtT, st.dq, st.dU, st.box3::Definitions.Box3)
         if st.nb_kind == NB_KIND_LJ
             if st.sigma_particle === nothing
                 if compute_energy
@@ -1606,5 +1619,115 @@ Deprecated thin wrapper. Use `step!(st, bp, dt; ...)` instead.
 function step_bd!(st::SimulationState{T}, dt::Real, bp::BrownianIntegrators.BrownianParams{T}; compute_energy::Bool=true) where {T<:AbstractFloat}
     return step!(st, bp, T(dt); compute_energy)
 end
+"""
+    step!(st, em::BrownianIntegrators.EMParams{T}, dt; compute_energy=true)
+
+Euler–Maruyama overdamped step with additive noise: Δr = μ f Δt + √(2DΔt) ξ.
+Accumulates conservative work w = f · Δr into dq (heat) and dU (conservative power proxy).
+"""
+function step!(st::SimulationState{T}, em::BrownianIntegrators.EMParams{T}, dt::Real; compute_energy::Bool=true) where {T<:AbstractFloat}
+    dtT = T(dt)
+    st.last_integrator = UInt8(2)
+    D = st.rz === nothing ? 2 : 3
+
+    # Ensure forces at t
+    if st.step == 0
+        if D == 2
+            if st.nb_kind == NB_KIND_LJ
+                if st.sigma_particle === nothing
+                    NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+                else
+                    NonBondedForces.lj_forces_soa_mixed!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.nbh, st.box2::Definitions.Box2, st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
+                end
+            elseif st.nb_kind == NB_KIND_WCA
+                NonBondedForces.wca_forces_soa!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+            else
+                @assert st.softrep !== nothing
+                NonBondedForces.harmonic_rep_forces_soa!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.nbh, st.box2::Definitions.Box2, st.softrep)
+            end
+        else
+            if st.nb_kind == NB_KIND_LJ
+                if st.sigma_particle === nothing
+                    NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+                else
+                    NonBondedForces.lj_forces_soa_mixed!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.nbh, st.box3::Definitions.Box3, st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
+                end
+            elseif st.nb_kind == NB_KIND_WCA
+                NonBondedForces.wca_forces_soa!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+            else
+                @assert st.softrep !== nothing
+                NonBondedForces.harmonic_rep_forces_soa!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.nbh, st.box3::Definitions.Box3, st.softrep)
+            end
+        end
+    end
+
+    # Position update and dq/dU accumulation
+    if D == 2
+        BrownianIntegrators.em_step_2d!(st.rx, st.ry, st.fx, st.fy, em, dtT, st.dq, st.dU, st.box2::Definitions.Box2)
+        # New forces
+        if compute_energy
+            if st.nb_kind == NB_KIND_LJ
+                if st.sigma_particle === nothing
+                    NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+                else
+                    NonBondedForces.lj_forces_soa_mixed!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.nbh, st.box2::Definitions.Box2, st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
+                end
+            elseif st.nb_kind == NB_KIND_WCA
+                NonBondedForces.wca_forces_soa!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+            else
+                @assert st.softrep !== nothing
+                NonBondedForces.harmonic_rep_forces_soa!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.nbh, st.box2::Definitions.Box2, st.softrep)
+            end
+        else
+            if st.nb_kind == NB_KIND_LJ
+                if st.sigma_particle === nothing
+                    NonBondedForces.lj_forces_soa_noE!(st.rx, st.ry, st.fx, st.fy, st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+                else
+                    NonBondedForces.lj_forces_soa_noE_mixed!(st.rx, st.ry, st.fx, st.fy, st.nbh, st.box2::Definitions.Box2, st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
+                end
+            elseif st.nb_kind == NB_KIND_WCA
+                NonBondedForces.wca_forces_soa_noE!(st.rx, st.ry, st.fx, st.fy, st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+            else
+                @assert st.softrep !== nothing
+                NonBondedForces.harmonic_rep_forces_soa_noE!(st.rx, st.ry, st.fx, st.fy, st.nbh, st.box2::Definitions.Box2, st.softrep)
+            end
+        end
+    else
+        BrownianIntegrators.em_step_3d!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, em, dtT, st.dq, st.dU, st.box3::Definitions.Box3)
+        if compute_energy
+            if st.nb_kind == NB_KIND_LJ
+                if st.sigma_particle === nothing
+                    NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+                else
+                    NonBondedForces.lj_forces_soa_mixed!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.nbh, st.box3::Definitions.Box3, st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
+                end
+            elseif st.nb_kind == NB_KIND_WCA
+                NonBondedForces.wca_forces_soa!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+            else
+                @assert st.softrep !== nothing
+                NonBondedForces.harmonic_rep_forces_soa!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.nbh, st.box3::Definitions.Box3, st.softrep)
+            end
+        else
+            if st.nb_kind == NB_KIND_LJ
+                if st.sigma_particle === nothing
+                    NonBondedForces.lj_forces_soa_noE!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+                else
+                    NonBondedForces.lj_forces_soa_noE_mixed!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.nbh, st.box3::Definitions.Box3, st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
+                end
+            elseif st.nb_kind == NB_KIND_WCA
+                NonBondedForces.wca_forces_soa_noE!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+            else
+                @assert st.softrep !== nothing
+                NonBondedForces.harmonic_rep_forces_soa_noE!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.nbh, st.box3::Definitions.Box3, st.softrep)
+            end
+        end
+    end
+
+    st.step += 1
+    return nothing
+end
+
 
 end # module
+
+

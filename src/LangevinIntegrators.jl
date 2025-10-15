@@ -174,7 +174,7 @@ function _vv_vel2!(vx::CuDeviceVector{T}, vy::CuDeviceVector{T},
                    f0x::CuDeviceVector{T}, f0y::CuDeviceVector{T},
                    fx::CuDeviceVector{T}, fy::CuDeviceVector{T},
                    beta_x::CuDeviceVector{T}, beta_y::CuDeviceVector{T},
-                   dq::CuDeviceVector{T}, Ekin::CuDeviceVector{T},
+                   dq::CuDeviceVector{T}, dU::CuDeviceVector{T}, Ekin::CuDeviceVector{T},
                    noise_scale::CuDeviceVector{T},
                    gamma::CuDeviceVector{T}, mass::T, dt::T) where {T<:AbstractFloat}
     zeroT = zero(T); two = T(2); half = T(0.5)
@@ -192,6 +192,8 @@ function _vv_vel2!(vx::CuDeviceVector{T}, vy::CuDeviceVector{T},
     s = noise_scale[i]
     Tbath = g > zeroT ? (s*s) / (two*g*dt) : zeroT
     dq[i] = dq[i] + g * (v2 - two * Tbath / mass) * dt
+    # Conservative power contribution (UPR accumulator): v · f at t+dt
+    dU[i] = dU[i] + (vnx * fx[i] + vny * fy[i])
     vx[i] = vnx; vy[i] = vny
     return
 end
@@ -200,7 +202,7 @@ function _vv_vel3!(vx::CuDeviceVector{T}, vy::CuDeviceVector{T}, vz::CuDeviceVec
                    f0x::CuDeviceVector{T}, f0y::CuDeviceVector{T}, f0z::CuDeviceVector{T},
                    fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, fz::CuDeviceVector{T},
                    beta_x::CuDeviceVector{T}, beta_y::CuDeviceVector{T}, beta_z::CuDeviceVector{T},
-                   dq::CuDeviceVector{T}, Ekin::CuDeviceVector{T},
+                   dq::CuDeviceVector{T}, dU::CuDeviceVector{T}, Ekin::CuDeviceVector{T},
                    noise_scale::CuDeviceVector{T},
                    gamma::CuDeviceVector{T}, mass::T, dt::T) where {T<:AbstractFloat}
     zeroT = zero(T); two = T(2); three = T(3); half = T(0.5)
@@ -219,6 +221,7 @@ function _vv_vel3!(vx::CuDeviceVector{T}, vy::CuDeviceVector{T}, vz::CuDeviceVec
     s = noise_scale[i]
     Tbath = g > zeroT ? (s*s) / (two*g*dt) : zeroT
     dq[i] = dq[i] + g * (v2 - three * Tbath / mass) * dt
+    dU[i] = dU[i] + (vnx * fx[i] + vny * fy[i] + vnz * fz[i])
     vx[i] = vnx; vy[i] = vny; vz[i] = vnz
     return
 end
@@ -227,15 +230,15 @@ function vv_velocities_soa!(vx::CuArray{T,1}, vy::CuArray{T,1},
                             f0x::CuArray{T,1}, f0y::CuArray{T,1},
                             fx::CuArray{T,1}, fy::CuArray{T,1},
                             beta_x::CuArray{T,1}, beta_y::CuArray{T,1},
-                            dq::CuArray{T,1}, Ekin::CuArray{T,1},
+                            dq::CuArray{T,1}, dU::CuArray{T,1}, Ekin::CuArray{T,1},
                             params::VVParams{T}, dt::T) where {T<:AbstractFloat}
     N = length(vx); threads = min(256, N); blocks = cld(N, threads)
     k = CUDA.@cuda launch=false _vv_vel2!(vx, vy, f0x, f0y, fx, fy,
-                                          beta_x, beta_y, dq, Ekin,
+                                          beta_x, beta_y, dq, dU, Ekin,
                                           params.noise_scale, params.gamma,
                                           params.mass, dt)
     k(vx, vy, f0x, f0y, fx, fy,
-      beta_x, beta_y, dq, Ekin,
+      beta_x, beta_y, dq, dU, Ekin,
       params.noise_scale, params.gamma,
       params.mass, dt; threads, blocks)
     return nothing
@@ -245,18 +248,18 @@ function vv_velocities_soa!(vx::CuArray{T,1}, vy::CuArray{T,1}, vz::CuArray{T,1}
                             f0x::CuArray{T,1}, f0y::CuArray{T,1}, f0z::CuArray{T,1},
                             fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1},
                             beta_x::CuArray{T,1}, beta_y::CuArray{T,1}, beta_z::CuArray{T,1},
-                            dq::CuArray{T,1}, Ekin::CuArray{T,1},
+                            dq::CuArray{T,1}, dU::CuArray{T,1}, Ekin::CuArray{T,1},
                             params::VVParams{T}, dt::T) where {T<:AbstractFloat}
     N = length(vx); threads = min(256, N); blocks = cld(N, threads)
     k = CUDA.@cuda launch=false _vv_vel3!(vx, vy, vz, f0x, f0y, f0z,
                                           fx, fy, fz,
                                           beta_x, beta_y, beta_z,
-                                          dq, Ekin, params.noise_scale,
+                                          dq, dU, Ekin, params.noise_scale,
                                           params.gamma, params.mass, dt)
     k(vx, vy, vz, f0x, f0y, f0z,
       fx, fy, fz,
       beta_x, beta_y, beta_z,
-      dq, Ekin, params.noise_scale,
+      dq, dU, Ekin, params.noise_scale,
       params.gamma, params.mass, dt; threads, blocks)
     return nothing
 end

@@ -3,5 +3,6 @@
 *.jl.mem
 *.csv
 *.gsd
+*.log
 /Manifest.toml
-/Documents/
+/Documents/*
