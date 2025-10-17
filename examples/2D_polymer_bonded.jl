@@ -47,10 +47,10 @@ bonds = make_linear_chain_bonds(N)
 
 # Choose one type of bonded interaction
 use_fene = true
-bonding = use_fene ? fene_bond(300f0, 1.5f0) : harmonic_bond(30f0, 1.0f0)
+bonding = use_fene ? fene_bond(k = 300, r0 = 1.5) : harmonic_bond(k = 300, r0 = 1.0)
 
 # ---- Build ----
-st = build_simulation(D = 2, N=N, box=box, cutoff=r_cut, skin=0.4f0, cap=cap,
+st = build_simulation(N=N, box=box, cutoff=r_cut, skin=0.4f0, cap=cap,
                                  neigh_interval=1,
                                  epsilon=epsilon, sigma=sigma,
                                  gamma=gamma, temperature=temperature, dt=dt,
