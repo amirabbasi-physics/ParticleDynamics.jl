@@ -17,7 +17,7 @@ const NB_KIND_WCA     = UInt8(2)
 const NB_KIND_SOFTREP = UInt8(3)
 
 export SimulationState, build_simulation, step!, step_graph!, step_fused!, zero_forces!
-export IntegratorSpec, VVSpec, BAOABSpec, BrownianSpec, EMSpec, vv, baoab, brownian, em
+export IntegratorSpec, VVSpec, BAOABSpec, BrownianSpec, EMSpec, velocityverlet, baoab, eulerheun, eulermaruyama
 
 # =========================
 #   Simulation state (SoA)
@@ -102,10 +102,10 @@ struct EMSpec{T<:AbstractFloat} <: IntegratorSpec{T}
     params::BrownianIntegrators.EMParams{T}
 end
 
-vv(st::SimulationState{T}) where {T<:AbstractFloat} = VVSpec{T}(st.vv)
+velocityverlet(st::SimulationState{T}) where {T<:AbstractFloat} = VVSpec{T}(st.vv)
 baoab(st::SimulationState{T}) where {T<:AbstractFloat} = BAOABSpec{T}(LangevinIntegrators.BAOABParams{T}(st.vv.gamma, st.vv.mass, st.vv.noise_scale))
-brownian(st::SimulationState{T}) where {T<:AbstractFloat} = BrownianSpec{T}(BrownianIntegrators.BrownianParams(st))
-em(st::SimulationState{T}) where {T<:AbstractFloat} = EMSpec{T}(BrownianIntegrators.EMParams(st.vv.gamma, st.vv.noise_scale))
+eulerheun(st::SimulationState{T}) where {T<:AbstractFloat} = BrownianSpec{T}(BrownianIntegrators.BrownianParams(st))
+eulermaruyama(st::SimulationState{T}) where {T<:AbstractFloat} = EMSpec{T}(BrownianIntegrators.EMParams(st.vv.gamma, st.vv.noise_scale))
 """
 BrownianIntegrators.BrownianParams(st)
 
@@ -1087,20 +1087,7 @@ function step!(st::SimulationState{T}, bao::LangevinIntegrators.BAOABParams{T}, 
                 end
             end
             if st.bonds !== nothing
-                if st.harmonic_params !== nothing
-                    if compute_energy
-                        BondedForces.harmonic_forces_soa!(st.rx, st.ry, st.f0x, st.f0y, st.Epot, st.bonds, st.box2::Definitions.Box2, st.harmonic_params)
-                    else
-                        BondedForces.harmonic_forces_soa_noE!(st.rx, st.ry, st.f0x, st.f0y, st.bonds, st.box2::Definitions.Box2, st.harmonic_params)
-                    end
-                end
-                if st.fene_params !== nothing
-                    if compute_energy
-                        BondedForces.fene_forces_soa!(st.rx, st.ry, st.f0x, st.f0y, st.Epot, st.bonds, st.box2::Definitions.Box2, st.fene_params)
-                    else
-                        BondedForces.fene_forces_soa_noE!(st.rx, st.ry, st.f0x, st.f0y, st.bonds, st.box2::Definitions.Box2, st.fene_params)
-                    end
-                end
+                _apply_bonds2!(st, st.f0x, st.f0y, compute_energy ? st.Epot : nothing, compute_energy)
             end
         else
             if st.nb_kind == NB_KIND_LJ
@@ -1474,20 +1461,7 @@ function step!(st::SimulationState{T}, bp::BrownianIntegrators.BrownianParams{T}
             end
         end
         if st.bonds !== nothing
-            if st.harmonic_params !== nothing
-                if compute_energy
-                    BondedForces.harmonic_forces_soa!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.bonds, st.box2::Definitions.Box2, st.harmonic_params)
-                else
-                    BondedForces.harmonic_forces_soa_noE!(st.rx, st.ry, st.fx, st.fy, st.bonds, st.box2::Definitions.Box2, st.harmonic_params)
-                end
-            end
-            if st.fene_params !== nothing
-                if compute_energy
-                    BondedForces.fene_forces_soa!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.bonds, st.box2::Definitions.Box2, st.fene_params)
-                else
-                    BondedForces.fene_forces_soa_noE!(st.rx, st.ry, st.fx, st.fy, st.bonds, st.box2::Definitions.Box2, st.fene_params)
-                end
-            end
+            _apply_bonds2!(st, st.fx, st.fy, compute_energy ? st.Epot : nothing, compute_energy)
         end
     else
         BrownianIntegrators.bd_prepare_midpoint_3d!(
@@ -1729,5 +1703,3 @@ end
 
 
 end # module
-
-

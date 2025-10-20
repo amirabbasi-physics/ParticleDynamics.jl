@@ -73,8 +73,8 @@ function _mid2!(
     N = length(rx); if i > N; return; end
     @inbounds begin
         g = gamma[i]
-        μ = _maybe_inv(g)
-        sqrt2Ddt = _maybe_scale(noise_scale[i], g)
+        μ = 1 / g
+        sqrt2Ddt = μ * noise_scale[i]
         half = T(0.5)
         dx = half * (μ * fx[i] * dt + sqrt2Ddt * ξx[i])
         dy = half * (μ * fy[i] * dt + sqrt2Ddt * ξy[i])
@@ -99,8 +99,8 @@ function _prep2!(
     N = length(rx); if i > N; return; end
     @inbounds begin
         g = gamma[i]
-        μ = _maybe_inv(g)
-        sqrt2Ddt = _maybe_scale(noise_scale[i], g)
+        μ = 1 / g
+        sqrt2Ddt = μ * noise_scale[i]
         ξx_i = randn(T)
         ξy_i = randn(T)
         ξx[i] = ξx_i
@@ -129,8 +129,8 @@ function _mid3!(
     N = length(rx); if i > N; return; end
     @inbounds begin
         g = gamma[i]
-        μ = _maybe_inv(g)
-        sqrt2Ddt = _maybe_scale(noise_scale[i], g)
+        μ = 1 / g
+        sqrt2Ddt = μ * noise_scale[i]
         half = T(0.5)
         dx = half * (μ * fx[i] * dt + sqrt2Ddt * ξx[i])
         dy = half * (μ * fy[i] * dt + sqrt2Ddt * ξy[i])
@@ -158,8 +158,8 @@ function _prep3!(
     N = length(rx); if i > N; return; end
     @inbounds begin
         g = gamma[i]
-        μ = _maybe_inv(g)
-        sqrt2Ddt = _maybe_scale(noise_scale[i], g)
+        μ = 1 / g
+        sqrt2Ddt = μ * noise_scale[i]
         ξx_i = randn(T)
         ξy_i = randn(T)
         ξz_i = randn(T)
@@ -193,8 +193,8 @@ function _fin2!(
     N = length(rx); if i > N; return; end
     @inbounds begin
         g = gamma[i]
-        μ = _maybe_inv(g)
-        sqrt2Ddt = _maybe_scale(noise_scale[i], g)
+        μ = 1 / g
+        sqrt2Ddt = μ * noise_scale[i]
         Δx = μ * fxm[i] * dt + sqrt2Ddt * ξx[i]
         Δy = μ * fym[i] * dt + sqrt2Ddt * ξy[i]
         x = rx[i] + Δx
@@ -222,8 +222,8 @@ function _fin3!(
     N = length(rx); if i > N; return; end
     @inbounds begin
         g = gamma[i]
-        μ = _maybe_inv(g)
-        sqrt2Ddt = _maybe_scale(noise_scale[i], g)
+        μ = 1 / g
+        sqrt2Ddt = μ * noise_scale[i]
         Δx = μ * fxm[i] * dt + sqrt2Ddt * ξx[i]
         Δy = μ * fym[i] * dt + sqrt2Ddt * ξy[i]
         Δz = μ * fzm[i] * dt + sqrt2Ddt * ξz[i]
@@ -348,8 +348,8 @@ function _em2!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
     N = length(rx); if i > N; return; end
     @inbounds begin
         g = gamma[i]
-        μ = _maybe_inv(g)
-        sqrt2Ddt = _maybe_scale(noise_scale[i], g)
+        μ = 1 / g
+        sqrt2Ddt = μ * noise_scale[i]
         ξx = randn(T); ξy = randn(T)
         Δx = μ * fx[i] * dt + sqrt2Ddt * ξx
         Δy = μ * fy[i] * dt + sqrt2Ddt * ξy
@@ -374,8 +374,8 @@ function _em3!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{
     N = length(rx); if i > N; return; end
     @inbounds begin
         g = gamma[i]
-        μ = _maybe_inv(g)
-        sqrt2Ddt = _maybe_scale(noise_scale[i], g)
+        μ = 1 / g
+        sqrt2Ddt = μ * noise_scale[i]
         ξx = randn(T); ξy = randn(T); ξz = randn(T)
         Δx = μ * fx[i] * dt + sqrt2Ddt * ξx
         Δy = μ * fy[i] * dt + sqrt2Ddt * ξy

@@ -46,7 +46,7 @@ temperature = 1f0
 dt = 0.00025f0
 
 # ---- Build ----
-st = build_simulation(D = 3, N=N, box=box, cutoff=r_cut, skin=0.4f0, cap=cap,
+st = build_simulation(N=N, box=box, cutoff=r_cut, skin=0.4f0, cap=cap,
                                 neigh_interval=10,
                                 epsilon=epsilon, sigma=sigma,
                                 gamma=gamma, temperature=temperature, dt=dt)
@@ -58,7 +58,7 @@ Filters.set_friction!(st, gamma; filter=Filters.All())
 Filters.set_langevin_temperature!(st, dt, temperature; filter=Filters.All())
 
 # ---- Brownian parameters ----
-bp = brownian(st)
+eh = eulerheun(st)
 
 # ---- GSD writer ----
 gsd_path = joinpath(@__DIR__, "traj3d_bd.gsd")
@@ -69,7 +69,7 @@ write_gsd_frame!(gsdh, st; diameter=sigma, types_names=types, step=st.step)
 # ---- Run ----
 @time for s in 1:10_000_000
     compute_E = (s % 1000_000 == 0)
-    step!(st, bp, dt; compute_energy=compute_E)
+    step!(st, eh, dt; compute_energy=compute_E)
     if compute_E
         write_observables_csv!(joinpath(@__DIR__, "obs3d_bd.csv"), s; Epot=st.Epot, Ekin=st.Ekin, dq=st.dq)
         write_gsd_frame!(gsdh, st; diameter=sigma, types_names=types, step=st.step)

@@ -38,7 +38,7 @@ epsilon = 1f0
 cap = Int32(96)
 gamma = 1f0
 temperature = 1f0
-dt = 0.0005f0
+dt = 0.00001f0
 N_steps = 1000000
 N_log = 10000
 
@@ -50,12 +50,12 @@ use_fene = true
 bonding = use_fene ? fene_bond(k = 300, r0 = 1.5) : harmonic_bond(k = 300, r0 = 1.0)
 
 # ---- Build ----
-st = build_simulation(N=N, box=box, cutoff=r_cut, skin=0.4f0, cap=cap,
-                                 neigh_interval=1,
+st = build_simulation(N=N, box=box, cutoff=r_cut, skin= r_cut/2, cap=cap,
+                                 neigh_interval=100,
                                  epsilon=epsilon, sigma=sigma,
                                  gamma=gamma, temperature=temperature, dt=dt,
                                  bonds=bonds, bonding=bonding,
-                                 nonbonded=:wca)
+                                 nonbonded=:wca, precision=:f32)
 
 # ---- Initialize positions ----
 init_chain_line!(st, box)
