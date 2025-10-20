@@ -8,7 +8,104 @@ using DelimitedFiles
 
 export InMemoryLogger, CSVWriter, XYZWriter, ObservableCSVWriter
 export write_xyz!, write_observables_csv!
-export gsd_open, gsd_close, write_gsd_frame!, read_gsd_frame!
+export gsd_open, gsd_close, write_gsd_frame!, read_gsd_frame!, GSDFrameData, GSDTopology
+
+# -----------------------------------------------------------------------------
+# Rich GSD frame containers
+# -----------------------------------------------------------------------------
+"""
+Structured toplogical information decoded from a GSD frame.
+
+Each field is a `NamedTuple` describing the corresponding collection and
+contains both the original 0-based data (`group0`, `typeid0`) and the
+converted 1-based indices (`group`, `typeid`) that can be passed directly to
+NonEqSimGPU utilities such as `BondedForces.build_bondlist`.
+"""
+struct GSDTopology
+    bonds::NamedTuple
+    angles::NamedTuple
+    dihedrals::NamedTuple
+    impropers::NamedTuple
+    constraints::NamedTuple
+    special_pairs::NamedTuple
+end
+
+"""
+Container returned by `read_gsd_frame!`.
+
+Behaves like the legacy tuple `(step, rx, ry, rz, vx, vy, vz, typeid, types, box, force)`
+when destructured/iterated, while exposing richer metadata via fields:
+
+- `step`, `N`, `D`, `box`: configuration metadata.
+- `rx`, `ry`, `rz`, `vx`, `vy`, `vz`: particle state vectors (host arrays).
+- `typeid`, `types`: 1-based ids and type names.
+- `forceM`: optional force matrix (N×3, same precision as positions).
+- `particle_properties`: dictionary with optional particle properties
+  (mass, charge, diameter, body, orientation, etc) converted to sensible
+  Julia arrays; custom `particles/property/*` chunks appear under the
+  `:property` key.
+- `per_type_properties`: dictionary for `particles/type_*` chunks
+  (e.g. `:shapes` for per-type shape JSON blobs).
+- `topology`: a `GSDTopology` with bonds/angles/… converted to 1-based indices.
+- `configuration`: hierarchical `NamedTuple` combining metadata, particle data,
+  topology and any extra configuration chunks for convenience.
+"""
+struct GSDFrameData{T<:AbstractFloat}
+    step::Int
+    N::Int
+    D::Int
+    rx::Vector{T}
+    ry::Vector{T}
+    rz::Union{Nothing,Vector{T}}
+    vx::Vector{T}
+    vy::Vector{T}
+    vz::Union{Nothing,Vector{T}}
+    typeid::Vector{Int32}
+    types::Vector{String}
+    box::Union{Tuple{T,T},Tuple{T,T,T}}
+    forceM::Union{Nothing,Matrix{T}}
+    particle_properties::Dict{Symbol,Any}
+    per_type_properties::Dict{Symbol,Any}
+    topology::GSDTopology
+    configuration::NamedTuple
+end
+
+# -- Legacy tuple compatibility ------------------------------------------------
+Base.length(::GSDFrameData) = 11
+Base.eltype(::Type{GSDFrameData}) = Any
+
+function Base.iterate(f::GSDFrameData{T}) where {T}
+    return (f.step, 2)
+end
+
+function Base.iterate(f::GSDFrameData{T}, state::Int) where {T}
+    if state == 2
+        return (f.rx, 3)
+    elseif state == 3
+        return (f.ry, 4)
+    elseif state == 4
+        return (f.rz, 5)
+    elseif state == 5
+        return (f.vx, 6)
+    elseif state == 6
+        return (f.vy, 7)
+    elseif state == 7
+        return (f.vz, 8)
+    elseif state == 8
+        return (f.typeid, 9)
+    elseif state == 9
+        return (f.types, 10)
+    elseif state == 10
+        return (f.box, 11)
+    elseif state == 11
+        return (f.forceM, 12)
+    else
+        return nothing
+    end
+end
+
+Base.Tuple(f::GSDFrameData) = (f.step, f.rx, f.ry, f.rz, f.vx, f.vy, f.vz,
+                               f.typeid, f.types, f.box, f.forceM)
 
 # =======================================================================
 # Simple in-memory logger (kept for API completeness)
@@ -412,152 +509,455 @@ function write_gsd_frame!(h, st; diameter=1.0, types_names=["A"], step::Int=0, w
 end
 
 """
-Read a valid frame from a GSD file and return SoA arrays.
+Read a valid frame from a GSD file and return a `GSDFrameData`.
 
-Returns:
-    step::Int,
-    rx::Vector{T}, ry::Vector{T}, rz::Union{Nothing,Vector{T}},
-    vx::Vector{T}, vy::Vector{T}, vz::Union{Nothing,Vector{T}},
-    typeid_1based::Vector{Int32},
-    types_names::Vector{String},
-    box::Union{Tuple{T,T},Tuple{T,T,T}},
-    forceM::Union{Nothing,Matrix{T}}   # N×3 when present
+The returned object can still be destructured into the legacy tuple
+`step, rx, ry, rz, vx, vy, vz, typeid, types, box, force` for backwards
+compatibility, while also exposing rich metadata (`frame.topology`,
+`frame.particle_properties`, `frame.configuration`, …) that can be fed
+directly into NonEqSimGPU initialisation routines.
+
+Arguments:
+- `file_path`: path to the GSD file.
+- `step`: optional timestep or frame index to target. When `nothing`, the
+  most recent complete frame is returned. When provided, the routine first
+  searches for a frame whose `configuration/step` matches and, if none exist,
+  treats the value as a 1-based frame index.
+
+Throws:
+- `ArgumentError` if mandatory chunks are missing or no readable frame exists.
 """
 function read_gsd_frame!(file_path::AbstractString; step::Union{Nothing,Integer}=nothing)
     r = GSDFiles.open_read(file_path)
     try
-        # Determine the last frame index directly from the raw index table
         if isempty(r.index)
             error("No frames in GSD: $file_path")
         end
-        last_idx = Int(maximum(e -> e.frame, r.index)) + 1
 
-        # Now attempt to parse from last_idx backwards in case the tail is partial
+        TYPE_MAP = Dict{UInt8,DataType}(
+            GSDFiles._R_UINT8   => UInt8,
+            UInt8(2)            => UInt16,
+            GSDFiles._R_UINT32  => UInt32,
+            GSDFiles._R_UINT64  => UInt64,
+            GSDFiles._R_INT8    => Int8,
+            UInt8(6)            => Int16,
+            UInt8(7)            => Int32,
+            UInt8(8)            => Int64,
+            GSDFiles._R_FLOAT32 => Float32,
+            UInt8(10)           => Float64,
+            UInt8(11)           => UInt8,
+        )
+
+        function read_chunk(entry::GSDFiles.IndexEntry)
+            dtype = entry.type
+            Traw = get(TYPE_MAP, dtype) do
+                name = r.names[Int(entry.id)+1]
+                error("Unsupported dtype code $(dtype) for chunk $name in $file_path")
+            end
+            seek(r.io, entry.location)
+            N = Int(entry.N)
+            M = Int(entry.M)
+            total = max(1, M) * N
+            data = read!(r.io, Array{Traw}(undef, total))
+            return M <= 1 ? data : reshape(data, (M, N))'
+        end
+
+        _convert(::Type{Tc}, arr::AbstractVector) where {Tc} = Tc.(arr)
+        _convert(::Type{Tc}, arr::AbstractMatrix) where {Tc} = Tc.(arr)
+
+        function as_scalar(x)
+            if x isa AbstractVector && length(x) == 1
+                return x[1]
+            elseif x isa AbstractMatrix && size(x,1) == 1 && size(x,2) == 1
+                return x[1,1]
+            else
+                return x
+            end
+        end
+
+        function convert_topology(raw, ::Val{C}) where {C}
+            group0 = raw.group
+            group1 = Array{Int32}(undef, size(group0))
+            if size(group0, 1) == 0
+                fill!(group1, Int32(0))
+            else
+                @inbounds for i in 1:size(group0,1), j in 1:C
+                    group1[i,j] = Int32(group0[i,j]) + Int32(1)
+                end
+            end
+            typeid0 = raw.typeid
+            typeid = Vector{Int32}(undef, length(typeid0))
+            @inbounds for i in eachindex(typeid0)
+                typeid[i] = Int32(typeid0[i]) + Int32(1)
+            end
+            tuples = NTuple{C,Int32}[]
+            if size(group1, 1) > 0
+                sizehint!(tuples, size(group1, 1))
+                @inbounds for i in 1:size(group1,1)
+                    push!(tuples, ntuple(j -> group1[i,j], C))
+                end
+            end
+            return (;
+                N      = raw.N,
+                types  = copy(raw.types),
+                typeid0 = copy(typeid0),
+                typeid = typeid,
+                group0 = copy(group0),
+                group  = group1,
+                tuples = tuples,
+            )
+        end
+
+        function decode_string_blob(bytes::Vector{UInt8})
+            out = String[]
+            buf = IOBuffer()
+            for b in bytes
+                if b == 0x00
+                    push!(out, String(take!(buf)))
+                else
+                    write(buf, b)
+                end
+            end
+            while !isempty(out) && out[end] == ""
+                pop!(out)
+            end
+            return out
+        end
+
+        last_idx = Int(maximum(e -> e.frame, r.index)) + 1
         last_error = nothing
         candidates = Int[]
         if step === nothing
             candidates = collect(last_idx:-1:1)
         else
-            # try to find frame with matching configuration/step
             for i in 1:last_idx
-                fid_i = UInt64(i-1)
+                fid_i = UInt64(i - 1)
                 ents_i = GSDFiles._entries_for_frame(r, fid_i)
                 stp_e = GSDFiles._maybe_one(r, ents_i, "configuration/step")
                 if stp_e !== nothing
                     stp_val = Int(GSDFiles._read_scalar(r.io, stp_e, UInt64))
-                    if stp_val == step
-                        push!(candidates, i)
-                    end
+                    stp_val == step && push!(candidates, i)
                 end
             end
-            # If not found, treat step as frame index when valid
             if isempty(candidates) && 1 <= step <= last_idx
                 push!(candidates, Int(step))
             end
         end
+        isempty(candidates) && error("Requested step=$(step) not found in $file_path")
+
         for idx in candidates
             try
-                # Gather entries for this frame directly from the index
                 fid = UInt64(idx - 1)
                 ents = GSDFiles._entries_for_frame(r, fid)
 
-                # Helper: find latest entry for a given name up to this frame
-                function _latest_entry(name::AbstractString)
+                function latest(name::AbstractString)
                     id = GSDFiles._name_id(r, name)
                     id === nothing && return nothing
-                    candidates = filter(e -> (e.id == id && e.frame <= fid), r.index)
-                    isempty(candidates) && return nothing
-                    # pick by maximum frame id
-                    best = candidates[argmax(getfield.(candidates, :frame))]
-                    return best
+                    matches = filter(e -> (e.id == id && e.frame <= fid), r.index)
+                    isempty(matches) && return nothing
+                    return matches[argmax(getfield.(matches, :frame))]
                 end
 
-                # configuration/*
-                step_e = _latest_entry("configuration/step")
-                dim_e  = _latest_entry("configuration/dimensions")
-                box_e  = _latest_entry("configuration/box")
+                step_e = latest("configuration/step")
+                dim_e  = latest("configuration/dimensions")
+                box_e  = latest("configuration/box")
                 if step_e === nothing || dim_e === nothing || box_e === nothing
                     throw(ArgumentError("configuration chunks missing"))
                 end
-                step = Int(GSDFiles._read_scalar(r.io, step_e, UInt64))
-                D    = Int(GSDFiles._read_scalar(r.io, dim_e, UInt8))
-                box6 = GSDFiles._read_vec(r.io, box_e, Float32)
+                frame_step = Int(GSDFiles._read_scalar(r.io, step_e, UInt64))
+                D = Int(GSDFiles._read_scalar(r.io, dim_e, UInt8))
+                D == 2 || D == 3 || throw(ArgumentError("Unsupported configuration/dimensions=$D"))
+                box6_raw = GSDFiles._read_vec(r.io, box_e, Float32)
 
-                # particles/N
-                N_e = _latest_entry("particles/N")
+                N_e = latest("particles/N")
                 N_e === nothing && throw(ArgumentError("particles/N missing"))
                 N = Int(GSDFiles._read_scalar(r.io, N_e, UInt32))
 
-                # particles/position (required)
                 pos_e = begin
-                    x = GSDFiles._maybe_one_of(r, ents, ["particles/position", "particles/positions"])
-                    x === nothing ? _latest_entry("particles/position") : x
+                    cand = GSDFiles._maybe_one_of(r, ents, ["particles/position", "particles/positions"])
+                    cand === nothing ? latest("particles/position") : cand
                 end
                 pos_e === nothing && throw(ArgumentError("particles/position missing"))
-                posM = GSDFiles._read_mat_f32(r.io, pos_e)
-                T = eltype(posM)
-                rx = T.(posM[:,1]); ry = T.(posM[:,2])
-                rz = D == 3 ? T.(posM[:,3]) : nothing
+                pos_raw = read_chunk(pos_e)
+                pos_raw isa AbstractMatrix || throw(ArgumentError("particles/position expected matrix data"))
+                el = eltype(pos_raw)
+                el <: AbstractFloat || throw(ArgumentError("particles/position must be floating-point"))
+                T = el
+                posM = Matrix{T}(pos_raw)
 
-                # particles/velocity (optional)
+                rx = posM[:,1]
+                ry = posM[:,2]
+                rz = D == 3 ? posM[:,3] : nothing
+
                 vel_e = GSDFiles._maybe_one_of(r, ents, ["particles/velocity", "particles/velocities"])
-                local vx, vy, vz
+                local vx::Vector{T}; local vy::Vector{T}; local vz
                 if vel_e === nothing
-                    vx = fill(zero(T), N); vy = fill(zero(T), N)
+                    vx = fill(zero(T), N)
+                    vy = fill(zero(T), N)
                     vz = D == 3 ? fill(zero(T), N) : nothing
                     @warn "Velocities missing in GSD frame; using zeros" file=file_path frame_index=idx
                 else
-                    velM = GSDFiles._read_mat_f32(r.io, vel_e)
-                    vx = T.(velM[:,1]); vy = T.(velM[:,2])
-                    vz = D == 3 ? T.(velM[:,3]) : nothing
+                    vel_raw = read_chunk(vel_e)
+                    vel_raw isa AbstractMatrix || throw(ArgumentError("particles/velocity expected matrix data"))
+                    velM = Matrix{T}(vel_raw)
+                    vx = velM[:,1]
+                    vy = velM[:,2]
+                    vz = D == 3 ? velM[:,3] : nothing
                 end
 
-                # particles/types + typeid (optional)
-                types_e = _latest_entry("particles/types")
-                local types::Vector{String}
+                types_e = latest("particles/types")
                 types = types_e === nothing ? String[] : GSDFiles._decode_types(r.io, types_e)
                 tid_e = begin
-                    x = GSDFiles._maybe_one_of(r, ents, ["particles/typeid", "particles/typeids"])  # per-frame if available
-                    x === nothing ? _latest_entry("particles/typeid") : x
+                    cand = GSDFiles._maybe_one_of(r, ents, ["particles/typeid", "particles/typeids"])
+                    cand === nothing ? latest("particles/typeid") : cand
                 end
                 local typeid1::Vector{Int32}
                 if tid_e === nothing
                     typeid1 = fill(Int32(1), N)
-                    isempty(types) && (types = ["A"])  # default single type
+                    isempty(types) && (types = ["A"])
                 else
                     tid0 = GSDFiles._read_vec(r.io, tid_e, UInt32)
-                    typeid1 = Int32.(tid0 .+ 1)
-                    isempty(types) && (types = ["A"])  # ensure at least one name
+                    length(tid0) == N || @warn "particles/typeid length $(length(tid0)) != N=$N" file=file_path frame_index=idx
+                    typeid1 = Int32.(tid0 .+ UInt32(1))
+                    isempty(types) && (types = ["A"])
                 end
 
-                # box tuple
-                box  = D == 2 ? (T(box6[1]), T(box6[2])) :
-                                (T(box6[1]), T(box6[2]), T(box6[3]))
-
-                # Build force matrix if present
-                if frc_e === nothing
-                    local_forceM = nothing
-                else
-                    fM = GSDFiles._read_mat_f32(r.io, frc_e)
-                    local_forceM = T.(fM)
+                frc_e = GSDFiles._maybe_one_of(r, ents, [
+                    "particles/force",
+                    "particles/forces",
+                    "particles/net_force",
+                    "particles/property/force",
+                ])
+                local_forceM = nothing
+                property_skip = Set{String}()
+                if frc_e !== nothing
+                    force_raw = read_chunk(frc_e)
+                    name_frc = r.names[Int(frc_e.id)+1]
+                    if force_raw isa AbstractMatrix
+                        local_forceM = Matrix{T}(force_raw)
+                    elseif force_raw isa AbstractVector
+                        if length(force_raw) == 3N
+                            reshaped = reshape(force_raw, (3, N))'
+                            local_forceM = Matrix{T}(reshaped)
+                        else
+                            @warn "Unexpected force chunk shape; skipping forceM" file=file_path frame_index=idx chunk=name_frc
+                        end
+                    else
+                        @warn "Unsupported force chunk type; skipping forceM" file=file_path frame_index=idx chunk=name_frc
+                    end
+                    startswith(name_frc, "particles/property/") && push!(property_skip, name_frc)
                 end
 
-                # Warn if we had to fall back from the last probed frame
-                if idx != last_idx
+                particle_props = Dict{Symbol,Any}()
+
+                function maybe_read_vec!(dict::Dict{Symbol,Any}, key::Symbol, names::Vector{String}, ::Type{Tc}) where {Tc}
+                    entry = GSDFiles._maybe_one_of(r, ents, names)
+                    entry === nothing && return nothing
+                    raw = read_chunk(entry)
+                    raw isa AbstractVector || throw(ArgumentError("Chunk $(r.names[Int(entry.id)+1]) expected to be a vector"))
+                    dict[key] = _convert(Tc, raw)
+                    return dict[key]
+                end
+
+                function maybe_read_mat!(dict::Dict{Symbol,Any}, key::Symbol, names::Vector{String}, ::Type{Tc}) where {Tc}
+                    entry = GSDFiles._maybe_one_of(r, ents, names)
+                    entry === nothing && return nothing
+                    raw = read_chunk(entry)
+                    raw isa AbstractMatrix || throw(ArgumentError("Chunk $(r.names[Int(entry.id)+1]) expected to be a matrix"))
+                    dict[key] = _convert(Tc, raw)
+                    return dict[key]
+                end
+
+                maybe_read_vec!(particle_props, :diameter, ["particles/diameter"], T)
+                maybe_read_vec!(particle_props, :mass, ["particles/mass"], T)
+                maybe_read_vec!(particle_props, :charge, ["particles/charge"], T)
+                maybe_read_vec!(particle_props, :body, ["particles/body"], Int32)
+                maybe_read_mat!(particle_props, :image, ["particles/image"], Int32)
+                maybe_read_mat!(particle_props, :orientation, ["particles/orientation"], T)
+                maybe_read_mat!(particle_props, :angmom, ["particles/angmom"], T)
+                maybe_read_mat!(particle_props, :moment_inertia, ["particles/moment_inertia"], T)
+                maybe_read_mat!(particle_props, :acceleration, ["particles/acceleration"], T)
+                maybe_read_mat!(particle_props, :momentum, ["particles/momentum"], T)
+                maybe_read_mat!(particle_props, :torque, ["particles/torque"], T)
+
+                if local_forceM !== nothing
+                    particle_props[:force] = local_forceM
+                end
+
+                property_data = Dict{Symbol,Any}()
+                for entry in ents
+                    name = r.names[Int(entry.id)+1]
+                    startswith(name, "particles/property/") || continue
+                    name in property_skip && continue
+                    suffix = name[length("particles/property/")+1:end]
+                    isempty(suffix) && continue
+                    sym = Symbol(replace(suffix, "/" => "_"))
+                    raw = read_chunk(entry)
+                    property_data[sym] = as_scalar(raw)
+                end
+                if !isempty(property_data)
+                    particle_props[:property] = property_data
+                end
+
+                per_type = Dict{Symbol,Any}()
+                type_shapes_e = GSDFiles._maybe_one(r, ents, "particles/type_shapes")
+                if type_shapes_e !== nothing
+                    raw = read_chunk(type_shapes_e)
+                    if raw isa Vector{UInt8}
+                        per_type[:shapes] = decode_string_blob(raw)
+                    else
+                        per_type[:shapes] = raw
+                    end
+                end
+                for entry in ents
+                    name = r.names[Int(entry.id)+1]
+                    startswith(name, "particles/type_") || continue
+                    name in ("particles/types", "particles/type_shapes") && continue
+                    suffix = name[length("particles/type_")+1:end]
+                    sym = Symbol(replace(suffix, "/" => "_"))
+                    raw = read_chunk(entry)
+                    per_type[sym] = as_scalar(raw)
+                end
+
+                config_extras = Dict{Symbol,Any}()
+                for entry in ents
+                    name = r.names[Int(entry.id)+1]
+                    startswith(name, "configuration/") || continue
+                    name in ("configuration/step", "configuration/dimensions", "configuration/box") && continue
+                    suffix = name[length("configuration/")+1:end]
+                    sym = Symbol(replace(suffix, "/" => "_"))
+                    raw = read_chunk(entry)
+                    config_extras[sym] = as_scalar(raw)
+                end
+
+                bonds_section     = convert_topology(GSDFiles.read_bonds(r, idx), Val(2))
+                angles_section    = convert_topology(GSDFiles.read_angles(r, idx), Val(3))
+                dihedrals_section = convert_topology(GSDFiles.read_dihedrals(r, idx), Val(4))
+                impropers_section = convert_topology(GSDFiles.read_impropers(r, idx), Val(4))
+
+                function read_constraints_section(::Type{T}) where {T}
+                    types_e = GSDFiles._maybe_one(r, ents, "constraints/types")
+                    types = types_e === nothing ? String[] : GSDFiles._decode_types(r.io, types_e)
+                    N_e = GSDFiles._maybe_one(r, ents, "constraints/N")
+                    grp_e = GSDFiles._maybe_one_of(r, ents, ["constraints/group", "constraints/constraint"])
+                    tid_e = GSDFiles._maybe_one_of(r, ents, ["constraints/typeid", "constraints/typeids"])
+                    val_e = GSDFiles._maybe_one(r, ents, "constraints/value")
+                    if N_e === nothing || grp_e === nothing
+                        group0 = reshape(UInt32[], 0, 2)
+                        group1 = reshape(Int32[], 0, 2)
+                        typeid0 = tid_e === nothing ? UInt32[] : GSDFiles._read_vec(r.io, tid_e, UInt32)
+                        typeid = Int32.(typeid0 .+ UInt32(1))
+                        return (;
+                            N = 0,
+                            types = types,
+                            typeid0 = typeid0,
+                            typeid = typeid,
+                            group0 = group0,
+                            group = group1,
+                            value = nothing,
+                        )
+                    end
+                    Nval = Int(GSDFiles._read_scalar(r.io, N_e, UInt32))
+                    group0 = GSDFiles._read_mat_u32(r.io, grp_e)
+                    cols = size(group0, 2)
+                    group1 = Array{Int32}(undef, size(group0))
+                    if size(group0,1) == 0
+                        fill!(group1, Int32(0))
+                    else
+                        @inbounds for i in 1:size(group0,1), j in 1:cols
+                            group1[i,j] = Int32(group0[i,j]) + Int32(1)
+                        end
+                    end
+                    typeid0 = tid_e === nothing ? fill(UInt32(0), Nval) : GSDFiles._read_vec(r.io, tid_e, UInt32)
+                    typeid = Int32.(typeid0 .+ UInt32(1))
+                    values = nothing
+                    if val_e !== nothing
+                        raw_val = read_chunk(val_e)
+                        if raw_val isa AbstractVector
+                            values = T.(raw_val)
+                        elseif raw_val isa AbstractMatrix
+                            values = T.(vec(raw_val))
+                        elseif raw_val isa Number
+                            values = T[T(raw_val)]
+                        end
+                    end
+                    return (;
+                        N = Nval,
+                        types = types,
+                        typeid0 = typeid0,
+                        typeid = typeid,
+                        group0 = group0,
+                        group = group1,
+                        value = values,
+                    )
+                end
+
+                function read_pairs_section()
+                    types_e = GSDFiles._maybe_one(r, ents, "pairs/types")
+                    types = types_e === nothing ? String[] : GSDFiles._decode_types(r.io, types_e)
+                    N_e = GSDFiles._maybe_one(r, ents, "pairs/N")
+                    grp_e = GSDFiles._maybe_one_of(r, ents, ["pairs/pair", "pairs/group"])
+                    tid_e = GSDFiles._maybe_one_of(r, ents, ["pairs/typeid", "pairs/typeids"])
+                    if N_e === nothing || grp_e === nothing
+                        raw = (N = 0, types = types, typeid = UInt32[], group = reshape(UInt32[], 0, 2))
+                        return convert_topology(raw, Val(2))
+                    end
+                    Nval = Int(GSDFiles._read_scalar(r.io, N_e, UInt32))
+                    group0 = GSDFiles._read_mat_u32(r.io, grp_e)
+                    typeid0 = tid_e === nothing ? fill(UInt32(0), Nval) : GSDFiles._read_vec(r.io, tid_e, UInt32)
+                    raw = (N = Nval, types = types, typeid = typeid0, group = group0)
+                    return convert_topology(raw, Val(2))
+                end
+
+                constraints_section = read_constraints_section(T)
+                pairs_section = read_pairs_section()
+                topology_obj = GSDTopology(bonds_section, angles_section, dihedrals_section,
+                                           impropers_section, constraints_section, pairs_section)
+
+                box_tuple = D == 2 ? (T(box6_raw[1]), T(box6_raw[2])) :
+                                     (T(box6_raw[1]), T(box6_raw[2]), T(box6_raw[3]))
+                box6_tuple = ntuple(i -> T(box6_raw[i]), 6)
+                metadata = (;
+                    step = frame_step,
+                    N = N,
+                    dimension = D,
+                    box = box_tuple,
+                    box6 = box6_tuple,
+                    extras = config_extras,
+                )
+                particles_nt = (;
+                    rx = rx,
+                    ry = ry,
+                    rz = rz,
+                    vx = vx,
+                    vy = vy,
+                    vz = vz,
+                    typeid = typeid1,
+                    types = types,
+                    force = local_forceM,
+                    properties = particle_props,
+                    per_type = per_type,
+                )
+                configuration = (;
+                    metadata = metadata,
+                    particles = particles_nt,
+                    topology = topology_obj,
+                )
+
+                if idx != last_idx && step === nothing
                     @warn "Last frame appears incomplete; using previous valid frame" file=file_path chosen_frame=idx last_probe=last_idx
                 end
-                return step, rx, ry, rz, vx, vy, vz, typeid1, types, box, local_forceM
+
+                return GSDFrameData(frame_step, N, D, rx, ry, rz, vx, vy, vz, typeid1,
+                                    types, box_tuple, local_forceM,
+                                    particle_props, per_type, topology_obj, configuration)
             catch err
                 last_error = err
-                # try previous frame
             end
         end
-        # If we reach here, none of the frames could be read fully
-        if last_error !== nothing
-            throw(last_error)
-        else
-            error("Failed to read any valid frame from $file_path")
-        end
+
+        last_error !== nothing && throw(last_error)
+        error("Failed to read any valid frame from $file_path")
     finally
         GSDFiles.close(r)
     end

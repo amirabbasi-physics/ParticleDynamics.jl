@@ -24,7 +24,7 @@ using .Definitions: LJParams, SoftRepulsiveParams,
     harmonic_bond, fene_bond
 
 using .Simulation: SimulationState, build_simulation, step!, step_graph!, zero_forces!
-using .Simulation: IntegratorSpec, VVSpec, BAOABSpec, BrownianSpec, vv, baoab, brownian
+using .Simulation: IntegratorSpec, VVSpec, BAOABSpec, BrownianSpec, velocityverlet, baoab, eulerheun, eulermaruyama
 using .Writers: InMemoryLogger, CSVWriter, XYZWriter,
     write_xyz!, write_observables_csv!, gsd_open, gsd_close, write_gsd_frame!, read_gsd_frame!
 using .BondedForces: BondList, build_bondlist
@@ -38,7 +38,7 @@ export Filters, BondedForces,
        StokesFrictionCoefficient, SphereMass, InertialTime, DiffusiveTime,
        # Simulation helpers
        SimulationState, build_simulation, step!, step_graph!, zero_forces!,
-       IntegratorSpec, VVSpec, BAOABSpec, BrownianSpec, EMSpec, vv, baoab, brownian, em,
+       IntegratorSpec, VVSpec, BAOABSpec, BrownianSpec, EMSpec, velocityverlet, baoab, eulerheun, eulermaruyama,
        # Writers
        InMemoryLogger, CSVWriter, XYZWriter,
        write_xyz!, write_observables_csv!, gsd_open, gsd_close, write_gsd_frame!, read_last_gsd,
