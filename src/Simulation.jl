@@ -1564,20 +1564,7 @@ function step!(st::SimulationState{T}, bp::BrownianIntegrators.BrownianParams{T}
             end
         end
         if st.bonds !== nothing
-            if st.harmonic_params !== nothing
-                if compute_energy
-                    BondedForces.harmonic_forces_soa!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.bonds, st.box3::Definitions.Box3, st.harmonic_params)
-                else
-                    BondedForces.harmonic_forces_soa_noE!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.bonds, st.box3::Definitions.Box3, st.harmonic_params)
-                end
-            end
-            if st.fene_params !== nothing
-                if compute_energy
-                    BondedForces.fene_forces_soa!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.bonds, st.box3::Definitions.Box3, st.fene_params)
-                else
-                    BondedForces.fene_forces_soa_noE!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.bonds, st.box3::Definitions.Box3, st.fene_params)
-                end
-            end
+            _apply_bonds3!(st, st.fx, st.fy, st.fz, compute_energy ? st.Epot : nothing, compute_energy)
         end
     end
 
