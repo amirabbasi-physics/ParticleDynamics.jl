@@ -1596,28 +1596,60 @@ function step!(st::SimulationState{T}, em::BrownianIntegrators.EMParams{T}, dt::
         if D == 2
             if st.nb_kind == NB_KIND_LJ
                 if st.sigma_particle === nothing
-                    NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+                    if st.bonds === nothing
+                        NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+                    else
+                        NonBondedForces.lj_forces_soa_excl!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.nbh, st.bonds, st.box2::Definitions.Box2, st.pair_lj)
+                    end
                 else
                     NonBondedForces.lj_forces_soa_mixed!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.nbh, st.box2::Definitions.Box2, st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
                 end
             elseif st.nb_kind == NB_KIND_WCA
-                NonBondedForces.wca_forces_soa!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+                if st.bonds === nothing
+                    NonBondedForces.wca_forces_soa!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+                else
+                    NonBondedForces.wca_forces_soa_excl!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.nbh, st.bonds, st.box2::Definitions.Box2, st.pair_lj)
+                end
             else
                 @assert st.softrep !== nothing
-                NonBondedForces.harmonic_rep_forces_soa!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.nbh, st.box2::Definitions.Box2, st.softrep)
+                if st.bonds === nothing
+                    NonBondedForces.harmonic_rep_forces_soa!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.nbh, st.box2::Definitions.Box2, st.softrep)
+                else
+                    NonBondedForces.harmonic_rep_forces_soa_excl!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.nbh, st.bonds, st.box2::Definitions.Box2, st.softrep)
+                end
             end
         else
             if st.nb_kind == NB_KIND_LJ
                 if st.sigma_particle === nothing
-                    NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+                    if st.bonds === nothing
+                        NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+                    else
+                        NonBondedForces.lj_forces_soa_excl!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.nbh, st.bonds, st.box3::Definitions.Box3, st.pair_lj)
+                    end
                 else
                     NonBondedForces.lj_forces_soa_mixed!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.nbh, st.box3::Definitions.Box3, st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
                 end
             elseif st.nb_kind == NB_KIND_WCA
-                NonBondedForces.wca_forces_soa!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+                if st.bonds === nothing
+                    NonBondedForces.wca_forces_soa!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+                else
+                    NonBondedForces.wca_forces_soa_excl!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.nbh, st.bonds, st.box3::Definitions.Box3, st.pair_lj)
+                end
             else
                 @assert st.softrep !== nothing
-                NonBondedForces.harmonic_rep_forces_soa!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.nbh, st.box3::Definitions.Box3, st.softrep)
+                if st.bonds === nothing
+                    NonBondedForces.harmonic_rep_forces_soa!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.nbh, st.box3::Definitions.Box3, st.softrep)
+                else
+                    NonBondedForces.harmonic_rep_forces_soa_excl!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.nbh, st.bonds, st.box3::Definitions.Box3, st.softrep)
+                end
+            end
+        end
+        # Include bonded interactions in the initial forces
+        if st.bonds !== nothing
+            if D == 2
+                _apply_bonds2!(st, st.fx, st.fy, compute_energy ? st.Epot : nothing, compute_energy)
+            else
+                _apply_bonds3!(st, st.fx, st.fy, st.fz, compute_energy ? st.Epot : nothing, compute_energy)
             end
         end
     end
@@ -1639,6 +1671,10 @@ function step!(st::SimulationState{T}, em::BrownianIntegrators.EMParams{T}, dt::
                 @assert st.softrep !== nothing
                 NonBondedForces.harmonic_rep_forces_soa!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.nbh, st.box2::Definitions.Box2, st.softrep)
             end
+            # add bonded interactions to forces at t+Δt
+            if st.bonds !== nothing
+                _apply_bonds2!(st, st.fx, st.fy, st.Epot, true)
+            end
         else
             if st.nb_kind == NB_KIND_LJ
                 if st.sigma_particle === nothing
@@ -1651,6 +1687,9 @@ function step!(st::SimulationState{T}, em::BrownianIntegrators.EMParams{T}, dt::
             else
                 @assert st.softrep !== nothing
                 NonBondedForces.harmonic_rep_forces_soa_noE!(st.rx, st.ry, st.fx, st.fy, st.nbh, st.box2::Definitions.Box2, st.softrep)
+            end
+            if st.bonds !== nothing
+                _apply_bonds2!(st, st.fx, st.fy, nothing, false)
             end
         end
     else
@@ -1668,6 +1707,9 @@ function step!(st::SimulationState{T}, em::BrownianIntegrators.EMParams{T}, dt::
                 @assert st.softrep !== nothing
                 NonBondedForces.harmonic_rep_forces_soa!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.nbh, st.box3::Definitions.Box3, st.softrep)
             end
+            if st.bonds !== nothing
+                _apply_bonds3!(st, st.fx, st.fy, st.fz, st.Epot, true)
+            end
         else
             if st.nb_kind == NB_KIND_LJ
                 if st.sigma_particle === nothing
@@ -1680,6 +1722,9 @@ function step!(st::SimulationState{T}, em::BrownianIntegrators.EMParams{T}, dt::
             else
                 @assert st.softrep !== nothing
                 NonBondedForces.harmonic_rep_forces_soa_noE!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.nbh, st.box3::Definitions.Box3, st.softrep)
+            end
+            if st.bonds !== nothing
+                _apply_bonds3!(st, st.fx, st.fy, st.fz, nothing, false)
             end
         end
     end
