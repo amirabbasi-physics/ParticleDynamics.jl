@@ -72,8 +72,8 @@ mutable struct NeighborMatrix{T<:AbstractFloat} <: AbstractNeighborMatrix
     rref_y::CuArray{T,1}
     rref_z::Union{CuArray{T,1},Nothing}
     dr2::CuArray{T,1}
-    last_build_step::Int32
-    target_interval::Int32
+    last_build_step::Int
+    target_interval::Int
 end
 
 mutable struct StencilNeighborMatrix{T<:AbstractFloat} <: AbstractNeighborMatrix
@@ -105,8 +105,8 @@ mutable struct StencilNeighborMatrix{T<:AbstractFloat} <: AbstractNeighborMatrix
     rref_y::CuArray{T,1}
     rref_z::Union{CuArray{T,1},Nothing}
     dr2::CuArray{T,1}
-    last_build_step::Int32
-    target_interval::Int32
+    last_build_step::Int
+    target_interval::Int
 end
 
 # ============================================================================
