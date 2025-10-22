@@ -306,6 +306,32 @@ end
 
 
 """
+gsd_open(f::Function, path; kwargs...)
+
+Convenience do-block form that guarantees the GSD handle is closed,
+even if an exception occurs during writing. Example:
+
+    Writers.gsd_open("traj.gsd") do h
+        for step in 1:ns
+            Writers.write_gsd_frame!(h, st; step)
+        end
+    end
+"""
+function gsd_open(f::Function, path::AbstractString; application="NonEqSimGPU", schema="hoomd", schema_version=(1,4))
+    h = gsd_open(path; application, schema, schema_version)
+    try
+        return f(h)
+    finally
+        try
+            gsd_close(h)
+        catch err
+            @warn "Failed to close GSD handle" error=err
+        end
+    end
+end
+
+
+"""
 Close a previously opened GSD handle.
 """
 gsd_close(h) = GSDFiles.close_gsd(h)
@@ -403,7 +429,7 @@ Usage (2D):
 
 Usage (3D) is identical; z-components are written when present.
 """
-function write_gsd_frame!(h, st; diameter=1.0, types_names=["A"], step::Int=0, write_forces::Bool=false)
+function write_gsd_frame!(h, st; diameter=1.0, types_names=["A"], step::Int=0, write_forces::Bool=false, sync_on_write::Bool=false)
     # Element type used for numeric conversions
     T = eltype(st.rx)
     N = length(st.rx)
@@ -505,6 +531,18 @@ function write_gsd_frame!(h, st; diameter=1.0, types_names=["A"], step::Int=0, w
         end
     end
     GSDFiles.end_frame!(h)
+    if sync_on_write
+        # Make file readable by OVITO mid-run by writing an index and updating header
+        if isdefined(GSDFiles, :sync!)
+            try
+                GSDFiles.sync!(h)
+            catch err
+                @warn "GSD sync failed; file may be unreadable mid-run" error=err
+            end
+        else
+            @warn "GSDFiles.sync! not available; file may be unreadable mid-run"
+        end
+    end
     return h
 end
 
