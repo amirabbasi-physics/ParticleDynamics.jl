@@ -17,7 +17,7 @@ const NB_KIND_WCA     = UInt8(2)
 const NB_KIND_SOFTREP = UInt8(3)
 
 export SimulationState, build_simulation, step!, step_graph!, step_fused!, zero_forces!
-export IntegratorSpec, VVSpec, BAOABSpec, BrownianSpec, EMSpec, velocityverlet, baoab, eulerheun, eulermaruyama
+export IntegratorSpec, VVSpec, BAOABSpec, BAOASpec, GSMSpec, BrownianSpec, EMSpec, velocityverlet, baoab, baoa, gsm, eulerheun, eulermaruyama
 
 # =========================
 #   Simulation state (SoA)
@@ -94,6 +94,14 @@ struct BAOABSpec{T<:AbstractFloat} <: IntegratorSpec{T}
     params::LangevinIntegrators.BAOABParams{T}
 end
 
+struct BAOASpec{T<:AbstractFloat} <: IntegratorSpec{T}
+    params::LangevinIntegrators.BAOABParams{T}
+end
+
+struct GSMSpec{T<:AbstractFloat} <: IntegratorSpec{T}
+    params::LangevinIntegrators.BAOABParams{T}
+end
+
 struct BrownianSpec{T<:AbstractFloat} <: IntegratorSpec{T}
     params::BrownianIntegrators.BrownianParams{T}
 end
@@ -104,6 +112,8 @@ end
 
 velocityverlet(st::SimulationState{T}) where {T<:AbstractFloat} = VVSpec{T}(st.vv)
 baoab(st::SimulationState{T}) where {T<:AbstractFloat} = BAOABSpec{T}(LangevinIntegrators.BAOABParams{T}(st.vv.gamma, st.vv.mass, st.vv.noise_scale))
+baoa(st::SimulationState{T}) where {T<:AbstractFloat} = BAOASpec{T}(LangevinIntegrators.BAOABParams{T}(st.vv.gamma, st.vv.mass, st.vv.noise_scale))
+gsm(st::SimulationState{T})  where {T<:AbstractFloat} = GSMSpec{T}(LangevinIntegrators.BAOABParams{T}(st.vv.gamma, st.vv.mass, st.vv.noise_scale))
 eulerheun(st::SimulationState{T}) where {T<:AbstractFloat} = BrownianSpec{T}(BrownianIntegrators.BrownianParams(st))
 eulermaruyama(st::SimulationState{T}) where {T<:AbstractFloat} = EMSpec{T}(BrownianIntegrators.EMParams(st.vv.gamma, st.vv.noise_scale))
 """
@@ -978,6 +988,354 @@ function step!(st::SimulationState{T}, spec::BAOABSpec{T}, dt::Real; compute_ene
     return step!(st, spec.params, dt; compute_energy)
 end
 
+function step!(st::SimulationState{T}, spec::BAOASpec{T}, dt::Real; compute_energy::Bool=true) where {T<:AbstractFloat}
+    # BAOA: B(1) → A(1/2) → O(1) → A(1/2)
+    dtT = T(dt)
+    st.last_integrator = UInt8(1)
+    D = st.rz === nothing ? 2 : 3
+
+    # Neighbor rebuild check
+    do_check = (st.step % st.neigh_interval == 0)
+    if do_check
+        rebuild_needed = if D == 2
+            NeighborLists.update_needed!(st.nbh, st.rx, st.ry;
+                                        skin=st.nbh.skin,
+                                        Lx=st.box2[1], Ly=st.box2[2],
+                                        step=st.step)
+        else
+            NeighborLists.update_needed!(st.nbh, st.rx, st.ry, st.rz;
+                                        skin=st.nbh.skin,
+                                        Lx=st.box3[1], Ly=st.box3[2], Lz=st.box3[3],
+                                        step=st.step)
+        end
+        if rebuild_needed
+            if D == 2
+                NeighborLists.update_neighbors_inplace!(st.nbh, st.rx, st.ry; box = st.box2, step=st.step)
+            else
+                NeighborLists.update_neighbors_inplace!(st.nbh, st.rx, st.ry, st.rz; box = st.box3, step=st.step)
+            end
+        end
+    end
+
+    # Prepare forces at t in f0*
+    if st.step > 1
+        st.f0x, st.fx = st.fx, st.f0x
+        st.f0y, st.fy = st.fy, st.f0y
+        if D == 3; st.f0z, st.fz = st.fz, st.f0z; end
+    else
+        if D == 2
+            if st.nb_kind == NB_KIND_LJ
+                if st.sigma_particle === nothing
+                    if compute_energy
+                        if st.bonds === nothing
+                            NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.f0x, st.f0y, st.Epot,
+                                                           st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+                        else
+                            NonBondedForces.lj_forces_soa_excl!(st.rx, st.ry, st.f0x, st.f0y, st.Epot,
+                                                                st.nbh, st.bonds, st.box2::Definitions.Box2, st.pair_lj)
+                        end
+                    else
+                        if st.bonds === nothing
+                            NonBondedForces.lj_forces_soa_noE!(st.rx, st.ry, st.f0x, st.f0y,
+                                                               st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+                        else
+                            NonBondedForces.lj_forces_soa_noE_excl!(st.rx, st.ry, st.f0x, st.f0y,
+                                                                    st.nbh, st.bonds, st.box2::Definitions.Box2, st.pair_lj)
+                        end
+                    end
+                else
+                    if compute_energy
+                        NonBondedForces.lj_forces_soa_mixed!(st.rx, st.ry, st.f0x, st.f0y, st.Epot,
+                                                              st.nbh, st.box2::Definitions.Box2,
+                                                              st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
+                    else
+                        NonBondedForces.lj_forces_soa_noE_mixed!(st.rx, st.ry, st.f0x, st.f0y,
+                                                                   st.nbh, st.box2::Definitions.Box2,
+                                                                   st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
+                    end
+                end
+            elseif st.nb_kind == NB_KIND_WCA
+                if compute_energy
+                    if st.bonds === nothing
+                        NonBondedForces.wca_forces_soa!(st.rx, st.ry, st.f0x, st.f0y, st.Epot,
+                                                        st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+                    else
+                        NonBondedForces.wca_forces_soa_excl!(st.rx, st.ry, st.f0x, st.f0y, st.Epot,
+                                                             st.nbh, st.bonds, st.box2::Definitions.Box2, st.pair_lj)
+                    end
+                else
+                    if st.bonds === nothing
+                        NonBondedForces.wca_forces_soa_noE!(st.rx, st.ry, st.f0x, st.f0y,
+                                                            st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+                    else
+                        NonBondedForces.wca_forces_soa_noE_excl!(st.rx, st.ry, st.f0x, st.f0y,
+                                                                  st.nbh, st.bonds, st.box2::Definitions.Box2, st.pair_lj)
+                    end
+                end
+            else # NB_KIND_SOFTREP
+                @assert st.softrep !== nothing "softrep params missing"
+                if compute_energy
+                    if st.bonds === nothing
+                        NonBondedForces.harmonic_rep_forces_soa!(st.rx, st.ry, st.f0x, st.f0y, st.Epot,
+                                                                  st.nbh, st.box2::Definitions.Box2, st.softrep)
+                    else
+                        NonBondedForces.harmonic_rep_forces_soa_excl!(st.rx, st.ry, st.f0x, st.f0y, st.Epot,
+                                                                       st.nbh, st.bonds, st.box2::Definitions.Box2, st.softrep)
+                    end
+                else
+                    if st.bonds === nothing
+                        NonBondedForces.harmonic_rep_forces_soa_noE!(st.rx, st.ry, st.f0x, st.f0y,
+                                                                      st.nbh, st.box2::Definitions.Box2, st.softrep)
+                    else
+                        NonBondedForces.harmonic_rep_forces_soa_noE_excl!(st.rx, st.ry, st.f0x, st.f0y,
+                                                                          st.nbh, st.bonds, st.box2::Definitions.Box2, st.softrep)
+                    end
+                end
+            end
+            # bonded contributions at t
+            _apply_bonds2!(st, st.f0x, st.f0y, compute_energy ? st.Epot : nothing, compute_energy)
+        else
+            if st.nb_kind == NB_KIND_LJ
+                if st.sigma_particle === nothing
+                    if compute_energy
+                        if st.bonds === nothing
+                            NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.Epot,
+                                                           st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+                        else
+                            NonBondedForces.lj_forces_soa_excl!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.Epot,
+                                                                st.nbh, st.bonds, st.box3::Definitions.Box3, st.pair_lj)
+                        end
+                    else
+                        if st.bonds === nothing
+                            NonBondedForces.lj_forces_soa_noE!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
+                                                               st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+                        else
+                            NonBondedForces.lj_forces_soa_noE_excl!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
+                                                                    st.nbh, st.bonds, st.box3::Definitions.Box3, st.pair_lj)
+                        end
+                    end
+                else
+                    if compute_energy
+                        NonBondedForces.lj_forces_soa_mixed!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.Epot,
+                                                              st.nbh, st.box3::Definitions.Box3,
+                                                              st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
+                    else
+                        NonBondedForces.lj_forces_soa_noE_mixed!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
+                                                                   st.nbh, st.box3::Definitions.Box3,
+                                                                   st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
+                    end
+                end
+            elseif st.nb_kind == NB_KIND_WCA
+                if compute_energy
+                    if st.bonds === nothing
+                        NonBondedForces.wca_forces_soa!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.Epot,
+                                                        st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+                    else
+                        NonBondedForces.wca_forces_soa_excl!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.Epot,
+                                                             st.nbh, st.bonds, st.box3::Definitions.Box3, st.pair_lj)
+                    end
+                else
+                    if st.bonds === nothing
+                        NonBondedForces.wca_forces_soa_noE!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
+                                                            st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+                    else
+                        NonBondedForces.wca_forces_soa_noE_excl!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
+                                                                  st.nbh, st.bonds, st.box3::Definitions.Box3, st.pair_lj)
+                    end
+                end
+            else
+                @assert st.softrep !== nothing "softrep params missing"
+                if compute_energy
+                    if st.bonds === nothing
+                        NonBondedForces.harmonic_rep_forces_soa!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.Epot,
+                                                                  st.nbh, st.box3::Definitions.Box3, st.softrep)
+                    else
+                        NonBondedForces.harmonic_rep_forces_soa_excl!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.Epot,
+                                                                       st.nbh, st.bonds, st.box3::Definitions.Box3, st.softrep)
+                    end
+                else
+                    if st.bonds === nothing
+                        NonBondedForces.harmonic_rep_forces_soa_noE!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
+                                                                      st.nbh, st.box3::Definitions.Box3, st.softrep)
+                    else
+                        NonBondedForces.harmonic_rep_forces_soa_noE_excl!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
+                                                                          st.nbh, st.bonds, st.box3::Definitions.Box3, st.softrep)
+                    end
+                end
+            end
+            _apply_bonds3!(st, st.f0x, st.f0y, st.f0z, compute_energy ? st.Epot : nothing, compute_energy)
+        end
+    end
+
+    if D == 2
+        # B(1): full kick using f(t)
+        LangevinIntegrators.baoab_B_2d!(st.vx, st.vy, st.f0x, st.f0y, spec.params, T(2)*dtT, st.Ekin)
+        # A(1/2)
+        LangevinIntegrators.baoab_A_2d!(st.rx, st.ry, st.vx, st.vy, dtT, st.box2::Definitions.Box2)
+        # O(1): OU using pre-generated noise (reuse VV noise draw)
+        LangevinIntegrators.vv_prepare_noise!(st.rf_x, st.rf_y, st.vv.noise_scale)
+        LangevinIntegrators.baoab_OU_2d!(st.vx, st.vy, st.rf_x, st.rf_y, spec.params, dtT, st.dq)
+        # A(1/2)
+        LangevinIntegrators.baoab_A_2d!(st.rx, st.ry, st.vx, st.vy, dtT, st.box2::Definitions.Box2)
+
+        # forces at t+dt (2D)
+        if st.nb_kind == NB_KIND_LJ && st.sigma_pair !== nothing
+            if compute_energy
+                NonBondedForces.lj_forces_soa_pairs!(st.rx, st.ry, st.fx, st.fy, st.Epot,
+                                                     st.nbh, st.box2::Definitions.Box2,
+                                                     st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
+            else
+                NonBondedForces.lj_forces_soa_noE_pairs!(st.rx, st.ry, st.fx, st.fy,
+                                                          st.nbh, st.box2::Definitions.Box2,
+                                                          st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
+            end
+        else
+            if st.nb_kind == NB_KIND_LJ
+                if compute_energy
+                    if st.bonds === nothing
+                        NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+                    else
+                        NonBondedForces.lj_forces_soa_excl!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.nbh, st.bonds, st.box2::Definitions.Box2, st.pair_lj)
+                    end
+                else
+                    if st.bonds === nothing
+                        NonBondedForces.lj_forces_soa_noE!(st.rx, st.ry, st.fx, st.fy, st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+                    else
+                        NonBondedForces.lj_forces_soa_noE_excl!(st.rx, st.ry, st.fx, st.fy, st.nbh, st.bonds, st.box2::Definitions.Box2, st.pair_lj)
+                    end
+                end
+            elseif st.nb_kind == NB_KIND_WCA
+                if compute_energy
+                    if st.bonds === nothing
+                        NonBondedForces.wca_forces_soa!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+                    else
+                        NonBondedForces.wca_forces_soa_excl!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.nbh, st.bonds, st.box2::Definitions.Box2, st.pair_lj)
+                    end
+                else
+                    if st.bonds === nothing
+                        NonBondedForces.wca_forces_soa_noE!(st.rx, st.ry, st.fx, st.fy, st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+                    else
+                        NonBondedForces.wca_forces_soa_noE_excl!(st.rx, st.ry, st.fx, st.fy, st.nbh, st.bonds, st.box2::Definitions.Box2, st.pair_lj)
+                    end
+                end
+            else
+                @assert st.softrep !== nothing "softrep params missing"
+                if compute_energy
+                    if st.bonds === nothing
+                        NonBondedForces.harmonic_rep_forces_soa!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.nbh, st.box2::Definitions.Box2, st.softrep)
+                    else
+                        NonBondedForces.harmonic_rep_forces_soa_excl!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.nbh, st.bonds, st.box2::Definitions.Box2, st.softrep)
+                    end
+                else
+                    if st.bonds === nothing
+                        NonBondedForces.harmonic_rep_forces_soa_noE!(st.rx, st.ry, st.fx, st.fy, st.nbh, st.box2::Definitions.Box2, st.softrep)
+                    else
+                        NonBondedForces.harmonic_rep_forces_soa_noE_excl!(st.rx, st.ry, st.fx, st.fy, st.nbh, st.bonds, st.box2::Definitions.Box2, st.softrep)
+                    end
+                end
+            end
+            if st.bonds !== nothing
+                _apply_bonds2!(st, st.fx, st.fy, compute_energy ? st.Epot : nothing, compute_energy)
+            end
+        end
+
+        # Update Ekin at end (no extra B)
+        LangevinIntegrators.baoab_B_2d!(st.vx, st.vy, st.fx, st.fy, spec.params, T(0), st.Ekin)
+    else
+        # 3D variant
+        LangevinIntegrators.baoab_B_3d!(st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z, spec.params, T(2)*dtT, st.Ekin)
+        LangevinIntegrators.baoab_A_3d!(st.rx, st.ry, st.rz, st.vx, st.vy, st.vz, dtT, st.box3::Definitions.Box3)
+        LangevinIntegrators.vv_prepare_noise!(st.rf_x, st.rf_y, st.vv.noise_scale; beta_z=st.rf_z)
+        LangevinIntegrators.baoab_OU_3d!(st.vx, st.vy, st.vz, st.rf_x, st.rf_y, st.rf_z, spec.params, dtT, st.dq)
+        LangevinIntegrators.baoab_A_3d!(st.rx, st.ry, st.rz, st.vx, st.vy, st.vz, dtT, st.box3::Definitions.Box3)
+
+        # forces at t+dt (3D)
+        if st.nb_kind == NB_KIND_LJ && st.sigma_pair !== nothing
+            if compute_energy
+                NonBondedForces.lj_forces_soa_pairs!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot,
+                                                     st.nbh, st.box3::Definitions.Box3,
+                                                     st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
+            else
+                NonBondedForces.lj_forces_soa_noE_pairs!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz,
+                                                          st.nbh, st.box3::Definitions.Box3,
+                                                          st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
+            end
+        elseif st.nb_kind == NB_KIND_LJ && st.sigma_particle !== nothing
+            if compute_energy
+                NonBondedForces.lj_forces_soa_mixed!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot,
+                                                      st.nbh, st.box3::Definitions.Box3,
+                                                      st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
+            else
+                NonBondedForces.lj_forces_soa_noE_mixed!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz,
+                                                           st.nbh, st.box3::Definitions.Box3,
+                                                           st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
+            end
+        else
+            if st.nb_kind == NB_KIND_LJ
+                if compute_energy
+                    if st.bonds === nothing
+                        NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+                    else
+                        NonBondedForces.lj_forces_soa_excl!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.nbh, st.bonds, st.box3::Definitions.Box3, st.pair_lj)
+                    end
+                else
+                    if st.bonds === nothing
+                        NonBondedForces.lj_forces_soa_noE!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+                    else
+                        NonBondedForces.lj_forces_soa_noE_excl!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.nbh, st.bonds, st.box3::Definitions.Box3, st.pair_lj)
+                    end
+                end
+            elseif st.nb_kind == NB_KIND_WCA
+                if compute_energy
+                    if st.bonds === nothing
+                        NonBondedForces.wca_forces_soa!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+                    else
+                        NonBondedForces.wca_forces_soa_excl!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.nbh, st.bonds, st.box3::Definitions.Box3, st.pair_lj)
+                    end
+                else
+                    if st.bonds === nothing
+                        NonBondedForces.wca_forces_soa_noE!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+                    else
+                        NonBondedForces.wca_forces_soa_noE_excl!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.nbh, st.bonds, st.box3::Definitions.Box3, st.pair_lj)
+                    end
+                end
+            else
+                @assert st.softrep !== nothing "softrep params missing"
+                if compute_energy
+                    if st.bonds === nothing
+                        NonBondedForces.harmonic_rep_forces_soa!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot,
+                                                                  st.nbh, st.box3::Definitions.Box3, st.softrep)
+                    else
+                        NonBondedForces.harmonic_rep_forces_soa_excl!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot,
+                                                                       st.nbh, st.bonds, st.box3::Definitions.Box3, st.softrep)
+                    end
+                else
+                    if st.bonds === nothing
+                        NonBondedForces.harmonic_rep_forces_soa_noE!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz,
+                                                                      st.nbh, st.box3::Definitions.Box3, st.softrep)
+                    else
+                        NonBondedForces.harmonic_rep_forces_soa_noE_excl!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz,
+                                                                          st.nbh, st.bonds, st.box3::Definitions.Box3, st.softrep)
+                    end
+                end
+            end
+            if st.bonds !== nothing
+                _apply_bonds3!(st, st.fx, st.fy, st.fz, compute_energy ? st.Epot : nothing, compute_energy)
+            end
+        end
+
+        LangevinIntegrators.baoab_B_3d!(st.vx, st.vy, st.vz, st.fx, st.fy, st.fz, spec.params, T(0), st.Ekin)
+    end
+
+    st.step += 1
+    return nothing
+end
+
+function step!(st::SimulationState{T}, spec::GSMSpec{T}, dt::Real; compute_energy::Bool=true) where {T<:AbstractFloat}
+    # GSM uses VV-middle (identical sequence to BAOAB in this implementation)
+    return step!(st, spec.params, dt; compute_energy)
+end
+
 function step!(st::SimulationState{T}, spec::BrownianSpec{T}, dt::Real; compute_energy::Bool=true) where {T<:AbstractFloat}
     return step!(st, spec.params, dt; compute_energy)
 end
@@ -1134,7 +1492,9 @@ function step!(st::SimulationState{T}, bao::LangevinIntegrators.BAOABParams{T}, 
     # BAOAB sequence
     if D == 2
         LangevinIntegrators.baoab_BA_2d!(st.rx, st.ry, st.vx, st.vy, st.f0x, st.f0y, bao, dtT, st.box2::Definitions.Box2)
-        LangevinIntegrators.baoab_OU_2d!(st.vx, st.vy, bao, dtT, st.dq)
+        # Prepare OU noise using the same generator as VV (β = s * N(0,1))
+        LangevinIntegrators.vv_prepare_noise!(st.rf_x, st.rf_y, st.vv.noise_scale)
+        LangevinIntegrators.baoab_OU_2d!(st.vx, st.vy, st.rf_x, st.rf_y, bao, dtT, st.dq)
         LangevinIntegrators.baoab_A_2d!(st.rx, st.ry, st.vx, st.vy, dtT, st.box2::Definitions.Box2)
 
         # forces at t+dt (write to fx,fy)
@@ -1210,7 +1570,8 @@ function step!(st::SimulationState{T}, bao::LangevinIntegrators.BAOABParams{T}, 
         LangevinIntegrators.baoab_B_2d!(st.vx, st.vy, st.fx, st.fy, bao, dtT, st.Ekin)
     else
         LangevinIntegrators.baoab_BA_3d!(st.rx, st.ry, st.rz, st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z, bao, dtT, st.box3::Definitions.Box3)
-        LangevinIntegrators.baoab_OU_3d!(st.vx, st.vy, st.vz, bao, dtT, st.dq)
+        LangevinIntegrators.vv_prepare_noise!(st.rf_x, st.rf_y, st.vv.noise_scale; beta_z=st.rf_z)
+        LangevinIntegrators.baoab_OU_3d!(st.vx, st.vy, st.vz, st.rf_x, st.rf_y, st.rf_z, bao, dtT, st.dq)
         LangevinIntegrators.baoab_A_3d!(st.rx, st.ry, st.rz, st.vx, st.vy, st.vz, dtT, st.box3::Definitions.Box3)
 
         # forces at t+dt (3D)

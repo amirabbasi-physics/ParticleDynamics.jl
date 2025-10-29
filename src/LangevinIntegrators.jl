@@ -8,6 +8,7 @@ export VVParams,
        vv_positions_soa!,
        vv_velocities_soa!,
        BAOABParams,
+        # BAOAB sub-steps
        baoab_BA_2d!, baoab_OU_2d!, baoab_A_2d!, baoab_B_2d!,
        baoab_BA_3d!, baoab_OU_3d!, baoab_A_3d!, baoab_B_3d!
 
@@ -185,14 +186,20 @@ function _vv_vel2!(vx::CuDeviceVector{T}, vy::CuDeviceVector{T},
     a = (one(T) - q) / (one(T) + q)
     b = one(T) / (one(T) + q)
     vpx = vx[i]; vpy = vy[i]
-    vnx = a*vpx + (dt/(two*mass))*(a*f0x[i] + fx[i]) + (b/mass)*beta_x[i]
-    vny = a*vpy + (dt/(two*mass))*(a*f0y[i] + fy[i]) + (b/mass)*beta_y[i]
+    rand_force_x = (b/mass)*beta_x[i]
+    rand_force_y = (b/mass)*beta_y[i]
+    vnx = a*vpx + (dt/(two*mass))*(a*f0x[i] + fx[i]) + rand_force_x 
+    vny = a*vpy + (dt/(two*mass))*(a*f0y[i] + fy[i]) + rand_force_y 
     v2 = vnx*vnx + vny*vny
+    #s = noise_scale[i]
+    
+    #Tbath = g > zeroT ? (s*s) / (two*g*dt) : zeroT
+    dissipated_energy = - g * v2 * dt
+    injected_energy = half*((vnx + vpx) * beta_x[i] + (vny + vpy) * beta_y[i]) / b
+    
+
     Ekin[i] = half * mass * v2
-    s = noise_scale[i]
-    Tbath = g > zeroT ? (s*s) / (two*g*dt) : zeroT
-    dq[i] = dq[i] + g * (v2 - two * Tbath / mass) * dt
-    # Conservative power contribution (UPR accumulator): v · f at t+dt
+    dq[i] = dq[i] - (dissipated_energy + injected_energy) / dt
     dU[i] = dU[i] + (vnx * fx[i] + vny * fy[i])
     vx[i] = vnx; vy[i] = vny
     return
@@ -213,14 +220,25 @@ function _vv_vel3!(vx::CuDeviceVector{T}, vy::CuDeviceVector{T}, vz::CuDeviceVec
     a = (one(T) - q) / (one(T) + q)
     b = one(T) / (one(T) + q)
     vpx = vx[i]; vpy = vy[i]; vpz = vz[i]
-    vnx = a*vpx + (dt/(two*mass))*(a*f0x[i] + fx[i]) + (b/mass)*beta_x[i]
-    vny = a*vpy + (dt/(two*mass))*(a*f0y[i] + fy[i]) + (b/mass)*beta_y[i]
-    vnz = a*vpz + (dt/(two*mass))*(a*f0z[i] + fz[i]) + (b/mass)*beta_z[i]
+
+    rand_force_x = (b/mass)*beta_x[i]
+    rand_force_y = (b/mass)*beta_y[i]
+    rand_force_z = (b/mass)*beta_z[i]
+
+    vnx = a*vpx + (dt/(two*mass))*(a*f0x[i] + fx[i]) + rand_force_x
+    vny = a*vpy + (dt/(two*mass))*(a*f0y[i] + fy[i]) + rand_force_y
+    vnz = a*vpz + (dt/(two*mass))*(a*f0z[i] + fz[i]) + rand_force_z
+
     v2 = vnx*vnx + vny*vny + vnz*vnz
+    
+    #s = noise_scale[i]
+    #Tbath = g > zeroT ? (s*s) / (two*g*dt) : zeroT
+    dissipated_energy = - g * v2 * dt
+    injected_energy = half*((vnx + vpx) * beta_x[i] + (vny + vpy) * beta_y[i] + (vnz + vpz) * beta_z[i]) / b
+
+
     Ekin[i] = half * mass * v2
-    s = noise_scale[i]
-    Tbath = g > zeroT ? (s*s) / (two*g*dt) : zeroT
-    dq[i] = dq[i] + g * (v2 - three * Tbath / mass) * dt
+    dq[i] = dq[i] - (dissipated_energy + injected_energy) / dt
     dU[i] = dU[i] + (vnx * fx[i] + vny * fy[i] + vnz * fz[i])
     vx[i] = vnx; vy[i] = vny; vz[i] = vnz
     return
@@ -314,40 +332,64 @@ function _baoab_BA3!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceV
 end
 
 function _baoab_OU2!(vx::CuDeviceVector{T}, vy::CuDeviceVector{T},
+                     beta_x::CuDeviceVector{T}, beta_y::CuDeviceVector{T},
                      noise_scale::CuDeviceVector{T},
                      gamma::CuDeviceVector{T}, mass::T, dt::T,
                      dq::CuDeviceVector{T}) where {T<:AbstractFloat}
+    half = T(0.5)
     i = (blockIdx().x-1)*blockDim().x + threadIdx().x
     N = length(vx); if i > N; return; end
     @inbounds begin
         g = gamma[i]
         c = exp(-g*dt/mass)
-        s = noise_scale[i]
-        Tbath = g > zero(T) ? (s*s) / (T(2)*g*dt) : zero(T)
-        sigma = sqrt((Tbath/mass) * (one(T) - c*c))
-        vx[i] = c*vx[i] + sigma*randn(T)
-        vy[i] = c*vy[i] + sigma*randn(T)
-        dq[i] = dq[i] + zero(T)  # placeholder (kept for interface compatibility)
+        # scale pre-generated VV noise (β = s * N(0,1)) to OU sigma
+        # ratio r satisfies: r * β ~ N(0, sigma^2) with sigma^2 = (T/m)*(1-c^2)
+        # where T = s^2/(2 g dt)
+        # ⇒ r = sqrt((1-c^2)/(2 g dt m))
+        r = sqrt((one(T) - c*c) / (T(2)*g*dt*mass))
+        vpx = vx[i]; vpy = vy[i]
+        vnx = c*vpx + r*beta_x[i]
+        vny = c*vpy + r*beta_y[i]
+        # Heat increment during OU step: δQ = -ΔK (no conservative work in O)
+        v2 = vnx*vnx + vny*vny
+        
+        #s = noise_scale[i]
+        #Tbath = g > zeroT ? (s*s) / (two*g*dt) : zeroT
+        dissipated_energy = - g * v2 * dt
+        injected_energy = half*((vnx + vpx) * beta_x[i] + (vny + vpy) * beta_y[i])
+
+        dq[i] = dq[i] - (dissipated_energy + injected_energy) / dt
+        vx[i] = vnx; vy[i] = vny
     end
     return
 end
 
 function _baoab_OU3!(vx::CuDeviceVector{T}, vy::CuDeviceVector{T}, vz::CuDeviceVector{T},
+                     beta_x::CuDeviceVector{T}, beta_y::CuDeviceVector{T}, beta_z::CuDeviceVector{T},
                      noise_scale::CuDeviceVector{T},
                      gamma::CuDeviceVector{T}, mass::T, dt::T,
                      dq::CuDeviceVector{T}) where {T<:AbstractFloat}
+    half = T(0.5)
     i = (blockIdx().x-1)*blockDim().x + threadIdx().x
     N = length(vx); if i > N; return; end
     @inbounds begin
         g = gamma[i]
         c = exp(-g*dt/mass)
-        s = noise_scale[i]
-        Tbath = g > zero(T) ? (s*s) / (T(2)*g*dt) : zero(T)
-        sigma = sqrt((Tbath/mass) * (one(T) - c*c))
-        vx[i] = c*vx[i] + sigma*randn(T)
-        vy[i] = c*vy[i] + sigma*randn(T)
-        vz[i] = c*vz[i] + sigma*randn(T)
-        dq[i] = dq[i] + zero(T)
+        r = sqrt((one(T) - c*c) / (T(2)*g*dt*mass))
+        vpx = vx[i]; vpy = vy[i]; vpz = vz[i]
+        vnx = c*vpx + r*beta_x[i]
+        vny = c*vpy + r*beta_y[i]
+        vnz = c*vpz + r*beta_z[i]
+        
+        v2 = vnx*vnx + vny*vny + vnz*vnz
+    
+        #s = noise_scale[i]
+        #Tbath = g > zeroT ? (s*s) / (two*g*dt) : zeroT
+        dissipated_energy = - g * v2 * dt
+        injected_energy = half*((vnx + vpx) * beta_x[i] + (vny + vpy) * beta_y[i] + (vnz + vpz) * beta_z[i])
+
+        dq[i] = dq[i] - (dissipated_energy + injected_energy) / dt
+        vx[i] = vnx; vy[i] = vny; vz[i] = vnz
     end
     return
 end
@@ -439,17 +481,17 @@ function baoab_BA_3d!(rx, ry, rz, vx, vy, vz, f0x, f0y, f0z, params::BAOABParams
     return nothing
 end
 
-function baoab_OU_2d!(vx, vy, params::BAOABParams{T}, dt::T, dq) where {T<:AbstractFloat}
+function baoab_OU_2d!(vx, vy, beta_x, beta_y, params::BAOABParams{T}, dt::T, dq) where {T<:AbstractFloat}
     N = length(vx); threads = min(256, N); blocks = cld(N, threads)
-    k = CUDA.@cuda launch=false _baoab_OU2!(vx, vy, params.noise_scale, params.gamma, params.mass, dt, dq)
-    k(vx, vy, params.noise_scale, params.gamma, params.mass, dt, dq; threads, blocks)
+    k = CUDA.@cuda launch=false _baoab_OU2!(vx, vy, beta_x, beta_y, params.noise_scale, params.gamma, params.mass, dt, dq)
+    k(vx, vy, beta_x, beta_y, params.noise_scale, params.gamma, params.mass, dt, dq; threads, blocks)
     return nothing
 end
 
-function baoab_OU_3d!(vx, vy, vz, params::BAOABParams{T}, dt::T, dq) where {T<:AbstractFloat}
+function baoab_OU_3d!(vx, vy, vz, beta_x, beta_y, beta_z, params::BAOABParams{T}, dt::T, dq) where {T<:AbstractFloat}
     N = length(vx); threads = min(256, N); blocks = cld(N, threads)
-    k = CUDA.@cuda launch=false _baoab_OU3!(vx, vy, vz, params.noise_scale, params.gamma, params.mass, dt, dq)
-    k(vx, vy, vz, params.noise_scale, params.gamma, params.mass, dt, dq; threads, blocks)
+    k = CUDA.@cuda launch=false _baoab_OU3!(vx, vy, vz, beta_x, beta_y, beta_z, params.noise_scale, params.gamma, params.mass, dt, dq)
+    k(vx, vy, vz, beta_x, beta_y, beta_z, params.noise_scale, params.gamma, params.mass, dt, dq; threads, blocks)
     return nothing
 end
 
