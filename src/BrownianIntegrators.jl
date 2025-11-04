@@ -5,7 +5,7 @@ using ..Definitions
 
 export BrownianParams,
        bd_midpoint_positions_2d!, bd_midpoint_positions_3d!,
-       bd_prepare_midpoint_2d!, bd_prepare_midpoint_3d!,
+       bd_prepare_noise_2d!, bd_prepare_noise_3d!,
        bd_finish_step_2d!, bd_finish_step_3d!,
        EMParams, em_step_2d!, em_step_3d!
 
@@ -60,6 +60,50 @@ end
     return y - half * L
 end
 
+# ---------------------------------------------
+# Noise preparation (standard normal components)
+# ---------------------------------------------
+function _noise2!(ξx::CuDeviceVector{T}, ξy::CuDeviceVector{T}) where {T<:AbstractFloat}
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    N = length(ξx); if i > N; return; end
+    @inbounds begin
+        ξx[i] = randn(T)
+        ξy[i] = randn(T)
+    end
+    return
+end
+
+function _noise3!(ξx::CuDeviceVector{T}, ξy::CuDeviceVector{T}, ξz::CuDeviceVector{T}) where {T<:AbstractFloat}
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    N = length(ξx); if i > N; return; end
+    @inbounds begin
+        ξx[i] = randn(T)
+        ξy[i] = randn(T)
+        ξz[i] = randn(T)
+    end
+    return
+end
+
+function bd_prepare_noise_2d!(ξx::CuArray{T,1}, ξy::CuArray{T,1}) where {T<:AbstractFloat}
+    @assert length(ξx) == length(ξy)
+    N = length(ξx)
+    threads = min(256, N)
+    blocks = cld(N, threads)
+    k = CUDA.@cuda launch=false _noise2!(ξx, ξy)
+    k(ξx, ξy; threads, blocks)
+    return nothing
+end
+
+function bd_prepare_noise_3d!(ξx::CuArray{T,1}, ξy::CuArray{T,1}, ξz::CuArray{T,1}) where {T<:AbstractFloat}
+    @assert length(ξx) == length(ξy) == length(ξz)
+    N = length(ξx)
+    threads = min(256, N)
+    blocks = cld(N, threads)
+    k = CUDA.@cuda launch=false _noise3!(ξx, ξy, ξz)
+    k(ξx, ξy, ξz; threads, blocks)
+    return nothing
+end
+
 function _mid2!(
         rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
         fx::CuDeviceVector{T}, fy::CuDeviceVector{T},
@@ -86,35 +130,6 @@ function _mid2!(
     return nothing
 end
 
-function _prep2!(
-        rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
-        fx::CuDeviceVector{T}, fy::CuDeviceVector{T},
-        ξx::CuDeviceVector{T}, ξy::CuDeviceVector{T},
-        rxm::CuDeviceVector{T}, rym::CuDeviceVector{T},
-        gamma::CuDeviceVector{T}, noise_scale::CuDeviceVector{T},
-        dt::T,
-        Lx::T, Ly::T
-        ) where {T<:AbstractFloat}
-    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
-    N = length(rx); if i > N; return; end
-    @inbounds begin
-        g = gamma[i]
-        μ = 1 / g
-        sqrt2Ddt = μ * noise_scale[i]
-        ξx_i = randn(T)
-        ξy_i = randn(T)
-        ξx[i] = ξx_i
-        ξy[i] = ξy_i
-        half = T(0.5)
-        dx = half * (μ * fx[i] * dt + sqrt2Ddt * ξx_i)
-        dy = half * (μ * fy[i] * dt + sqrt2Ddt * ξy_i)
-        x = rx[i] + dx
-        y = ry[i] + dy
-        rxm[i] = _wrap_centered(x, Lx)
-        rym[i] = _wrap_centered(y, Ly)
-    end
-    return nothing
-end
 
 function _mid3!(
         rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
@@ -145,40 +160,6 @@ function _mid3!(
     return nothing
 end
 
-function _prep3!(
-        rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
-        fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, fz::CuDeviceVector{T},
-        ξx::CuDeviceVector{T}, ξy::CuDeviceVector{T}, ξz::CuDeviceVector{T},
-        rxm::CuDeviceVector{T}, rym::CuDeviceVector{T}, rzm::CuDeviceVector{T},
-        gamma::CuDeviceVector{T}, noise_scale::CuDeviceVector{T},
-        dt::T,
-        Lx::T, Ly::T, Lz::T
-) where {T<:AbstractFloat}
-    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
-    N = length(rx); if i > N; return; end
-    @inbounds begin
-        g = gamma[i]
-        μ = 1 / g
-        sqrt2Ddt = μ * noise_scale[i]
-        ξx_i = randn(T)
-        ξy_i = randn(T)
-        ξz_i = randn(T)
-        ξx[i] = ξx_i
-        ξy[i] = ξy_i
-        ξz[i] = ξz_i
-        half = T(0.5)
-        dx = half * (μ * fx[i] * dt + sqrt2Ddt * ξx_i)
-        dy = half * (μ * fy[i] * dt + sqrt2Ddt * ξy_i)
-        dz = half * (μ * fz[i] * dt + sqrt2Ddt * ξz_i)
-        x = rx[i] + dx
-        y = ry[i] + dy
-        z = rz[i] + dz
-        rxm[i] = _wrap_centered(x, Lx)
-        rym[i] = _wrap_centered(y, Ly)
-        rzm[i] = _wrap_centered(z, Lz)
-    end
-    return nothing
-end
 
 function _fin2!(
         rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
@@ -195,14 +176,23 @@ function _fin2!(
         g = gamma[i]
         μ = 1 / g
         sqrt2Ddt = μ * noise_scale[i]
-        Δx = μ * fxm[i] * dt + sqrt2Ddt * ξx[i]
-        Δy = μ * fym[i] * dt + sqrt2Ddt * ξy[i]
-        x = rx[i] + Δx
-        y = ry[i] + Δy
-        rx[i] = _wrap_centered(x, Lx)
-        ry[i] = _wrap_centered(y, Ly)
-        # Conservative work over step (power integrated): use midpoint force
-        local w = fxm[i] * Δx + fym[i] * Δy
+        # Propose new positions
+        local x0 = rx[i]; local y0 = ry[i]
+        local Δx = μ * fxm[i] * dt + sqrt2Ddt * ξx[i]
+        local Δy = μ * fym[i] * dt + sqrt2Ddt * ξy[i]
+        local x = x0 + Δx
+        local y = y0 + Δy
+        # Wrap into box
+        local xw = _wrap_centered(x, Lx)
+        local yw = _wrap_centered(y, Ly)
+        rx[i] = xw
+        ry[i] = yw
+        # Use minimum-image displacement for work consistency under PBC
+        local dx_mic = _wrap_centered(xw - x0, Lx)
+        local dy_mic = _wrap_centered(yw - y0, Ly)
+        # Conservative work over step (Stratonovich): w = f_mid · Δr_mic
+        # Heat to bath δq = + w; potential change δU = - w
+        local w = fxm[i] * dx_mic + fym[i] * dy_mic
         dq[i] = dq[i] + w
         dU[i] = dU[i] + w
     end
@@ -224,16 +214,23 @@ function _fin3!(
         g = gamma[i]
         μ = 1 / g
         sqrt2Ddt = μ * noise_scale[i]
-        Δx = μ * fxm[i] * dt + sqrt2Ddt * ξx[i]
-        Δy = μ * fym[i] * dt + sqrt2Ddt * ξy[i]
-        Δz = μ * fzm[i] * dt + sqrt2Ddt * ξz[i]
-        x = rx[i] + Δx
-        y = ry[i] + Δy
-        z = rz[i] + Δz
-        rx[i] = _wrap_centered(x, Lx)
-        ry[i] = _wrap_centered(y, Ly)
-        rz[i] = _wrap_centered(z, Lz)
-        local w = fxm[i] * Δx + fym[i] * Δy + fzm[i] * Δz
+        local x0 = rx[i]; local y0 = ry[i]; local z0 = rz[i]
+        local Δx = μ * fxm[i] * dt + sqrt2Ddt * ξx[i]
+        local Δy = μ * fym[i] * dt + sqrt2Ddt * ξy[i]
+        local Δz = μ * fzm[i] * dt + sqrt2Ddt * ξz[i]
+        local x = x0 + Δx
+        local y = y0 + Δy
+        local z = z0 + Δz
+        local xw = _wrap_centered(x, Lx)
+        local yw = _wrap_centered(y, Ly)
+        local zw = _wrap_centered(z, Lz)
+        rx[i] = xw
+        ry[i] = yw
+        rz[i] = zw
+        local dx_mic = _wrap_centered(xw - x0, Lx)
+        local dy_mic = _wrap_centered(yw - y0, Ly)
+        local dz_mic = _wrap_centered(zw - z0, Lz)
+        local w = fxm[i] * dx_mic + fym[i] * dy_mic + fzm[i] * dz_mic
         dq[i] = dq[i] + w
         dU[i] = dU[i] + w
     end
@@ -255,20 +252,7 @@ function bd_midpoint_positions_2d!(rx, ry, fx, fy, ξx, ξy, rxm, rym,
     return nothing
 end
 
-function bd_prepare_midpoint_2d!(rx, ry, fx, fy, ξx, ξy, rxm, rym,
-                                 gamma::CuArray{T,1}, noise_scale::CuArray{T,1},
-                                 dt::Real, box::Definitions.Box2{T}) where {T<:AbstractFloat}
-    N = length(rx)
-    @assert length(gamma) == N == length(noise_scale)
-    threads = min(256, N)
-    blocks = cld(N, threads)
-    dtT = convert(T, dt)
-    Lx = convert(T, box[1])
-    Ly = convert(T, box[2])
-    k = CUDA.@cuda launch=false _prep2!(rx, ry, fx, fy, ξx, ξy, rxm, rym, gamma, noise_scale, dtT, Lx, Ly)
-    k(rx, ry, fx, fy, ξx, ξy, rxm, rym, gamma, noise_scale, dtT, Lx, Ly; threads, blocks)
-    return nothing
-end
+ 
 
 function bd_midpoint_positions_3d!(rx, ry, rz, fx, fy, fz, ξx, ξy, ξz, rxm, rym, rzm,
                                    gamma::CuArray{T,1}, noise_scale::CuArray{T,1},
@@ -286,21 +270,7 @@ function bd_midpoint_positions_3d!(rx, ry, rz, fx, fy, fz, ξx, ξy, ξz, rxm, r
     return nothing
 end
 
-function bd_prepare_midpoint_3d!(rx, ry, rz, fx, fy, fz, ξx, ξy, ξz, rxm, rym, rzm,
-                                 gamma::CuArray{T,1}, noise_scale::CuArray{T,1},
-                                 dt::Real, box::Definitions.Box3{T}) where {T<:AbstractFloat}
-    N = length(rx)
-    @assert length(gamma) == N == length(noise_scale)
-    threads = min(256, N)
-    blocks = cld(N, threads)
-    dtT = convert(T, dt)
-    Lx = convert(T, box[1])
-    Ly = convert(T, box[2])
-    Lz = convert(T, box[3])
-    k = CUDA.@cuda launch=false _prep3!(rx, ry, rz, fx, fy, fz, ξx, ξy, ξz, rxm, rym, rzm, gamma, noise_scale, dtT, Lx, Ly, Lz)
-    k(rx, ry, rz, fx, fy, fz, ξx, ξy, ξz, rxm, rym, rzm, gamma, noise_scale, dtT, Lx, Ly, Lz; threads, blocks)
-    return nothing
-end
+ 
 
 function bd_finish_step_2d!(rx, ry, fxm, fym, ξx, ξy,
                             gamma::CuArray{T,1}, noise_scale::CuArray{T,1},
@@ -351,13 +321,18 @@ function _em2!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
         μ = 1 / g
         sqrt2Ddt = μ * noise_scale[i]
         ξx = randn(T); ξy = randn(T)
-        Δx = μ * fx[i] * dt + sqrt2Ddt * ξx
-        Δy = μ * fy[i] * dt + sqrt2Ddt * ξy
-        x = rx[i] + Δx
-        y = ry[i] + Δy
-        rx[i] = _wrap_centered(x, Lx)
-        ry[i] = _wrap_centered(y, Ly)
-        local w = fx[i] * Δx + fy[i] * Δy
+        local x0 = rx[i]; local y0 = ry[i]
+        local Δx = μ * fx[i] * dt + sqrt2Ddt * ξx
+        local Δy = μ * fy[i] * dt + sqrt2Ddt * ξy
+        local x = x0 + Δx
+        local y = y0 + Δy
+        local xw = _wrap_centered(x, Lx)
+        local yw = _wrap_centered(y, Ly)
+        rx[i] = xw
+        ry[i] = yw
+        local dx_mic = _wrap_centered(xw - x0, Lx)
+        local dy_mic = _wrap_centered(yw - y0, Ly)
+        local w = fx[i] * dx_mic + fy[i] * dy_mic
         dq[i] = dq[i] + w
         dU[i] = dU[i] + w
     end
@@ -377,16 +352,23 @@ function _em3!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{
         μ = 1 / g
         sqrt2Ddt = μ * noise_scale[i]
         ξx = randn(T); ξy = randn(T); ξz = randn(T)
-        Δx = μ * fx[i] * dt + sqrt2Ddt * ξx
-        Δy = μ * fy[i] * dt + sqrt2Ddt * ξy
-        Δz = μ * fz[i] * dt + sqrt2Ddt * ξz
-        x = rx[i] + Δx
-        y = ry[i] + Δy
-        z = rz[i] + Δz
-        rx[i] = _wrap_centered(x, Lx)
-        ry[i] = _wrap_centered(y, Ly)
-        rz[i] = _wrap_centered(z, Lz)
-        local w = fx[i] * Δx + fy[i] * Δy + fz[i] * Δz
+        local x0 = rx[i]; local y0 = ry[i]; local z0 = rz[i]
+        local Δx = μ * fx[i] * dt + sqrt2Ddt * ξx
+        local Δy = μ * fy[i] * dt + sqrt2Ddt * ξy
+        local Δz = μ * fz[i] * dt + sqrt2Ddt * ξz
+        local x = x0 + Δx
+        local y = y0 + Δy
+        local z = z0 + Δz
+        local xw = _wrap_centered(x, Lx)
+        local yw = _wrap_centered(y, Ly)
+        local zw = _wrap_centered(z, Lz)
+        rx[i] = xw
+        ry[i] = yw
+        rz[i] = zw
+        local dx_mic = _wrap_centered(xw - x0, Lx)
+        local dy_mic = _wrap_centered(yw - y0, Ly)
+        local dz_mic = _wrap_centered(zw - z0, Lz)
+        local w = fx[i] * dx_mic + fy[i] * dy_mic + fz[i] * dz_mic
         dq[i] = dq[i] + w
         dU[i] = dU[i] + w
     end

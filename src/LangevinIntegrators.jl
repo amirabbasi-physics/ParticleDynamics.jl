@@ -178,30 +178,39 @@ function _vv_vel2!(vx::CuDeviceVector{T}, vy::CuDeviceVector{T},
                    dq::CuDeviceVector{T}, dU::CuDeviceVector{T}, Ekin::CuDeviceVector{T},
                    noise_scale::CuDeviceVector{T},
                    gamma::CuDeviceVector{T}, mass::T, dt::T) where {T<:AbstractFloat}
-    zeroT = zero(T); two = T(2); half = T(0.5)
     i = (blockIdx().x-1)*blockDim().x + threadIdx().x
     N = length(vx); if i > N; return; end
-    g = gamma[i]
-    q = g * dt / (two * mass)
-    a = (one(T) - q) / (one(T) + q)
-    b = one(T) / (one(T) + q)
-    vpx = vx[i]; vpy = vy[i]
-    rand_force_x = (b/mass)*beta_x[i]
-    rand_force_y = (b/mass)*beta_y[i]
-    vnx = a*vpx + (dt/(two*mass))*(a*f0x[i] + fx[i]) + rand_force_x 
-    vny = a*vpy + (dt/(two*mass))*(a*f0y[i] + fy[i]) + rand_force_y 
-    v2 = vnx*vnx + vny*vny
-    #s = noise_scale[i]
-    
-    #Tbath = g > zeroT ? (s*s) / (two*g*dt) : zeroT
-    dissipated_energy = - g * v2 * dt
-    injected_energy = half*((vnx + vpx) * beta_x[i] + (vny + vpy) * beta_y[i]) / b
-    
+    @inbounds begin
+        # Parameters in base precision
+        g = gamma[i]
+        q = g * dt / (T(2) * mass)
+        a = (one(T) - q) / (one(T) + q)
+        b = one(T) / (one(T) + q)
+        # Promote to Float64 for sensitive math
+        vpx = Float64(vx[i]); vpy = Float64(vy[i])
+        f0x_i = Float64(f0x[i]); f0y_i = Float64(f0y[i])
+        fx_i  = Float64(fx[i]);  fy_i  = Float64(fy[i])
+        bx    = Float64(beta_x[i]); by = Float64(beta_y[i])
+        aA = Float64(a); bA = Float64(b)
+        dtA = Float64(dt); gA = Float64(g); mA = Float64(mass)
 
-    Ekin[i] = half * mass * v2
-    dq[i] = dq[i] - (dissipated_energy + injected_energy) / dt
-    dU[i] = dU[i] + (vnx * fx[i] + vny * fy[i])
-    vx[i] = vnx; vy[i] = vny
+        # Velocity update
+        vnx = aA*vpx + (dtA/(2*mA))*(aA*f0x_i + fx_i) + (bA/mA)*bx
+        vny = aA*vpy + (dtA/(2*mA))*(aA*f0y_i + fy_i) + (bA/mA)*by
+
+        v2 = vnx*vnx + vny*vny
+        vbarx = 0.5*(vpx + vnx); vbary = 0.5*(vpy + vny)
+
+        # Power terms (dq is power)
+        P_diss = - gA * v2
+        P_sto  = (vbarx*(bx/bA) + vbary*(by/bA)) / dtA
+        P_cons = vnx*fx_i + vny*fy_i
+
+        Ekin[i] = T(0.5) * mass * T(v2)
+        dq[i]   = dq[i] - T(P_diss + P_sto)
+        dU[i]   = dU[i] + T(P_cons)
+        vx[i] = T(vnx); vy[i] = T(vny)
+    end
     return
 end
 
@@ -212,35 +221,37 @@ function _vv_vel3!(vx::CuDeviceVector{T}, vy::CuDeviceVector{T}, vz::CuDeviceVec
                    dq::CuDeviceVector{T}, dU::CuDeviceVector{T}, Ekin::CuDeviceVector{T},
                    noise_scale::CuDeviceVector{T},
                    gamma::CuDeviceVector{T}, mass::T, dt::T) where {T<:AbstractFloat}
-    zeroT = zero(T); two = T(2); three = T(3); half = T(0.5)
     i = (blockIdx().x-1)*blockDim().x + threadIdx().x
     N = length(vx); if i > N; return; end
-    g = gamma[i]
-    q = g * dt / (two * mass)
-    a = (one(T) - q) / (one(T) + q)
-    b = one(T) / (one(T) + q)
-    vpx = vx[i]; vpy = vy[i]; vpz = vz[i]
+    @inbounds begin
+        g = gamma[i]
+        q = g * dt / (T(2) * mass)
+        a = (one(T) - q) / (one(T) + q)
+        b = one(T) / (one(T) + q)
 
-    rand_force_x = (b/mass)*beta_x[i]
-    rand_force_y = (b/mass)*beta_y[i]
-    rand_force_z = (b/mass)*beta_z[i]
+        vpx = Float64(vx[i]); vpy = Float64(vy[i]); vpz = Float64(vz[i])
+        f0x_i = Float64(f0x[i]); f0y_i = Float64(f0y[i]); f0z_i = Float64(f0z[i])
+        fx_i  = Float64(fx[i]);  fy_i  = Float64(fy[i]);  fz_i  = Float64(fz[i])
+        bx    = Float64(beta_x[i]); by = Float64(beta_y[i]); bz = Float64(beta_z[i])
+        aA = Float64(a); bA = Float64(b)
+        dtA = Float64(dt); gA = Float64(g); mA = Float64(mass)
 
-    vnx = a*vpx + (dt/(two*mass))*(a*f0x[i] + fx[i]) + rand_force_x
-    vny = a*vpy + (dt/(two*mass))*(a*f0y[i] + fy[i]) + rand_force_y
-    vnz = a*vpz + (dt/(two*mass))*(a*f0z[i] + fz[i]) + rand_force_z
+        vnx = aA*vpx + (dtA/(2*mA))*(aA*f0x_i + fx_i) + (bA/mA)*bx
+        vny = aA*vpy + (dtA/(2*mA))*(aA*f0y_i + fy_i) + (bA/mA)*by
+        vnz = aA*vpz + (dtA/(2*mA))*(aA*f0z_i + fz_i) + (bA/mA)*bz
 
-    v2 = vnx*vnx + vny*vny + vnz*vnz
-    
-    #s = noise_scale[i]
-    #Tbath = g > zeroT ? (s*s) / (two*g*dt) : zeroT
-    dissipated_energy = - g * v2 * dt
-    injected_energy = half*((vnx + vpx) * beta_x[i] + (vny + vpy) * beta_y[i] + (vnz + vpz) * beta_z[i]) / b
+        v2 = vnx*vnx + vny*vny + vnz*vnz
+        vbarx = 0.5*(vpx + vnx); vbary = 0.5*(vpy + vny); vbarz = 0.5*(vpz + vnz)
 
+        P_diss = - gA * v2
+        P_sto  = (vbarx*(bx/bA) + vbary*(by/bA) + vbarz*(bz/bA)) / dtA
+        P_cons = vnx*fx_i + vny*fy_i + vnz*fz_i
 
-    Ekin[i] = half * mass * v2
-    dq[i] = dq[i] - (dissipated_energy + injected_energy) / dt
-    dU[i] = dU[i] + (vnx * fx[i] + vny * fy[i] + vnz * fz[i])
-    vx[i] = vnx; vy[i] = vny; vz[i] = vnz
+        Ekin[i] = T(0.5) * mass * T(v2)
+        dq[i]   = dq[i] - T(P_diss + P_sto)
+        dU[i]   = dU[i] + T(P_cons)
+        vx[i] = T(vnx); vy[i] = T(vny); vz[i] = T(vnz)
+    end
     return
 end
 
@@ -336,30 +347,25 @@ function _baoab_OU2!(vx::CuDeviceVector{T}, vy::CuDeviceVector{T},
                      noise_scale::CuDeviceVector{T},
                      gamma::CuDeviceVector{T}, mass::T, dt::T,
                      dq::CuDeviceVector{T}) where {T<:AbstractFloat}
-    half = T(0.5)
     i = (blockIdx().x-1)*blockDim().x + threadIdx().x
     N = length(vx); if i > N; return; end
     @inbounds begin
-        g = gamma[i]
-        c = exp(-g*dt/mass)
-        # scale pre-generated VV noise (β = s * N(0,1)) to OU sigma
-        # ratio r satisfies: r * β ~ N(0, sigma^2) with sigma^2 = (T/m)*(1-c^2)
-        # where T = s^2/(2 g dt)
-        # ⇒ r = sqrt((1-c^2)/(2 g dt m))
-        r = sqrt((one(T) - c*c) / (T(2)*g*dt*mass))
-        vpx = vx[i]; vpy = vy[i]
-        vnx = c*vpx + r*beta_x[i]
-        vny = c*vpy + r*beta_y[i]
-        # Heat increment during OU step: δQ = -ΔK (no conservative work in O)
-        v2 = vnx*vnx + vny*vny
-        
-        #s = noise_scale[i]
-        #Tbath = g > zeroT ? (s*s) / (two*g*dt) : zeroT
-        dissipated_energy = - g * v2 * dt
-        injected_energy = half*((vnx + vpx) * beta_x[i] + (vny + vpy) * beta_y[i])
-
-        dq[i] = dq[i] - (dissipated_energy + injected_energy) / dt
-        vx[i] = vnx; vy[i] = vny
+        # Mixed precision computations in Float64
+        gA = Float64(gamma[i])
+        dtA = Float64(dt)
+        mA = Float64(mass)
+        c  = exp(-gA*dtA/mA)
+        r = sqrt((one(T) - c*c) / (T(2)*gA*dtA*mA))
+        vpx = Float64(vx[i]); vpy = Float64(vy[i])
+        bx  = Float64(beta_x[i]); by = Float64(beta_y[i])
+        vnx = c*vpx + r*bx
+        vny = c*vpy + r*by
+        vbarx = 0.5*(vpx + vnx); vbary = 0.5*(vpy + vny)
+        # Same power formulas as VV
+        P_diss = - gA * (vbarx*vbarx + vbary*vbary)
+        P_sto  = (vbarx*(bx) + vbary*(by)) / dtA
+        dq[i] = dq[i] + T(P_diss + P_sto)
+        vx[i] = T(vnx); vy[i] = T(vny)
     end
     return
 end
@@ -369,27 +375,25 @@ function _baoab_OU3!(vx::CuDeviceVector{T}, vy::CuDeviceVector{T}, vz::CuDeviceV
                      noise_scale::CuDeviceVector{T},
                      gamma::CuDeviceVector{T}, mass::T, dt::T,
                      dq::CuDeviceVector{T}) where {T<:AbstractFloat}
-    half = T(0.5)
     i = (blockIdx().x-1)*blockDim().x + threadIdx().x
     N = length(vx); if i > N; return; end
     @inbounds begin
-        g = gamma[i]
-        c = exp(-g*dt/mass)
+        gA = Float64(gamma[i])
+        dtA = Float64(dt)
+        mA = Float64(mass)
+        c  = exp(-gA*dtA/mA)
         r = sqrt((one(T) - c*c) / (T(2)*g*dt*mass))
-        vpx = vx[i]; vpy = vy[i]; vpz = vz[i]
-        vnx = c*vpx + r*beta_x[i]
-        vny = c*vpy + r*beta_y[i]
-        vnz = c*vpz + r*beta_z[i]
-        
-        v2 = vnx*vnx + vny*vny + vnz*vnz
-    
-        #s = noise_scale[i]
-        #Tbath = g > zeroT ? (s*s) / (two*g*dt) : zeroT
-        dissipated_energy = - g * v2 * dt
-        injected_energy = half*((vnx + vpx) * beta_x[i] + (vny + vpy) * beta_y[i] + (vnz + vpz) * beta_z[i])
 
-        dq[i] = dq[i] - (dissipated_energy + injected_energy) / dt
-        vx[i] = vnx; vy[i] = vny; vz[i] = vnz
+        vpx = Float64(vx[i]); vpy = Float64(vy[i]); vpz = Float64(vz[i])
+        bx  = Float64(beta_x[i]); by = Float64(beta_y[i]); bz = Float64(beta_z[i])
+        vnx = c*vpx + r*bx
+        vny = c*vpy + r*by
+        vnz = c*vpz + r*bz
+        vbarx = 0.5*(vpx + vnx); vbary = 0.5*(vpy + vny); vbarz = 0.5*(vpz + vnz)
+        P_diss = - gA * (vbarx*vbarx + vbary*vbary + vbarz*vbarz)
+        P_sto  = (vbarx*(bx) + vbary*(by) + vbarz*(bz)) / dtA
+        dq[i] = dq[i] + T(P_diss + P_sto)
+        vx[i] = T(vnx); vy[i] = T(vny); vz[i] = T(vnz)
     end
     return
 end
@@ -431,16 +435,25 @@ end
 function _baoab_B2!(vx::CuDeviceVector{T}, vy::CuDeviceVector{T},
                     fx::CuDeviceVector{T}, fy::CuDeviceVector{T},
                     mass::T, dt::T,
-                    Ekin::CuDeviceVector{T}) where {T<:AbstractFloat}
-    half = T(0.5)
+                    Ekin::CuDeviceVector{T}, dU::CuDeviceVector{T}) where {T<:AbstractFloat}
     i = (blockIdx().x-1)*blockDim().x + threadIdx().x
     N = length(vx); if i > N; return; end
     @inbounds begin
-        vxi = vx[i] + (dt/(T(2)*mass)) * fx[i]
-        vyi = vy[i] + (dt/(T(2)*mass)) * fy[i]
-        vx[i] = vxi; vy[i] = vyi
+        # Mixed precision for robustness
+        dtA = Float64(dt); mA = Float64(mass)
+        vpx = Float64(vx[i]); vpy = Float64(vy[i])
+        fx_i = Float64(fx[i]); fy_i = Float64(fy[i])
+        # Half-kick update
+        vxi = vpx + (dtA/(2*mA)) * fx_i
+        vyi = vpy + (dtA/(2*mA)) * fy_i
+        # Conservative power like VV: v · f at end step
+        if dtA != 0.0
+            P_cons = vxi*fx_i + vyi*fy_i
+            dU[i] += T(P_cons)
+        end
+        vx[i] = T(vxi); vy[i] = T(vyi)
         v2 = vxi*vxi + vyi*vyi
-        Ekin[i] = half * mass * v2
+        Ekin[i] = T(0.5) * mass * T(v2)
     end
     return
 end
@@ -448,17 +461,23 @@ end
 function _baoab_B3!(vx::CuDeviceVector{T}, vy::CuDeviceVector{T}, vz::CuDeviceVector{T},
                     fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, fz::CuDeviceVector{T},
                     mass::T, dt::T,
-                    Ekin::CuDeviceVector{T}) where {T<:AbstractFloat}
-    half = T(0.5)
+                    Ekin::CuDeviceVector{T}, dU::CuDeviceVector{T}) where {T<:AbstractFloat}
     i = (blockIdx().x-1)*blockDim().x + threadIdx().x
     N = length(vx); if i > N; return; end
     @inbounds begin
-        vxi = vx[i] + (dt/(T(2)*mass)) * fx[i]
-        vyi = vy[i] + (dt/(T(2)*mass)) * fy[i]
-        vzi = vz[i] + (dt/(T(2)*mass)) * fz[i]
-        vx[i] = vxi; vy[i] = vyi; vz[i] = vzi
+        dtA = Float64(dt); mA = Float64(mass)
+        vpx = Float64(vx[i]); vpy = Float64(vy[i]); vpz = Float64(vz[i])
+        fx_i = Float64(fx[i]); fy_i = Float64(fy[i]); fz_i = Float64(fz[i])
+        vxi = vpx + (dtA/(2*mA)) * fx_i
+        vyi = vpy + (dtA/(2*mA)) * fy_i
+        vzi = vpz + (dtA/(2*mA)) * fz_i
+        if dtA != 0.0
+            P_cons = vxi*fx_i + vyi*fy_i + vzi*fz_i
+            dU[i] += T(P_cons)
+        end
+        vx[i] = T(vxi); vy[i] = T(vyi); vz[i] = T(vzi)
         v2 = vxi*vxi + vyi*vyi + vzi*vzi
-        Ekin[i] = half * mass * v2
+        Ekin[i] = T(0.5) * mass * T(v2)
     end
     return
 end
@@ -471,6 +490,43 @@ function baoab_BA_2d!(rx, ry, vx, vy, f0x, f0y, params::BAOABParams{T}, dt::T, b
     N = length(rx); threads = min(256, N); blocks = cld(N, threads)
     k = CUDA.@cuda launch=false _baoab_BA2!(rx, ry, vx, vy, f0x, f0y, params.mass, dt, box[1], box[2])
     k(rx, ry, vx, vy, f0x, f0y, params.mass, dt, box[1], box[2]; threads, blocks)
+    return nothing
+end
+
+# Conservative power accumulators (match VV formula: P_cons = v · f at end step)
+function _cons_power2!(vx::CuDeviceVector{T}, vy::CuDeviceVector{T},
+                       fx::CuDeviceVector{T}, fy::CuDeviceVector{T},
+                       dU::CuDeviceVector{T}) where {T<:AbstractFloat}
+    i = (blockIdx().x-1)*blockDim().x + threadIdx().x
+    N = length(vx); if i > N; return; end
+    @inbounds begin
+        dU[i] += vx[i]*fx[i] + vy[i]*fy[i]
+    end
+    return
+end
+
+function _cons_power3!(vx::CuDeviceVector{T}, vy::CuDeviceVector{T}, vz::CuDeviceVector{T},
+                       fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, fz::CuDeviceVector{T},
+                       dU::CuDeviceVector{T}) where {T<:AbstractFloat}
+    i = (blockIdx().x-1)*blockDim().x + threadIdx().x
+    N = length(vx); if i > N; return; end
+    @inbounds begin
+        dU[i] += vx[i]*fx[i] + vy[i]*fy[i] + vz[i]*fz[i]
+    end
+    return
+end
+
+function cons_power_2d!(vx::CuArray{T,1}, vy::CuArray{T,1}, fx::CuArray{T,1}, fy::CuArray{T,1}, dU::CuArray{T,1}) where {T<:AbstractFloat}
+    N = length(vx); threads = min(256, N); blocks = cld(N, threads)
+    k = CUDA.@cuda launch=false _cons_power2!(vx, vy, fx, fy, dU)
+    k(vx, vy, fx, fy, dU; threads, blocks)
+    return nothing
+end
+
+function cons_power_3d!(vx::CuArray{T,1}, vy::CuArray{T,1}, vz::CuArray{T,1}, fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1}, dU::CuArray{T,1}) where {T<:AbstractFloat}
+    N = length(vx); threads = min(256, N); blocks = cld(N, threads)
+    k = CUDA.@cuda launch=false _cons_power3!(vx, vy, vz, fx, fy, fz, dU)
+    k(vx, vy, vz, fx, fy, fz, dU; threads, blocks)
     return nothing
 end
 
@@ -509,17 +565,17 @@ function baoab_A_3d!(rx, ry, rz, vx, vy, vz, dt::T, box::Definitions.Box3{T}) wh
     return nothing
 end
 
-function baoab_B_2d!(vx, vy, fx, fy, params::BAOABParams{T}, dt::T, Ekin) where {T<:AbstractFloat}
+function baoab_B_2d!(vx, vy, fx, fy, params::BAOABParams{T}, dt::T, Ekin, dU) where {T<:AbstractFloat}
     N = length(vx); threads = min(256, N); blocks = cld(N, threads)
-    k = CUDA.@cuda launch=false _baoab_B2!(vx, vy, fx, fy, params.mass, dt, Ekin)
-    k(vx, vy, fx, fy, params.mass, dt, Ekin; threads, blocks)
+    k = CUDA.@cuda launch=false _baoab_B2!(vx, vy, fx, fy, params.mass, dt, Ekin, dU)
+    k(vx, vy, fx, fy, params.mass, dt, Ekin, dU; threads, blocks)
     return nothing
 end
 
-function baoab_B_3d!(vx, vy, vz, fx, fy, fz, params::BAOABParams{T}, dt::T, Ekin) where {T<:AbstractFloat}
+function baoab_B_3d!(vx, vy, vz, fx, fy, fz, params::BAOABParams{T}, dt::T, Ekin, dU) where {T<:AbstractFloat}
     N = length(vx); threads = min(256, N); blocks = cld(N, threads)
-    k = CUDA.@cuda launch=false _baoab_B3!(vx, vy, vz, fx, fy, fz, params.mass, dt, Ekin)
-    k(vx, vy, vz, fx, fy, fz, params.mass, dt, Ekin; threads, blocks)
+    k = CUDA.@cuda launch=false _baoab_B3!(vx, vy, vz, fx, fy, fz, params.mass, dt, Ekin, dU)
+    k(vx, vy, vz, fx, fy, fz, params.mass, dt, Ekin, dU; threads, blocks)
     return nothing
 end
 

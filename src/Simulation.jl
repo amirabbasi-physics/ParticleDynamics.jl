@@ -72,6 +72,9 @@ mutable struct SimulationState{T<:AbstractFloat}
     dq::CuArray{T,1}
     dU::CuArray{T,1}
     Ekin::CuArray{T,1}
+    # interval accumulators (GPU) to avoid host reductions each step
+    Epot_accum::CuArray{T,1}
+    Ekin_accum::CuArray{T,1}
 
     # misc
     step::Int
@@ -346,6 +349,9 @@ function build_simulation(;N::Int,
     dq   = CUDA.CuArray{T}(undef, N); fill!(dq, zero(T))
     dU   = CUDA.CuArray{T}(undef, N); fill!(dU, zero(T))
     Ekin = CUDA.CuArray{T}(undef, N); fill!(Ekin, zero(T))
+    # interval accumulators (GPU)
+    Epot_accum = CUDA.CuArray{T}(undef, N); fill!(Epot_accum, zero(T))
+    Ekin_accum = CUDA.CuArray{T}(undef, N); fill!(Ekin_accum, zero(T))
 
     # Build bonds (if provided)
     local bondlist
@@ -400,7 +406,7 @@ function build_simulation(;N::Int,
                          nothing, nothing, nothing,
                          bondlist, bond_spec,
                          vv,
-                         Epot, dq, dU, Ekin, 0, UInt8(0), nb_tag, srp) 
+                         Epot, dq, dU, Ekin, Epot_accum, Ekin_accum, 0, UInt8(0), nb_tag, srp) 
 
     # Assign the appropriate box directly (no extra tuple layer)
     if D == 2
@@ -412,6 +418,28 @@ function build_simulation(;N::Int,
     end
 
     return st
+end
+
+# =========================
+#   Energy accumulation (GPU)
+# =========================
+function _accumulate_energies!(Ekin_accum, Epot_accum, Ekin, Epot)
+    i = (blockIdx().x-1)*blockDim().x + threadIdx().x
+    N = length(Ekin); if i > N; return; end
+    @inbounds begin
+        Ekin_accum[i] += Ekin[i]
+        Epot_accum[i] += Epot[i]
+    end
+    return
+end
+
+function accumulate_energies!(st::SimulationState{T}) where {T<:AbstractFloat}
+    N = length(st.Ekin)
+    threads = min(256, N)
+    blocks  = cld(N, threads)
+    k = CUDA.@cuda launch=false _accumulate_energies!(st.Ekin_accum, st.Epot_accum, st.Ekin, st.Epot)
+    k(st.Ekin_accum, st.Epot_accum, st.Ekin, st.Epot; threads, blocks)
+    return nothing
 end
 
 # =========================
@@ -1169,7 +1197,7 @@ function step!(st::SimulationState{T}, spec::BAOASpec{T}, dt::Real; compute_ener
 
     if D == 2
         # B(1): full kick using f(t)
-        LangevinIntegrators.baoab_B_2d!(st.vx, st.vy, st.f0x, st.f0y, spec.params, T(2)*dtT, st.Ekin)
+        LangevinIntegrators.baoab_B_2d!(st.vx, st.vy, st.f0x, st.f0y, spec.params, T(2)*dtT, st.Ekin, st.dU)
         # A(1/2)
         LangevinIntegrators.baoab_A_2d!(st.rx, st.ry, st.vx, st.vy, dtT, st.box2::Definitions.Box2)
         # O(1): OU using pre-generated noise (reuse VV noise draw)
@@ -1239,11 +1267,14 @@ function step!(st::SimulationState{T}, spec::BAOASpec{T}, dt::Real; compute_ener
             end
         end
 
+        # Conservative power like VV at end of step (BAOA has no final B)
+        LangevinIntegrators.cons_power_2d!(st.vx, st.vy, st.fx, st.fy, st.dU)
+
         # Update Ekin at end (no extra B)
-        LangevinIntegrators.baoab_B_2d!(st.vx, st.vy, st.fx, st.fy, spec.params, T(0), st.Ekin)
+        LangevinIntegrators.baoab_B_2d!(st.vx, st.vy, st.fx, st.fy, spec.params, T(0), st.Ekin, st.dU)
     else
         # 3D variant
-        LangevinIntegrators.baoab_B_3d!(st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z, spec.params, T(2)*dtT, st.Ekin)
+        LangevinIntegrators.baoab_B_3d!(st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z, spec.params, T(2)*dtT, st.Ekin, st.dU)
         LangevinIntegrators.baoab_A_3d!(st.rx, st.ry, st.rz, st.vx, st.vy, st.vz, dtT, st.box3::Definitions.Box3)
         LangevinIntegrators.vv_prepare_noise!(st.rf_x, st.rf_y, st.vv.noise_scale; beta_z=st.rf_z)
         LangevinIntegrators.baoab_OU_3d!(st.vx, st.vy, st.vz, st.rf_x, st.rf_y, st.rf_z, spec.params, dtT, st.dq)
@@ -1324,7 +1355,10 @@ function step!(st::SimulationState{T}, spec::BAOASpec{T}, dt::Real; compute_ener
             end
         end
 
-        LangevinIntegrators.baoab_B_3d!(st.vx, st.vy, st.vz, st.fx, st.fy, st.fz, spec.params, T(0), st.Ekin)
+        # Conservative power like VV at end of step (BAOA has no final B)
+        LangevinIntegrators.cons_power_3d!(st.vx, st.vy, st.vz, st.fx, st.fy, st.fz, st.dU)
+        
+        LangevinIntegrators.baoab_B_3d!(st.vx, st.vy, st.vz, st.fx, st.fy, st.fz, spec.params, T(0), st.Ekin, st.dU)
     end
 
     st.step += 1
@@ -1567,7 +1601,7 @@ function step!(st::SimulationState{T}, bao::LangevinIntegrators.BAOABParams{T}, 
                 end
             end
         end
-        LangevinIntegrators.baoab_B_2d!(st.vx, st.vy, st.fx, st.fy, bao, dtT, st.Ekin)
+        LangevinIntegrators.baoab_B_2d!(st.vx, st.vy, st.fx, st.fy, bao, dtT, st.Ekin, st.dU)
     else
         LangevinIntegrators.baoab_BA_3d!(st.rx, st.ry, st.rz, st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z, bao, dtT, st.box3::Definitions.Box3)
         LangevinIntegrators.vv_prepare_noise!(st.rf_x, st.rf_y, st.vv.noise_scale; beta_z=st.rf_z)
@@ -1645,7 +1679,7 @@ function step!(st::SimulationState{T}, bao::LangevinIntegrators.BAOABParams{T}, 
                 end
             end
         end
-        LangevinIntegrators.baoab_B_3d!(st.vx, st.vy, st.vz, st.fx, st.fy, st.fz, bao, dtT, st.Ekin)
+        LangevinIntegrators.baoab_B_3d!(st.vx, st.vy, st.vz, st.fx, st.fy, st.fz, bao, dtT, st.Ekin, st.dU)
     end
 
     st.step += 1
@@ -1721,11 +1755,12 @@ function step!(st::SimulationState{T}, bp::BrownianIntegrators.BrownianParams{T}
     end
 
     if D == 2
-        # Draw midpoint noise and compute midpoint positions into vx,vy
-        BrownianIntegrators.bd_prepare_midpoint_2d!(
+        # Draw noise once and compute midpoint positions into vx,vy
+        BrownianIntegrators.bd_prepare_noise_2d!(st.rf_x, st.rf_y)
+        BrownianIntegrators.bd_midpoint_positions_2d!(
             st.rx, st.ry, st.fx, st.fy,
-            st.rf_x, st.rf_y,  # noise vectors (standard normals)
-            st.vx, st.vy,      # reuse velocity buffers as midpoint positions
+            st.rf_x, st.rf_y,
+            st.vx, st.vy,
             bp.gamma, bp.noise_scale,
             dtT, st.box2::Definitions.Box2)
         if st.nb_kind == NB_KIND_LJ
@@ -1825,7 +1860,8 @@ function step!(st::SimulationState{T}, bp::BrownianIntegrators.BrownianParams{T}
             _apply_bonds2!(st, st.fx, st.fy, compute_energy ? st.Epot : nothing, compute_energy)
         end
     else
-        BrownianIntegrators.bd_prepare_midpoint_3d!(
+        BrownianIntegrators.bd_prepare_noise_3d!(st.rf_x, st.rf_y, st.rf_z)
+        BrownianIntegrators.bd_midpoint_positions_3d!(
             st.rx, st.ry, st.rz, st.fx, st.fy, st.fz,
             st.rf_x, st.rf_y, st.rf_z,
             st.vx, st.vy, st.vz,
@@ -1952,6 +1988,29 @@ function step!(st::SimulationState{T}, em::BrownianIntegrators.EMParams{T}, dt::
     st.last_integrator = UInt8(2)
     D = st.rz === nothing ? 2 : 3
 
+    # Neighbor-list maintenance (mirror Brownian EH implementation)
+    do_check = (st.step % st.neigh_interval == 0)
+    if do_check
+        rebuild_needed = if D == 2
+            NeighborLists.update_needed!(st.nbh, st.rx, st.ry;
+                                        skin=st.nbh.skin,
+                                        Lx=st.box2[1], Ly=st.box2[2],
+                                        step=st.step)
+        else
+            NeighborLists.update_needed!(st.nbh, st.rx, st.ry, st.rz;
+                                        skin=st.nbh.skin,
+                                        Lx=st.box3[1], Ly=st.box3[2], Lz=st.box3[3],
+                                        step=st.step)
+        end
+        if rebuild_needed
+            if D == 2
+                NeighborLists.update_neighbors_inplace!(st.nbh, st.rx, st.ry; box = st.box2, step=st.step)
+            else
+                NeighborLists.update_neighbors_inplace!(st.nbh, st.rx, st.ry, st.rz; box = st.box3, step=st.step)
+            end
+        end
+    end
+
     # Ensure forces at t
     if st.step == 0
         if D == 2
@@ -2015,9 +2074,54 @@ function step!(st::SimulationState{T}, em::BrownianIntegrators.EMParams{T}, dt::
         end
     end
 
-    # Position update and dq/dU accumulation
+    # Position update and dq/dU accumulation using midpoint so EPR == UPR
     if D == 2
-        BrownianIntegrators.em_step_2d!(st.rx, st.ry, st.fx, st.fy, em, dtT, st.dq, st.dU, st.box2::Definitions.Box2)
+        # Predictor: draw noise then compute midpoint positions into vx,vy
+        BrownianIntegrators.bd_prepare_noise_2d!(st.rf_x, st.rf_y)
+        BrownianIntegrators.bd_midpoint_positions_2d!(
+            st.rx, st.ry, st.fx, st.fy,
+            st.rf_x, st.rf_y,
+            st.vx, st.vy,
+            em.gamma, em.noise_scale,
+            dtT, st.box2::Definitions.Box2)
+        # Forces at midpoint positions (no energy)
+        if st.nb_kind == NB_KIND_LJ
+            if st.sigma_particle === nothing
+                if st.bonds === nothing
+                    NonBondedForces.lj_forces_soa_noE!(st.vx, st.vy, st.f0x, st.f0y, st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+                else
+                    NonBondedForces.lj_forces_soa_noE_excl!(st.vx, st.vy, st.f0x, st.f0y, st.nbh, st.bonds, st.box2::Definitions.Box2, st.pair_lj)
+                end
+            else
+                NonBondedForces.lj_forces_soa_noE_mixed!(st.vx, st.vy, st.f0x, st.f0y,
+                                                         st.nbh, st.box2::Definitions.Box2,
+                                                         st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
+            end
+        elseif st.nb_kind == NB_KIND_WCA
+            if st.bonds === nothing
+                NonBondedForces.wca_forces_soa_noE!(st.vx, st.vy, st.f0x, st.f0y, st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+            else
+                NonBondedForces.wca_forces_soa_noE_excl!(st.vx, st.vy, st.f0x, st.f0y, st.nbh, st.bonds, st.box2::Definitions.Box2, st.pair_lj)
+            end
+        else
+            @assert st.softrep !== nothing
+            if st.bonds === nothing
+                NonBondedForces.harmonic_rep_forces_soa_noE!(st.vx, st.vy, st.f0x, st.f0y,
+                                                              st.nbh, st.box2::Definitions.Box2, st.softrep)
+            else
+                NonBondedForces.harmonic_rep_forces_soa_noE_excl!(st.vx, st.vy, st.f0x, st.f0y,
+                                                                  st.nbh, st.bonds, st.box2::Definitions.Box2, st.softrep)
+            end
+        end
+        if st.bonds !== nothing
+            _apply_bonds2!(st, st.f0x, st.f0y, nothing, false)
+        end
+        # Finish step: advance positions with midpoint force; accumulate dq and dU equally
+        BrownianIntegrators.bd_finish_step_2d!(
+            st.rx, st.ry, st.f0x, st.f0y,
+            st.rf_x, st.rf_y,
+            em.gamma, em.noise_scale,
+            dtT, st.dq, st.dU, st.box2::Definitions.Box2)
         # New forces
         if compute_energy
             if st.nb_kind == NB_KIND_LJ
@@ -2054,7 +2158,50 @@ function step!(st::SimulationState{T}, em::BrownianIntegrators.EMParams{T}, dt::
             end
         end
     else
-        BrownianIntegrators.em_step_3d!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, em, dtT, st.dq, st.dU, st.box3::Definitions.Box3)
+        # Predictor: draw noise then compute midpoint positions into vx,vy,vz
+        BrownianIntegrators.bd_prepare_noise_3d!(st.rf_x, st.rf_y, st.rf_z)
+        BrownianIntegrators.bd_midpoint_positions_3d!(
+            st.rx, st.ry, st.rz, st.fx, st.fy, st.fz,
+            st.rf_x, st.rf_y, st.rf_z,
+            st.vx, st.vy, st.vz,
+            em.gamma, em.noise_scale,
+            dtT, st.box3::Definitions.Box3)
+        # Forces at midpoint positions (no energy)
+        if st.nb_kind == NB_KIND_LJ
+            if st.sigma_particle === nothing
+                if st.bonds === nothing
+                    NonBondedForces.lj_forces_soa_noE!(st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z, st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+                else
+                    NonBondedForces.lj_forces_soa_noE_excl!(st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z, st.nbh, st.bonds, st.box3::Definitions.Box3, st.pair_lj)
+                end
+            else
+                NonBondedForces.lj_forces_soa_noE_mixed!(st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z,
+                                                         st.nbh, st.box3::Definitions.Box3,
+                                                         st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
+            end
+        elseif st.nb_kind == NB_KIND_WCA
+            if st.bonds === nothing
+                NonBondedForces.wca_forces_soa_noE!(st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z, st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+            else
+                NonBondedForces.wca_forces_soa_noE_excl!(st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z, st.nbh, st.bonds, st.box3::Definitions.Box3, st.pair_lj)
+            end
+        else
+            @assert st.softrep !== nothing
+            if st.bonds === nothing
+                NonBondedForces.harmonic_rep_forces_soa_noE!(st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z, st.nbh, st.box3::Definitions.Box3, st.softrep)
+            else
+                NonBondedForces.harmonic_rep_forces_soa_noE_excl!(st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z, st.nbh, st.bonds, st.box3::Definitions.Box3, st.softrep)
+            end
+        end
+        if st.bonds !== nothing
+            _apply_bonds3!(st, st.f0x, st.f0y, st.f0z, nothing, false)
+        end
+        # Finish step: advance positions with midpoint force; accumulate dq and dU equally
+        BrownianIntegrators.bd_finish_step_3d!(
+            st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
+            st.rf_x, st.rf_y, st.rf_z,
+            em.gamma, em.noise_scale,
+            dtT, st.dq, st.dU, st.box3::Definitions.Box3)
         if compute_energy
             if st.nb_kind == NB_KIND_LJ
                 if st.sigma_particle === nothing
