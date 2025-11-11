@@ -7,6 +7,7 @@ using ..NonBondedForces
 using ..BondedForces
 using ..LangevinIntegrators
 using ..BrownianIntegrators
+using ..Collisions
  
 
 const NL_CHECK_STRIDE = 20  # only check NL rebuild every N steps to cut overhead
@@ -82,6 +83,11 @@ mutable struct SimulationState{T<:AbstractFloat}
     last_integrator::UInt8
     nb_kind::UInt8
     softrep::Union{Nothing,Definitions.SoftRepulsiveParams{T}}
+    # Collision counting (optional)
+    coll_enabled::Bool
+    coll_prev::Union{Nothing,CuArray{UInt8,1}}
+    coll_counts::Union{Nothing,CuArray{Int64,1}}
+    coll_bins::Union{Nothing,CuArray{Int32,2}}
 end
 
 # -------------------------
@@ -406,7 +412,8 @@ function build_simulation(;N::Int,
                          nothing, nothing, nothing,
                          bondlist, bond_spec,
                          vv,
-                         Epot, dq, dU, Ekin, Epot_accum, Ekin_accum, 0, UInt8(0), nb_tag, srp) 
+                         Epot, dq, dU, Ekin, Epot_accum, Ekin_accum, 0, UInt8(0), nb_tag, srp,
+                         false, nothing, nothing, nothing) 
 
     # Assign the appropriate box directly (no extra tuple layer)
     if D == 2
@@ -471,8 +478,11 @@ function step!(st::SimulationState{T}, dt::Real; compute_energy::Bool=true) wher
     if rebuild_needed
         if D == 2
             NeighborLists.update_neighbors_inplace!(st.nbh, st.rx, st.ry; box = st.box2, step=st.step)
+            # Reset collision contact state on rebuild
+            _collisions_reinit_on_rebuild!(st)
         else
             NeighborLists.update_neighbors_inplace!(st.nbh, st.rx, st.ry, st.rz; box = st.box3, step=st.step)
+            _collisions_reinit_on_rebuild!(st)
         end
     end
 
@@ -632,11 +642,13 @@ function step!(st::SimulationState{T}, dt::Real; compute_energy::Bool=true) wher
         LangevinIntegrators.vv_prepare_noise!(st.rf_x, st.rf_y, st.vv.noise_scale; beta_z=nothing)
         LangevinIntegrators.vv_positions_soa!(st.rx, st.ry, st.vx, st.vy, st.f0x, st.f0y,
                                               st.rf_x, st.rf_y, st.vv, dtT, st.box2::Definitions.Box2)
+        _collisions_update_after_positions!(st)
     else
         LangevinIntegrators.vv_prepare_noise!(st.rf_x, st.rf_y, st.vv.noise_scale; beta_z=st.rf_z)
         LangevinIntegrators.vv_positions_soa!(st.rx, st.ry, st.rz, st.vx, st.vy, st.vz,
                                               st.f0x, st.f0y, st.f0z,
                                               st.rf_x, st.rf_y, st.rf_z, st.vv, dtT, st.box3::Definitions.Box3)
+        _collisions_update_after_positions!(st)
     end
 
     # Forces at t + dt (write into fx,fy[,fz])
@@ -843,8 +855,10 @@ function step_graph!(st::SimulationState{T}, dt::Real; compute_energy::Bool=true
         if rebuild_needed
             if D == 2
                 NeighborLists.update_neighbors_inplace!(st.nbh, st.rx, st.ry; box = st.box2, step=st.step)
+                _collisions_reinit_on_rebuild!(st)
             else
                 NeighborLists.update_neighbors_inplace!(st.nbh, st.rx, st.ry, st.rz; box = st.box3, step=st.step)
+                _collisions_reinit_on_rebuild!(st)
             end
         end
     end
@@ -915,8 +929,9 @@ function step_graph!(st::SimulationState{T}, dt::Real; compute_energy::Bool=true
     if D == 2
         CUDA.@captured begin
             LangevinIntegrators.vv_prepare_noise!(st.rf_x, st.rf_y, st.vv.noise_scale; beta_z=nothing)
-            LangevinIntegrators.vv_positions_soa!(st.rx, st.ry, st.vx, st.vy, st.f0x, st.f0y,
-                                                  st.rf_x, st.rf_y, st.vv, dtT, st.box2::Definitions.Box2)
+        LangevinIntegrators.vv_positions_soa!(st.rx, st.ry, st.vx, st.vy, st.f0x, st.f0y,
+                                              st.rf_x, st.rf_y, st.vv, dtT, st.box2::Definitions.Box2)
+        _collisions_update_after_positions!(st)
             if st.nb_kind == NB_KIND_LJ
                 if compute_energy
                     NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.fx, st.fy, st.Epot,
@@ -949,9 +964,10 @@ function step_graph!(st::SimulationState{T}, dt::Real; compute_energy::Bool=true
     else
         CUDA.@captured begin
             LangevinIntegrators.vv_prepare_noise!(st.rf_x, st.rf_y, st.vv.noise_scale; beta_z=st.rf_z)
-            LangevinIntegrators.vv_positions_soa!(st.rx, st.ry, st.rz, st.vx, st.vy, st.vz,
-                                                  st.f0x, st.f0y, st.f0z,
-                                                  st.rf_x, st.rf_y, st.rf_z, st.vv, dtT, st.box3::Definitions.Box3)
+        LangevinIntegrators.vv_positions_soa!(st.rx, st.ry, st.rz, st.vx, st.vy, st.vz,
+                                              st.f0x, st.f0y, st.f0z,
+                                              st.rf_x, st.rf_y, st.rf_z, st.vv, dtT, st.box3::Definitions.Box3)
+        _collisions_update_after_positions!(st)
             if st.nb_kind == NB_KIND_LJ
                 if compute_energy
                     NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot,
@@ -1039,8 +1055,10 @@ function step!(st::SimulationState{T}, spec::BAOASpec{T}, dt::Real; compute_ener
         if rebuild_needed
             if D == 2
                 NeighborLists.update_neighbors_inplace!(st.nbh, st.rx, st.ry; box = st.box2, step=st.step)
+                _collisions_reinit_on_rebuild!(st)
             else
                 NeighborLists.update_neighbors_inplace!(st.nbh, st.rx, st.ry, st.rz; box = st.box3, step=st.step)
+                _collisions_reinit_on_rebuild!(st)
             end
         end
     end
@@ -1200,11 +1218,13 @@ function step!(st::SimulationState{T}, spec::BAOASpec{T}, dt::Real; compute_ener
         LangevinIntegrators.baoab_B_2d!(st.vx, st.vy, st.f0x, st.f0y, spec.params, T(2)*dtT, st.Ekin, st.dU)
         # A(1/2)
         LangevinIntegrators.baoab_A_2d!(st.rx, st.ry, st.vx, st.vy, dtT, st.box2::Definitions.Box2)
+        _collisions_update_after_positions!(st)
         # O(1): OU using pre-generated noise (reuse VV noise draw)
         LangevinIntegrators.vv_prepare_noise!(st.rf_x, st.rf_y, st.vv.noise_scale)
         LangevinIntegrators.baoab_OU_2d!(st.vx, st.vy, st.rf_x, st.rf_y, spec.params, dtT, st.dq)
         # A(1/2)
         LangevinIntegrators.baoab_A_2d!(st.rx, st.ry, st.vx, st.vy, dtT, st.box2::Definitions.Box2)
+        _collisions_update_after_positions!(st)
 
         # forces at t+dt (2D)
         if st.nb_kind == NB_KIND_LJ && st.sigma_pair !== nothing
@@ -1276,9 +1296,11 @@ function step!(st::SimulationState{T}, spec::BAOASpec{T}, dt::Real; compute_ener
         # 3D variant
         LangevinIntegrators.baoab_B_3d!(st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z, spec.params, T(2)*dtT, st.Ekin, st.dU)
         LangevinIntegrators.baoab_A_3d!(st.rx, st.ry, st.rz, st.vx, st.vy, st.vz, dtT, st.box3::Definitions.Box3)
+        _collisions_update_after_positions!(st)
         LangevinIntegrators.vv_prepare_noise!(st.rf_x, st.rf_y, st.vv.noise_scale; beta_z=st.rf_z)
         LangevinIntegrators.baoab_OU_3d!(st.vx, st.vy, st.vz, st.rf_x, st.rf_y, st.rf_z, spec.params, dtT, st.dq)
         LangevinIntegrators.baoab_A_3d!(st.rx, st.ry, st.rz, st.vx, st.vy, st.vz, dtT, st.box3::Definitions.Box3)
+        _collisions_update_after_positions!(st)
 
         # forces at t+dt (3D)
         if st.nb_kind == NB_KIND_LJ && st.sigma_pair !== nothing
@@ -1714,8 +1736,10 @@ function step!(st::SimulationState{T}, bp::BrownianIntegrators.BrownianParams{T}
         if rebuild_needed
             if D == 2
                 NeighborLists.update_neighbors_inplace!(st.nbh, st.rx, st.ry; box=st.box2, step=st.step)
+                _collisions_reinit_on_rebuild!(st)
             else
                 NeighborLists.update_neighbors_inplace!(st.nbh, st.rx, st.ry, st.rz; box=st.box3, step=st.step)
+                _collisions_reinit_on_rebuild!(st)
             end
         end
     end
@@ -1800,6 +1824,7 @@ function step!(st::SimulationState{T}, bp::BrownianIntegrators.BrownianParams{T}
             st.rf_x, st.rf_y,
             bp.gamma, bp.noise_scale,
             dtT, st.dq, st.dU, st.box2::Definitions.Box2)
+        _collisions_update_after_positions!(st)
         if st.nb_kind == NB_KIND_LJ
             if st.sigma_particle === nothing
                 if compute_energy
@@ -1904,6 +1929,7 @@ function step!(st::SimulationState{T}, bp::BrownianIntegrators.BrownianParams{T}
             st.rf_x, st.rf_y, st.rf_z,
             bp.gamma, bp.noise_scale,
             dtT, st.dq, st.dU, st.box3::Definitions.Box3)
+        _collisions_update_after_positions!(st)
         if st.nb_kind == NB_KIND_LJ
             if st.sigma_particle === nothing
                 if compute_energy
@@ -2122,6 +2148,7 @@ function step!(st::SimulationState{T}, em::BrownianIntegrators.EMParams{T}, dt::
             st.rf_x, st.rf_y,
             em.gamma, em.noise_scale,
             dtT, st.dq, st.dU, st.box2::Definitions.Box2)
+        _collisions_update_after_positions!(st)
         # New forces
         if compute_energy
             if st.nb_kind == NB_KIND_LJ
@@ -2202,6 +2229,7 @@ function step!(st::SimulationState{T}, em::BrownianIntegrators.EMParams{T}, dt::
             st.rf_x, st.rf_y, st.rf_z,
             em.gamma, em.noise_scale,
             dtT, st.dq, st.dU, st.box3::Definitions.Box3)
+        _collisions_update_after_positions!(st)
         if compute_energy
             if st.nb_kind == NB_KIND_LJ
                 if st.sigma_particle === nothing

@@ -1,0 +1,460 @@
+module Collisions
+
+using CUDA
+using ..Definitions
+using ..NeighborLists
+
+export enable_collision_counting!, disable_collision_counting!,
+       collisions_reset_counts!, collisions_read_counts!,
+       set_collision_pair_cutoffs!,
+       _collisions_reinit_on_rebuild!, _collisions_update_after_positions!
+
+# Internal helpers -----------------------------------------------------------
+@inline function _mic_fast(dx::T, halfL::T, L::T) where {T<:AbstractFloat}
+    dx -= (dx >  halfL) * L
+    dx += (dx < -halfL) * L
+    return dx
+end
+
+@inline function _lut_index(ti::Int32, tj::Int32, lut::CuDeviceMatrix{Int32})
+    return lut[ti, tj]
+end
+
+function _init_prev2!(
+    rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
+    neighbors_index::CuDeviceVector{Int32}, neighbors_flat::CuDeviceVector{Int32}, counts::CuDeviceVector{Int32},
+    contact_prev::CuDeviceVector{UInt8},
+    cutoff2::T, Lx::T, Ly::T) where {T<:AbstractFloat}
+    i = (blockIdx().x-1)*blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly
+    base  = neighbors_index[i]
+    n     = counts[i]
+    @inbounds for t in 0:Int(n-1)
+        j = neighbors_flat[base + t + 1]
+        dx = _mic_fast(rx[i] - rx[j], halfLx, Lx)
+        dy = _mic_fast(ry[i] - ry[j], halfLy, Ly)
+        r2 = muladd(dx, dx, dy*dy)
+        contact_prev[base + t + 1] = (r2 > zero(T)) & (r2 < cutoff2)
+    end
+    return
+end
+
+function _init_prev2_pair!(
+    rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, typeid::CuDeviceVector{Int32},
+    neighbors_index::CuDeviceVector{Int32}, neighbors_flat::CuDeviceVector{Int32}, counts::CuDeviceVector{Int32},
+    contact_prev::CuDeviceVector{UInt8}, rcut2_pair::CuDeviceMatrix{T},
+    Lx::T, Ly::T) where {T<:AbstractFloat}
+    i = (blockIdx().x-1)*blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly
+    base  = neighbors_index[i]
+    n     = counts[i]
+    ti = typeid[i]
+    @inbounds for t in 0:Int(n-1)
+        j = neighbors_flat[base + t + 1]
+        tj = typeid[j]
+        rc = rcut2_pair[ti, tj]
+        cutoff2 = rc*rc
+        dx = _mic_fast(rx[i] - rx[j], halfLx, Lx)
+        dy = _mic_fast(ry[i] - ry[j], halfLy, Ly)
+        r2 = muladd(dx, dx, dy*dy)
+        contact_prev[base + t + 1] = (r2 > zero(T)) & (r2 < cutoff2)
+    end
+    return
+end
+
+function _init_prev3!(
+    rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
+    neighbors_index::CuDeviceVector{Int32}, neighbors_flat::CuDeviceVector{Int32}, counts::CuDeviceVector{Int32},
+    contact_prev::CuDeviceVector{UInt8},
+    cutoff2::T, Lx::T, Ly::T, Lz::T) where {T<:AbstractFloat}
+    i = (blockIdx().x-1)*blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly; halfLz = T(0.5)*Lz
+    base  = neighbors_index[i]
+    n     = counts[i]
+    @inbounds for t in 0:Int(n-1)
+        j = neighbors_flat[base + t + 1]
+        dx = _mic_fast(rx[i] - rx[j], halfLx, Lx)
+        dy = _mic_fast(ry[i] - ry[j], halfLy, Ly)
+        dz = _mic_fast(rz[i] - rz[j], halfLz, Lz)
+        r2 = muladd(dx, dx, muladd(dy, dy, dz*dz))
+        contact_prev[base + t + 1] = (r2 > zero(T)) & (r2 < cutoff2)
+    end
+    return
+end
+
+function _init_prev3_pair!(
+    rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T}, typeid::CuDeviceVector{Int32},
+    neighbors_index::CuDeviceVector{Int32}, neighbors_flat::CuDeviceVector{Int32}, counts::CuDeviceVector{Int32},
+    contact_prev::CuDeviceVector{UInt8}, rcut2_pair::CuDeviceMatrix{T},
+    Lx::T, Ly::T, Lz::T) where {T<:AbstractFloat}
+    i = (blockIdx().x-1)*blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly; halfLz = T(0.5)*Lz
+    base  = neighbors_index[i]
+    n     = counts[i]
+    ti = typeid[i]
+    @inbounds for t in 0:Int(n-1)
+        j = neighbors_flat[base + t + 1]
+        tj = typeid[j]
+        rc = rcut2_pair[ti, tj]
+        cutoff2 = rc*rc
+        dx = _mic_fast(rx[i] - rx[j], halfLx, Lx)
+        dy = _mic_fast(ry[i] - ry[j], halfLy, Ly)
+        dz = _mic_fast(rz[i] - rz[j], halfLz, Lz)
+        r2 = muladd(dx, dx, muladd(dy, dy, dz*dz))
+        contact_prev[base + t + 1] = (r2 > zero(T)) & (r2 < cutoff2)
+    end
+    return
+end
+
+function _events2!(
+    rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, typeid::CuDeviceVector{Int32},
+    neighbors_index::CuDeviceVector{Int32}, neighbors_flat::CuDeviceVector{Int32}, counts::CuDeviceVector{Int32},
+    contact_prev::CuDeviceVector{UInt8},
+    bin_lut::CuDeviceMatrix{Int32},
+    counts_bins::CuDeviceVector{Int64},
+    cutoff2::T, Lx::T, Ly::T) where {T<:AbstractFloat}
+    i = (blockIdx().x-1)*blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    ti = typeid[i]
+    halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly
+    base  = neighbors_index[i]
+    n     = counts[i]
+    @inbounds for t in 0:Int(n-1)
+        j = neighbors_flat[base + t + 1]
+        if i < j
+            dx = _mic_fast(rx[i] - rx[j], halfLx, Lx)
+            dy = _mic_fast(ry[i] - ry[j], halfLy, Ly)
+            r2 = muladd(dx, dx, dy*dy)
+            cur = (r2 > zero(T)) & (r2 < cutoff2)
+            prev = contact_prev[base + t + 1] != 0
+            if (!prev) & cur
+                tj = typeid[j]
+                b = bin_lut[ti, tj]
+                if b >= 0
+                    CUDA.@atomic counts_bins[Int32(b+1)] += Int64(1)  # 1-based device indexing
+                end
+            end
+            contact_prev[base + t + 1] = cur
+        end
+    end
+    return
+end
+
+function _events2_pair!(
+    rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, typeid::CuDeviceVector{Int32},
+    neighbors_index::CuDeviceVector{Int32}, neighbors_flat::CuDeviceVector{Int32}, counts::CuDeviceVector{Int32},
+    contact_prev::CuDeviceVector{UInt8},
+    bin_lut::CuDeviceMatrix{Int32},
+    counts_bins::CuDeviceVector{Int64},
+    rcut2_pair::CuDeviceMatrix{T}, Lx::T, Ly::T) where {T<:AbstractFloat}
+    i = (blockIdx().x-1)*blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    ti = typeid[i]
+    halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly
+    base  = neighbors_index[i]
+    n     = counts[i]
+    @inbounds for t in 0:Int(n-1)
+        j = neighbors_flat[base + t + 1]
+        if i < j
+            tj = typeid[j]
+            rc = rcut2_pair[ti, tj]
+            cutoff2 = rc*rc
+            dx = _mic_fast(rx[i] - rx[j], halfLx, Lx)
+            dy = _mic_fast(ry[i] - ry[j], halfLy, Ly)
+            r2 = muladd(dx, dx, dy*dy)
+            cur = (r2 > zero(T)) & (r2 < cutoff2)
+            prev = contact_prev[base + t + 1] != 0
+            if (!prev) & cur
+                b = bin_lut[ti, tj]
+                if b >= 0
+                    CUDA.@atomic counts_bins[Int32(b+1)] += Int64(1)
+                end
+            end
+            contact_prev[base + t + 1] = cur
+        end
+    end
+    return
+end
+
+function _events3!(
+    rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T}, typeid::CuDeviceVector{Int32},
+    neighbors_index::CuDeviceVector{Int32}, neighbors_flat::CuDeviceVector{Int32}, counts::CuDeviceVector{Int32},
+    contact_prev::CuDeviceVector{UInt8},
+    bin_lut::CuDeviceMatrix{Int32},
+    counts_bins::CuDeviceVector{Int64},
+    cutoff2::T, Lx::T, Ly::T, Lz::T) where {T<:AbstractFloat}
+    i = (blockIdx().x-1)*blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    ti = typeid[i]
+    halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly; halfLz = T(0.5)*Lz
+    base  = neighbors_index[i]
+    n     = counts[i]
+    @inbounds for t in 0:Int(n-1)
+        j = neighbors_flat[base + t + 1]
+        if i < j
+            dx = _mic_fast(rx[i] - rx[j], halfLx, Lx)
+            dy = _mic_fast(ry[i] - ry[j], halfLy, Ly)
+            dz = _mic_fast(rz[i] - rz[j], halfLz, Lz)
+            r2 = muladd(dx, dx, muladd(dy, dy, dz*dz))
+            cur = (r2 > zero(T)) & (r2 < cutoff2)
+            prev = contact_prev[base + t + 1] != 0
+            if (!prev) & cur
+                tj = typeid[j]
+                b = bin_lut[ti, tj]
+                if b >= 0
+                    CUDA.@atomic counts_bins[Int32(b+1)] += Int64(1)
+                end
+            end
+            contact_prev[base + t + 1] = cur
+        end
+    end
+    return
+end
+
+function _events3_pair!(
+    rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T}, typeid::CuDeviceVector{Int32},
+    neighbors_index::CuDeviceVector{Int32}, neighbors_flat::CuDeviceVector{Int32}, counts::CuDeviceVector{Int32},
+    contact_prev::CuDeviceVector{UInt8},
+    bin_lut::CuDeviceMatrix{Int32},
+    counts_bins::CuDeviceVector{Int64},
+    rcut2_pair::CuDeviceMatrix{T}, Lx::T, Ly::T, Lz::T) where {T<:AbstractFloat}
+    i = (blockIdx().x-1)*blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    ti = typeid[i]
+    halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly; halfLz = T(0.5)*Lz
+    base  = neighbors_index[i]
+    n     = counts[i]
+    @inbounds for t in 0:Int(n-1)
+        j = neighbors_flat[base + t + 1]
+        if i < j
+            tj = typeid[j]
+            rc = rcut2_pair[ti, tj]
+            cutoff2 = rc*rc
+            dx = _mic_fast(rx[i] - rx[j], halfLx, Lx)
+            dy = _mic_fast(ry[i] - ry[j], halfLy, Ly)
+            dz = _mic_fast(rz[i] - rz[j], halfLz, Lz)
+            r2 = muladd(dx, dx, muladd(dy, dy, dz*dz))
+            cur = (r2 > zero(T)) & (r2 < cutoff2)
+            prev = contact_prev[base + t + 1] != 0
+            if (!prev) & cur
+                b = bin_lut[ti, tj]
+                if b >= 0
+                    CUDA.atomic_add!(counts_bins, Int32(b+1), Int64(1))
+                end
+            end
+            contact_prev[base + t + 1] = cur
+        end
+    end
+    return
+end
+
+# Public API -----------------------------------------------------------------
+
+"""
+    enable_collision_counting!(st; ntypes=nothing, bins=:all_pairs)
+
+Allocate and enable GPU collision event counting. By default, creates bins for
+all unordered type pairs (1..ntypes). Users can pass a custom `ntypes`; if not
+given, it is inferred from `maximum(typeid)` on host.
+"""
+function enable_collision_counting!(st; ntypes::Union{Nothing,Int}=nothing, bins::Symbol=:all_pairs)
+    T = eltype(st.rx)
+    N = length(st.rx)
+    # Infer number of types if not provided
+    nt = if ntypes === nothing
+        tid_host = Vector{Int32}(undef, length(st.typeid)); copyto!(tid_host, st.typeid); CUDA.synchronize(); maximum(tid_host)
+    else
+        ntypes
+    end
+    @assert bins == :all_pairs "Only bins=:all_pairs is implemented in this version"
+
+    # Build bin LUT (nt x nt), -1 = ignore. Assign bins for unordered pairs (i<=j)
+    lut_h = fill(Int32(-1), nt, nt)
+    bin = Int32(0)
+    for i in 1:nt
+        for j in i:nt
+            lut_h[i,j] = bin
+            lut_h[j,i] = bin
+            bin += 1
+        end
+    end
+    nbins = Int(bin)
+    st.coll_bins = CuArray(lut_h)
+    st.coll_counts = CUDA.fill(Int64(0), nbins)
+
+    # Allocate contact_prev with current neighbor capacity
+    neighbors_flat = (st.nbh::NeighborLists.NeighborMatrix).neighbors_flat
+    st.coll_prev = CUDA.fill(UInt8(0), length(neighbors_flat))
+    st.coll_enabled = true
+
+    # Initialize contact_prev with current contacts so that the first counted step
+    # does not register pre-existing overlaps as entries.
+    _collisions_reinit_on_rebuild!(st)
+    return st
+end
+
+function disable_collision_counting!(st)
+    st.coll_enabled = false
+    st.coll_prev = nothing
+    st.coll_counts = nothing
+    st.coll_bins = nothing
+    return st
+end
+
+"""
+Reset device-side collision counters to zero (does not touch contact_prev).
+"""
+function collisions_reset_counts!(st)
+    if st.coll_enabled && st.coll_counts !== nothing
+        fill!(st.coll_counts, 0)
+    end
+    return nothing
+end
+
+"""
+    collisions_read_counts!(st) -> Vector{Int64}
+
+Copy device counters to host.
+"""
+function collisions_read_counts!(st)
+    if !st.coll_enabled || st.coll_counts === nothing
+        return Int64[]
+    end
+    host = Vector{Int64}(undef, length(st.coll_counts))
+    copyto!(host, st.coll_counts)
+    CUDA.synchronize()
+    return host
+end
+
+"""
+    set_collision_pair_cutoffs!(st, rcut_pair)
+
+Upload a per-type pair cutoff matrix (ntypes×ntypes) to the device. Values are
+interpreted as distances; the kernels square them internally when comparing r^2.
+If you are already using LJ per-pair cutoffs in the simulation, it is enough to
+assign `st.rcut_pair` directly; this helper mirrors that path for convenience.
+"""
+function set_collision_pair_cutoffs!(st, rcut_pair::AbstractMatrix{<:Real})
+    T = eltype(st.rx)
+    st.rcut_pair = CuArray(T.(rcut_pair))  # store distances; kernels square internally
+    return st
+end
+
+# Hooks called from Simulation.step! -----------------------------------------
+
+"""
+Called when the neighbor list is rebuilt. Resizes and reinitializes
+`coll_prev` to reflect current contacts, and avoids spurious entries.
+"""
+function _collisions_reinit_on_rebuild!(st)
+    T = eltype(st.rx)
+    if !st.coll_enabled; return; end
+    @assert st.nbh isa NeighborLists.NeighborMatrix "Collision counting currently requires NeighborMatrix"
+    nb = (st.nbh::NeighborLists.NeighborMatrix{T})
+    # Ensure coll_prev matches neighbors_flat length
+    if (st.coll_prev === nothing) || (length(st.coll_prev) != length(nb.neighbors_flat))
+        st.coll_prev = CUDA.fill(UInt8(0), length(nb.neighbors_flat))
+    else
+        fill!(st.coll_prev, 0)
+    end
+    # Initialize to current contact state; prefer per-pair rcut if available
+    N = length(st.rx)
+    threads = min(256, N)
+    blocks = cld(N, threads)
+    if st.rz === nothing
+        Lx = st.box2[1]; Ly = st.box2[2]
+        if st.rcut_pair === nothing
+            cutoff2 = T(st.pair_lj.rcut) * T(st.pair_lj.rcut)
+            k = CUDA.@cuda launch=false _init_prev2!(st.rx, st.ry, nb.neighbors_index, nb.neighbors_flat, nb.counts, st.coll_prev, cutoff2, Lx, Ly)
+            k(st.rx, st.ry, nb.neighbors_index, nb.neighbors_flat, nb.counts, st.coll_prev, cutoff2, Lx, Ly; threads, blocks)
+        else
+            k = CUDA.@cuda launch=false _init_prev2_pair!(st.rx, st.ry, st.typeid, nb.neighbors_index, nb.neighbors_flat, nb.counts, st.coll_prev, st.rcut_pair, Lx, Ly)
+            k(st.rx, st.ry, st.typeid, nb.neighbors_index, nb.neighbors_flat, nb.counts, st.coll_prev, st.rcut_pair, Lx, Ly; threads, blocks)
+        end
+    else
+        Lx = st.box3[1]; Ly = st.box3[2]; Lz = st.box3[3]
+        if st.rcut_pair === nothing
+            cutoff2 = T(st.pair_lj.rcut) * T(st.pair_lj.rcut)
+            k = CUDA.@cuda launch=false _init_prev3!(st.rx, st.ry, st.rz, nb.neighbors_index, nb.neighbors_flat, nb.counts, st.coll_prev, cutoff2, Lx, Ly, Lz)
+            k(st.rx, st.ry, st.rz, nb.neighbors_index, nb.neighbors_flat, nb.counts, st.coll_prev, cutoff2, Lx, Ly, Lz; threads, blocks)
+        else
+            k = CUDA.@cuda launch=false _init_prev3_pair!(st.rx, st.ry, st.rz, st.typeid, nb.neighbors_index, nb.neighbors_flat, nb.counts, st.coll_prev, st.rcut_pair, Lx, Ly, Lz)
+            k(st.rx, st.ry, st.rz, st.typeid, nb.neighbors_index, nb.neighbors_flat, nb.counts, st.coll_prev, st.rcut_pair, Lx, Ly, Lz; threads, blocks)
+        end
+    end
+    return nothing
+end
+
+"""
+Called once per step after positions have been advanced and any neighbor rebuild
+has been performed. Detects entry events and increments per-bin counters.
+"""
+function _collisions_update_after_positions!(st)
+    T = eltype(st.rx)
+    if !st.coll_enabled; return; end
+    @assert st.nbh isa NeighborLists.NeighborMatrix "Collision counting currently requires NeighborMatrix"
+    nb = (st.nbh::NeighborLists.NeighborMatrix{T})
+    N = length(st.rx)
+    threads = min(256, N)
+    blocks = cld(N, threads)
+    if st.rz === nothing
+        Lx = st.box2[1]; Ly = st.box2[2]
+        if st.rcut_pair === nothing
+            cutoff2 = T(st.pair_lj.rcut) * T(st.pair_lj.rcut)
+            k = CUDA.@cuda launch=false _events2!(st.rx, st.ry, st.typeid,
+                                                  nb.neighbors_index, nb.neighbors_flat, nb.counts,
+                                                  st.coll_prev,
+                                                  st.coll_bins, st.coll_counts,
+                                                  cutoff2, Lx, Ly)
+            k(st.rx, st.ry, st.typeid,
+              nb.neighbors_index, nb.neighbors_flat, nb.counts,
+              st.coll_prev,
+              st.coll_bins, st.coll_counts,
+              cutoff2, Lx, Ly; threads, blocks)
+        else
+            k = CUDA.@cuda launch=false _events2_pair!(st.rx, st.ry, st.typeid,
+                                                       nb.neighbors_index, nb.neighbors_flat, nb.counts,
+                                                       st.coll_prev,
+                                                       st.coll_bins, st.coll_counts,
+                                                       st.rcut_pair, Lx, Ly)
+            k(st.rx, st.ry, st.typeid,
+              nb.neighbors_index, nb.neighbors_flat, nb.counts,
+              st.coll_prev,
+              st.coll_bins, st.coll_counts,
+              st.rcut_pair, Lx, Ly; threads, blocks)
+        end
+    else
+        Lx = st.box3[1]; Ly = st.box3[2]; Lz = st.box3[3]
+        if st.rcut_pair === nothing
+            cutoff2 = T(st.pair_lj.rcut) * T(st.pair_lj.rcut)
+            k = CUDA.@cuda launch=false _events3!(st.rx, st.ry, st.rz, st.typeid,
+                                                  nb.neighbors_index, nb.neighbors_flat, nb.counts,
+                                                  st.coll_prev,
+                                                  st.coll_bins, st.coll_counts,
+                                                  cutoff2, Lx, Ly, Lz)
+            k(st.rx, st.ry, st.rz, st.typeid,
+              nb.neighbors_index, nb.neighbors_flat, nb.counts,
+              st.coll_prev,
+              st.coll_bins, st.coll_counts,
+              cutoff2, Lx, Ly, Lz; threads, blocks)
+        else
+            k = CUDA.@cuda launch=false _events3_pair!(st.rx, st.ry, st.rz, st.typeid,
+                                                       nb.neighbors_index, nb.neighbors_flat, nb.counts,
+                                                       st.coll_prev,
+                                                       st.coll_bins, st.coll_counts,
+                                                       st.rcut_pair, Lx, Ly, Lz)
+            k(st.rx, st.ry, st.rz, st.typeid,
+              nb.neighbors_index, nb.neighbors_flat, nb.counts,
+              st.coll_prev,
+              st.coll_bins, st.coll_counts,
+              st.rcut_pair, Lx, Ly, Lz; threads, blocks)
+        end
+    end
+    return nothing
+end
+
+end # module
