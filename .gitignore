@@ -5,5 +5,7 @@
 *.gsd
 *.json
 *.log
+*.png
+*.pdf
 /Manifest.toml
 /Documents/*
