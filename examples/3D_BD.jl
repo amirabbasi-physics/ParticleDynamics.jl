@@ -55,7 +55,7 @@ st = build_simulation(N=N, box=box, cutoff=r_cut, skin=0.4f0, cap=cap,
 initialize_simple_cubic_lattice!(st, box)
 
 Filters.set_friction!(st, gamma; filter=Filters.All())
-Filters.set_langevin_temperature!(st, dt, temperature; filter=Filters.All())
+Filters.set_temperature!(st, dt, temperature; filter=Filters.All())
 
 # ---- Brownian parameters ----
 eh = eulerheun(st)
