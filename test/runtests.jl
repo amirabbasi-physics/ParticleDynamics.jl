@@ -35,7 +35,7 @@ CUDA.allowscalar(false)
         @test Filters.count(st, hot_filter) == N - N ÷ 2
         @test Filters.resolve(cold_filter, st) == cold_sel.host
 
-        Filters.set_langevin_temperature!(st, dt,
+        Filters.set_temperature!(st, dt,
             cold_filter => 0.5f0,
             hot_filter  => 2.0f0)
 
@@ -49,7 +49,7 @@ CUDA.allowscalar(false)
 
         # Modify friction via filters and ensure noise scales track it
         Filters.set_friction!(st, 2.0f0; filter=cold_filter)
-        Filters.set_langevin_temperature!(st, dt,
+        Filters.set_temperature!(st, dt,
             cold_filter => 0.5f0)
         gamma_host = Array(st.vv.gamma)
         ns = Array(st.vv.noise_scale)
@@ -66,7 +66,7 @@ CUDA.allowscalar(false)
         ns_bp = Array(bp.noise_scale)
         @test all(abs.(ns_bp[cold_sel.host] .- 0.25f0) .< 1f-6)
 
-        Filters.set_langevin_temperature!(bp, st, dt, 0.75f0; filter=hot_filter)
+        Filters.set_temperature!(bp, st, dt, 0.75f0; filter=hot_filter)
         ns_bp = Array(bp.noise_scale)
         gamma_host = Array(bp.gamma)
         expected_hot_bp = sqrt.(2f0 .* gamma_host[hot_sel.host] .* 0.75f0 .* dt)

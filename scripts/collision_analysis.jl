@@ -14,7 +14,7 @@ begin
     rc("font", family="Times New Roman")
 
     # Average the last n rows of a .log file (VV format with '|' separators)
-    function parse_tail_stats(path::AbstractString; n::Int=10)
+    function parse_tail_stats(path::AbstractString; n::Int=5)
         io = open(path, "r"); lines = readlines(io); close(io)
         if length(lines) < 2
             return nothing
