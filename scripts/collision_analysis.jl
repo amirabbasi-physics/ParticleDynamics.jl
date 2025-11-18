@@ -14,7 +14,7 @@ begin
     rc("font", family="Times New Roman")
 
     # Average the last n rows of a .log file (VV format with '|' separators)
-    function parse_tail_stats(path::AbstractString; n::Int=5)
+    function parse_tail_stats(path::AbstractString; n::Int=10)
         io = open(path, "r"); lines = readlines(io); close(io)
         if length(lines) < 2
             return nothing
@@ -124,8 +124,8 @@ begin
                 push!(yC, μC); push!(yCe, max(σC, 1e-16))
             end
             epsstr = @sprintf("%.1e", eps)
-            axE_phi.errorbar(phis, yE, yerr=yEe, fmt="o-", capsize=3, color=colors[(j-1)%length(colors)+1], label=L"\epsilon = $epsstr")
-            axC_phi.errorbar(phis, yC, yerr=yCe, fmt="s-", capsize=3, color=colors[(j-1)%length(colors)+1], label=L"\epsilon = $epsstr")
+            axE_phi.errorbar(phis, yE .* sqrt(eps) ./ 40000, yerr=yEe, fmt="o-", capsize=3, color=colors[(j-1)%length(colors)+1], label=L"\epsilon = $epsstr")
+            axC_phi.errorbar(phis, yC /40000, yerr=yCe, fmt="s-", capsize=3, color=colors[(j-1)%length(colors)+1], label=L"\epsilon = $epsstr")
         end
 
         for ax in (axE_eps, axC_eps)
