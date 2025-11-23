@@ -8,3 +8,10 @@
 ## Documentation
 
 - Collision event rate (GPU) design and usage: `docs/CollisionRate.md`
+
+## Legacy CUDA GPUs
+
+Pascal-generation GPUs (e.g. GTX 1080 Ti, cc 6.1) are blocked by CUDA 13+/driver 580+. To keep them working without downgrading the driver, the package will try to pin CUDA to a legacy runtime (default `12.4.1`) when it detects cc < 7.5 and a 13.x runtime. You can control this via:
+
+- `NEQSIMGPU_CUDA_COMPAT=off` to skip the downgrade logic.
+- `NEQSIMGPU_CUDA_LEGACY_VERSION=12.3.0` (or similar) to choose a specific runtime version.
