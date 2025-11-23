@@ -14,4 +14,7 @@
 Pascal-generation GPUs (e.g. GTX 1080 Ti, cc 6.1) are blocked by CUDA 13+/driver 580+. To keep them working without downgrading the driver, the package will try to pin CUDA to a legacy runtime (default `12.4.1`) when it detects cc < 7.5 and a 13.x runtime. You can control this via:
 
 - `NEQSIMGPU_CUDA_COMPAT=off` to skip the downgrade logic.
+- `NEQSIMGPU_CUDA_COMPAT=force` to force pinning even if detection does not trigger.
 - `NEQSIMGPU_CUDA_LEGACY_VERSION=12.3.0` (or similar) to choose a specific runtime version.
+
+If you still see capability errors on a legacy GPU, set `NEQSIMGPU_CUDA_COMPAT=force` and retry so the runtime is pinned before compilation.

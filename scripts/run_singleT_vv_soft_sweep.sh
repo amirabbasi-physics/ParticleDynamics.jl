@@ -2,9 +2,9 @@
 set -euo pipefail
 
 # Sweep parameters
-phis=(0.01 0.05 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9)
+phis=(0.001 0.005)
 dts=(2e-6)
-epsilons=(1.0e7 1.0e8 5.0e8 1e9)
+epsilons=(1.0e7 1.0e8)
 
 # Resolve repo root (directory of this script, up one level if needed)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
