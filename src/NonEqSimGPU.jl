@@ -89,15 +89,15 @@ function _maybe_set_cuda_compat!()
             end
             @warn "Legacy GPU detected; attempting to pin CUDA runtime" device=CUDA.name(dev) capability=cap runtime=runtime target mode
             try
-                CUDA.set_runtime_version!(target; force=true)
+                CUDA.set_runtime_version!(target)
                 new_runtime = CUDA.runtime_version()
                 if new_runtime >= v"13.0.0"
-                    @warn "CUDA runtime pin did not take effect; you may still see capability errors" device=CUDA.name(dev) capability=cap runtime=new_runtime target
+                    @warn "CUDA runtime pin did not take effect; you may still see capability errors (driver may not ship compat libs)" device=CUDA.name(dev) capability=cap runtime=new_runtime target
                 else
                     @info "CUDA runtime pinned for legacy GPU" device=CUDA.name(dev) capability=cap runtime=new_runtime target
                 end
             catch err
-                @warn "Failed to pin CUDA runtime for legacy GPU; driver may be too new" device=CUDA.name(dev) capability=cap runtime=runtime target error=err
+                @warn "Failed to pin CUDA runtime for legacy GPU; driver may be too new or missing compatibility libraries" device=CUDA.name(dev) capability=cap runtime=runtime target error=err
             end
         end
     catch err
