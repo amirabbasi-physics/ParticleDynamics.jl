@@ -59,4 +59,50 @@ println("##########################################################")
 println("                  NonEqSimGPU Loaded                ")
 println("##########################################################")
 
+function __init__()
+    _maybe_set_cuda_compat!()
+end
+
+# Allow legacy GPUs (e.g. Pascal cc 6.x) to run by pinning to a CUDA runtime
+# below the 13.x cutoff on drivers that default to newer runtimes.
+function _maybe_set_cuda_compat!()
+    mode = get(ENV, "NEQSIMGPU_CUDA_COMPAT", "auto")
+    mode == "off" && return
+
+    target = try
+        VersionNumber(get(ENV, "NEQSIMGPU_CUDA_LEGACY_VERSION", "12.4.1"))
+    catch
+        v"12.4.1"
+    end
+
+    force = mode == "force"
+
+    try
+        dev = CUDA.device()
+        cap = CUDA.capability(dev)
+        runtime = CUDA.runtime_version()
+        needs_downgrade = cap < v"7.5" && runtime >= v"13.0.0"
+        if (needs_downgrade || force) && runtime > target
+            if !isdefined(CUDA, :set_runtime_version!)
+                @warn "CUDA.set_runtime_version! not available; cannot adjust runtime automatically" device=CUDA.name(dev) capability=cap runtime=runtime
+                return
+            end
+            @warn "Legacy GPU detected; attempting to pin CUDA runtime" device=CUDA.name(dev) capability=cap runtime=runtime target mode
+            try
+                CUDA.set_runtime_version!(target; force=true)
+                new_runtime = CUDA.runtime_version()
+                if new_runtime >= v"13.0.0"
+                    @warn "CUDA runtime pin did not take effect; you may still see capability errors" device=CUDA.name(dev) capability=cap runtime=new_runtime target
+                else
+                    @info "CUDA runtime pinned for legacy GPU" device=CUDA.name(dev) capability=cap runtime=new_runtime target
+                end
+            catch err
+                @warn "Failed to pin CUDA runtime for legacy GPU; driver may be too new" device=CUDA.name(dev) capability=cap runtime=runtime target error=err
+            end
+        end
+    catch err
+        @warn "Legacy CUDA compatibility probe failed; leaving defaults" error=err
+    end
+end
+
 end # module NonEqSimGPU
