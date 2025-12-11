@@ -12,14 +12,18 @@ export BrownianParams,
 struct BrownianParams{T<:AbstractFloat}
     gamma::CuArray{T,1}
     noise_scale::CuArray{T,1}
-    function BrownianParams{T}(gamma::CuArray{T,1}, noise_scale::CuArray{T,1}) where {T<:AbstractFloat}
+    corr_time::Union{Nothing,CuArray{T,1}}
+    function BrownianParams{T}(gamma::CuArray{T,1}, noise_scale::CuArray{T,1}, corr_time::Union{Nothing,CuArray{T,1}}=nothing) where {T<:AbstractFloat}
         @assert length(gamma) == length(noise_scale)
-        new{T}(gamma, noise_scale)
+        corr_time !== nothing && @assert length(corr_time) == length(gamma)
+        new{T}(gamma, noise_scale, corr_time)
     end
 end
 
 BrownianParams(gamma::CuArray{T,1}, noise_scale::CuArray{T,1}) where {T<:AbstractFloat} =
-    BrownianParams{T}(gamma, noise_scale)
+    BrownianParams{T}(gamma, noise_scale, nothing)
+BrownianParams(gamma::CuArray{T,1}, noise_scale::CuArray{T,1}, corr_time::Union{Nothing,CuArray{T,1}}) where {T<:AbstractFloat} =
+    BrownianParams{T}(gamma, noise_scale, corr_time)
 
 function BrownianParams{T}(gamma::Real, temperature::Real, dt::Real, N::Integer) where {T<:AbstractFloat}
     γ = T(gamma)
@@ -28,7 +32,7 @@ function BrownianParams{T}(gamma::Real, temperature::Real, dt::Real, N::Integer)
     gamma_vec = CUDA.fill(γ, N)
     scale = sqrt(T(2) * γ * Tval * Δt)
     noise_vec = CUDA.fill(scale, N)
-    return BrownianParams{T}(gamma_vec, noise_vec)
+    return BrownianParams{T}(gamma_vec, noise_vec, nothing)
 end
 
 function BrownianParams(::Type{T}, gamma::Real, temperature::Real, dt::Real, N::Integer) where {T<:AbstractFloat}
@@ -39,13 +43,16 @@ end
 struct EMParams{T<:AbstractFloat}
     gamma::CuArray{T,1}
     noise_scale::CuArray{T,1}
-    function EMParams{T}(gamma::CuArray{T,1}, noise_scale::CuArray{T,1}) where {T<:AbstractFloat}
+    corr_time::Union{Nothing,CuArray{T,1}}
+    function EMParams{T}(gamma::CuArray{T,1}, noise_scale::CuArray{T,1}, corr_time::Union{Nothing,CuArray{T,1}}=nothing) where {T<:AbstractFloat}
         @assert length(gamma) == length(noise_scale)
-        new{T}(gamma, noise_scale)
+        corr_time !== nothing && @assert length(corr_time) == length(gamma)
+        new{T}(gamma, noise_scale, corr_time)
     end
 end
 
-EMParams(gamma::CuArray{T,1}, noise_scale::CuArray{T,1}) where {T<:AbstractFloat} = EMParams{T}(gamma, noise_scale)
+EMParams(gamma::CuArray{T,1}, noise_scale::CuArray{T,1}) where {T<:AbstractFloat} = EMParams{T}(gamma, noise_scale, nothing)
+EMParams(gamma::CuArray{T,1}, noise_scale::CuArray{T,1}, corr_time::Union{Nothing,CuArray{T,1}}) where {T<:AbstractFloat} = EMParams{T}(gamma, noise_scale, corr_time)
 
 function BrownianParams(gamma::Real, temperature::Real, dt::Real, N::Integer)
     inferred = promote_type(float(typeof(gamma)), float(typeof(temperature)), float(typeof(dt)))
@@ -84,23 +91,97 @@ function _noise3!(ξx::CuDeviceVector{T}, ξy::CuDeviceVector{T}, ξz::CuDeviceV
     return
 end
 
-function bd_prepare_noise_2d!(ξx::CuArray{T,1}, ξy::CuArray{T,1}) where {T<:AbstractFloat}
+function _noise2_ou!(ξx::CuDeviceVector{T}, ξy::CuDeviceVector{T},
+                     noise_scale::CuDeviceVector{T}, corr_time::CuDeviceVector{T},
+                     state_x::CuDeviceVector{T}, state_y::CuDeviceVector{T},
+                     dt::T) where {T<:AbstractFloat}
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    N = length(ξx); if i > N; return; end
+    @inbounds begin
+        τ = corr_time[i]
+        if τ <= zero(T)
+            valx = randn(T); valy = randn(T)
+            ξx[i] = valx; ξy[i] = valy
+            state_x[i] = valx; state_y[i] = valy
+        else
+            a = exp(-dt / τ)
+            b = sqrt(max(one(T) - a*a, zero(T)))
+            nx = a * state_x[i] + b * randn(T)
+            ny = a * state_y[i] + b * randn(T)
+            ξx[i] = nx; ξy[i] = ny
+            state_x[i] = nx; state_y[i] = ny
+        end
+    end
+    return
+end
+
+function _noise3_ou!(ξx::CuDeviceVector{T}, ξy::CuDeviceVector{T}, ξz::CuDeviceVector{T},
+                     noise_scale::CuDeviceVector{T}, corr_time::CuDeviceVector{T},
+                     state_x::CuDeviceVector{T}, state_y::CuDeviceVector{T}, state_z::CuDeviceVector{T},
+                     dt::T) where {T<:AbstractFloat}
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    N = length(ξx); if i > N; return; end
+    @inbounds begin
+        τ = corr_time[i]
+        if τ <= zero(T)
+            valx = randn(T); valy = randn(T); valz = randn(T)
+            ξx[i] = valx; ξy[i] = valy; ξz[i] = valz
+            state_x[i] = valx; state_y[i] = valy; state_z[i] = valz
+        else
+            a = exp(-dt / τ)
+            b = sqrt(max(one(T) - a*a, zero(T)))
+            nx = a * state_x[i] + b * randn(T)
+            ny = a * state_y[i] + b * randn(T)
+            nz = a * state_z[i] + b * randn(T)
+            ξx[i] = nx; ξy[i] = ny; ξz[i] = nz
+            state_x[i] = nx; state_y[i] = ny; state_z[i] = nz
+        end
+    end
+    return
+end
+
+function bd_prepare_noise_2d!(ξx::CuArray{T,1}, ξy::CuArray{T,1};
+                              noise_scale::Union{Nothing,CuArray{T,1}}=nothing,
+                              corr_time::Union{Nothing,CuArray{T,1}}=nothing,
+                              state_x::Union{Nothing,CuArray{T,1}}=nothing,
+                              state_y::Union{Nothing,CuArray{T,1}}=nothing,
+                              dt::Union{Nothing,T}=nothing) where {T<:AbstractFloat}
     @assert length(ξx) == length(ξy)
     N = length(ξx)
     threads = min(256, N)
     blocks = cld(N, threads)
-    k = CUDA.@cuda launch=false _noise2!(ξx, ξy)
-    k(ξx, ξy; threads, blocks)
+    if corr_time === nothing
+        k = CUDA.@cuda launch=false _noise2!(ξx, ξy)
+        k(ξx, ξy; threads, blocks)
+    else
+        @assert noise_scale !== nothing && state_x !== nothing && state_y !== nothing
+        @assert dt !== nothing "dt required for correlated noise"
+        k = CUDA.@cuda launch=false _noise2_ou!(ξx, ξy, noise_scale, corr_time, state_x, state_y, dt::T)
+        k(ξx, ξy, noise_scale, corr_time, state_x, state_y, dt::T; threads, blocks)
+    end
     return nothing
 end
 
-function bd_prepare_noise_3d!(ξx::CuArray{T,1}, ξy::CuArray{T,1}, ξz::CuArray{T,1}) where {T<:AbstractFloat}
+function bd_prepare_noise_3d!(ξx::CuArray{T,1}, ξy::CuArray{T,1}, ξz::CuArray{T,1};
+                              noise_scale::Union{Nothing,CuArray{T,1}}=nothing,
+                              corr_time::Union{Nothing,CuArray{T,1}}=nothing,
+                              state_x::Union{Nothing,CuArray{T,1}}=nothing,
+                              state_y::Union{Nothing,CuArray{T,1}}=nothing,
+                              state_z::Union{Nothing,CuArray{T,1}}=nothing,
+                              dt::Union{Nothing,T}=nothing) where {T<:AbstractFloat}
     @assert length(ξx) == length(ξy) == length(ξz)
     N = length(ξx)
     threads = min(256, N)
     blocks = cld(N, threads)
-    k = CUDA.@cuda launch=false _noise3!(ξx, ξy, ξz)
-    k(ξx, ξy, ξz; threads, blocks)
+    if corr_time === nothing
+        k = CUDA.@cuda launch=false _noise3!(ξx, ξy, ξz)
+        k(ξx, ξy, ξz; threads, blocks)
+    else
+        @assert noise_scale !== nothing && state_x !== nothing && state_y !== nothing && state_z !== nothing
+        @assert dt !== nothing "dt required for correlated noise"
+        k = CUDA.@cuda launch=false _noise3_ou!(ξx, ξy, ξz, noise_scale, corr_time, state_x, state_y, state_z, dt::T)
+        k(ξx, ξy, ξz, noise_scale, corr_time, state_x, state_y, state_z, dt::T; threads, blocks)
+    end
     return nothing
 end
 

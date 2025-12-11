@@ -1,5 +1,5 @@
 using NonEqSimGPU
-using NonEqSimGPU: Simulation, BrownianIntegrators
+using NonEqSimGPU: Simulation, BrownianIntegrators, LangevinIntegrators
 using NonEqSimGPU.Filters
 using CUDA
 using Test
@@ -10,8 +10,7 @@ CUDA.allowscalar(false)
     @testset "Filters" begin
         N = 16
         dt = 0.002f0
-        st = Simulation.build_simulation(D=3,
-                                         N=N,
+        st = Simulation.build_simulation(N=N,
                                          box=(20f0, 20f0, 20f0),
                                          cutoff=2.5f0,
                                          skin=0.3f0,
@@ -97,6 +96,48 @@ CUDA.allowscalar(false)
         CUDA.synchronize()
         dq_host = Array(st.dq)
         @test all(dq_host[idx_sel.host] .== 5.0f0)
+    end
+
+    @testset "Correlated noise" begin
+        N = 8
+        dt = 0.001f0
+        st = Simulation.build_simulation(N=N,
+                                         box=(10f0, 10f0),
+                                         cutoff=2.5f0,
+                                         skin=0.3f0,
+                                         cap=Int32(16),
+                                         neigh_interval=5,
+                                         gamma=1f0,
+                                         init_temperature=1f0,
+                                         noise_corr_time=0.05f0)
+        @test st.vv.corr_time !== nothing
+        @test st.ou_x !== nothing && st.ou_y !== nothing
+
+        LangevinIntegrators.vv_prepare_noise!(st.rf_x, st.rf_y, st.vv.noise_scale;
+                                              beta_z=nothing,
+                                              corr_time=st.vv.corr_time,
+                                              state_x=st.ou_x, state_y=st.ou_y, state_z=nothing,
+                                              dt=dt)
+        CUDA.synchronize()
+        @test all(isfinite.(Array(st.rf_x)))
+
+        Filters.set_corr_time!(st, 0.1f0; filter=Filters.All())
+        CUDA.synchronize()
+        @test all(abs.(Array(st.vv.corr_time) .- 0.1f0) .< 1f-6)
+
+        bp = BrownianIntegrators.BrownianParams(st)
+        @test bp.corr_time !== nothing
+        bp = Filters.set_corr_time!(bp, 0.2f0)
+        @test bp.corr_time !== nothing
+        @test all(abs.(Array(bp.corr_time) .- 0.2f0) .< 1f-6)
+
+        BrownianIntegrators.bd_prepare_noise_2d!(st.rf_x, st.rf_y;
+                                                 noise_scale=bp.noise_scale,
+                                                 corr_time=bp.corr_time,
+                                                 state_x=st.ou_x, state_y=st.ou_y,
+                                                 dt=dt)
+        CUDA.synchronize()
+        @test all(isfinite.(Array(st.rf_x)))
     end
 
 end

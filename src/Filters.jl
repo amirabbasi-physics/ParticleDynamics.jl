@@ -5,11 +5,12 @@ using CUDA
 using CUDA: CuArray, CuDeviceVector
 using ..Simulation: SimulationState
 using ..BrownianIntegrators
+using ..LangevinIntegrators
 
 export Filter, All, TypeIDs, Indices, Selection,
        resolve, resolve_gpu, selection, count,
        assign_scalar!, assign_values!, gather, sum,
-       set_noise_scale!, set_temperature!, set_friction!
+       set_noise_scale!, set_temperature!, set_friction!, set_corr_time!
 
 abstract type Filter end
 
@@ -145,6 +146,30 @@ function _set_noise_from_gamma!(noise_scale::CuArray{T,1},
     k = CUDA.@cuda launch=false _set_noise_gamma_kernel!(noise_scale, gamma, idx, dt, temperature)
     CUDA.@sync k(noise_scale, gamma, idx, dt, temperature; threads, blocks)
     return
+end
+
+function _ensure_corr_time_array(st::SimulationState{T}) where {T<:AbstractFloat}
+    if st.vv.corr_time === nothing
+        corr = CUDA.fill(zero(T), length(st.rx))
+        st.vv = LangevinIntegrators.VVParams{T}(st.vv.gamma, st.vv.mass, st.vv.noise_scale, corr)
+    end
+    return st.vv.corr_time
+end
+
+function _ensure_corr_time_array(bp::BrownianIntegrators.BrownianParams{T}) where {T<:AbstractFloat}
+    if bp.corr_time === nothing
+        corr = CUDA.fill(zero(T), length(bp.gamma))
+        return BrownianIntegrators.BrownianParams{T}(bp.gamma, bp.noise_scale, corr)
+    end
+    return bp
+end
+
+function _ensure_corr_time_array(em::BrownianIntegrators.EMParams{T}) where {T<:AbstractFloat}
+    if em.corr_time === nothing
+        corr = CUDA.fill(zero(T), length(em.gamma))
+        return BrownianIntegrators.EMParams{T}(em.gamma, em.noise_scale, corr)
+    end
+    return em
 end
 
 # -----------------------------------------------------------------------------
@@ -383,6 +408,51 @@ function set_noise_scale!(bp::BrownianIntegrators.BrownianParams{T}, st::Simulat
         set_noise_scale!(bp, st, f, val)
     end
     return bp
+end
+
+# Correlation time setters (allocates corr_time array when first used; τ<=0 disables correlation)
+function set_corr_time!(st::SimulationState{T}, value::Real; filter::Filter=All()) where {T<:AbstractFloat}
+    corr = _ensure_corr_time_array(st)
+    assign_scalar!(corr, st; filter=filter, value=value)
+    return corr
+end
+
+function set_corr_time!(st::SimulationState{T}, value::Real, sel::Selection) where {T<:AbstractFloat}
+    corr = _ensure_corr_time_array(st)
+    assign_scalar!(corr, sel, value)
+    return corr
+end
+
+function set_corr_time!(st::SimulationState{T}, value::Real, idx::CuArray{Int32,1}) where {T<:AbstractFloat}
+    corr = _ensure_corr_time_array(st)
+    assign_scalar!(corr, idx, value)
+    return corr
+end
+
+function set_corr_time!(st::SimulationState, mapping::AbstractDict{<:Filter,<:Real})
+    for (f, val) in mapping
+        set_corr_time!(st, val; filter=f)
+    end
+    return st
+end
+
+function set_corr_time!(st::SimulationState, pairs::Pair{<:Filter,<:Real}...)
+    for (f, val) in pairs
+        set_corr_time!(st, val; filter=f)
+    end
+    return st
+end
+
+function set_corr_time!(bp::BrownianIntegrators.BrownianParams{T}, value::Real) where {T<:AbstractFloat}
+    bp2 = _ensure_corr_time_array(bp)
+    fill!(bp2.corr_time, T(value))
+    return bp2
+end
+
+function set_corr_time!(em::BrownianIntegrators.EMParams{T}, value::Real) where {T<:AbstractFloat}
+    em2 = _ensure_corr_time_array(em)
+    fill!(em2.corr_time, T(value))
+    return em2
 end
 
 function set_friction!(st::SimulationState, value::Real; filter::Filter=All())

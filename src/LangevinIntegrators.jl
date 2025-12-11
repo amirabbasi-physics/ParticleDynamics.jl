@@ -20,12 +20,22 @@ struct VVParams{T<:AbstractFloat}
     gamma::CuArray{T,1}
     mass::T
     noise_scale::CuArray{T,1}
+    corr_time::Union{Nothing,CuArray{T,1}}
+end
+VVParams(gamma::CuArray{T,1}, mass::T, noise_scale::CuArray{T,1}; corr_time::Union{Nothing,CuArray{T,1}}=nothing) where {T<:AbstractFloat} = begin
+    @assert corr_time === nothing || length(corr_time) == length(gamma)
+    VVParams{T}(gamma, mass, noise_scale, corr_time)
 end
 
 struct BAOABParams{T<:AbstractFloat}
     gamma::CuArray{T,1}
     mass::T
     noise_scale::CuArray{T,1}
+    corr_time::Union{Nothing,CuArray{T,1}}
+end
+BAOABParams(gamma::CuArray{T,1}, mass::T, noise_scale::CuArray{T,1}; corr_time::Union{Nothing,CuArray{T,1}}=nothing) where {T<:AbstractFloat} = begin
+    @assert corr_time === nothing || length(corr_time) == length(gamma)
+    BAOABParams{T}(gamma, mass, noise_scale, corr_time)
 end
 
 # ------------------------------------------------------------------
@@ -60,21 +70,102 @@ function _vv_noise3_kernel!(beta_x::CuDeviceVector{T},
     return
 end
 
+function _vv_noise2_ou_kernel!(beta_x::CuDeviceVector{T},
+                               beta_y::CuDeviceVector{T},
+                               noise_scale::CuDeviceVector{T},
+                               corr_time::CuDeviceVector{T},
+                               state_x::CuDeviceVector{T},
+                               state_y::CuDeviceVector{T},
+                               dt::T) where {T<:AbstractFloat}
+    i = (blockIdx().x-1)*blockDim().x + threadIdx().x
+    N = length(beta_x); if i > N; return; end
+    @inbounds begin
+        s = noise_scale[i]
+        τ = corr_time[i]
+        if τ <= zero(T)
+            # Fallback to white noise if correlation time is zero or negative
+            valx = s * randn(T)
+            valy = s * randn(T)
+            beta_x[i] = valx; beta_y[i] = valy
+            state_x[i] = valx; state_y[i] = valy
+        else
+            a = exp(-dt / τ)
+            b = sqrt(max(one(T) - a*a, zero(T)))
+            nx = a * state_x[i] + b * s * randn(T)
+            ny = a * state_y[i] + b * s * randn(T)
+            beta_x[i] = nx; beta_y[i] = ny
+            state_x[i] = nx; state_y[i] = ny
+        end
+    end
+    return
+end
+
+function _vv_noise3_ou_kernel!(beta_x::CuDeviceVector{T},
+                               beta_y::CuDeviceVector{T},
+                               beta_z::CuDeviceVector{T},
+                               noise_scale::CuDeviceVector{T},
+                               corr_time::CuDeviceVector{T},
+                               state_x::CuDeviceVector{T},
+                               state_y::CuDeviceVector{T},
+                               state_z::CuDeviceVector{T},
+                               dt::T) where {T<:AbstractFloat}
+    i = (blockIdx().x-1)*blockDim().x + threadIdx().x
+    N = length(beta_x); if i > N; return; end
+    @inbounds begin
+        s = noise_scale[i]
+        τ = corr_time[i]
+        if τ <= zero(T)
+            valx = s * randn(T); valy = s * randn(T); valz = s * randn(T)
+            beta_x[i] = valx; beta_y[i] = valy; beta_z[i] = valz
+            state_x[i] = valx; state_y[i] = valy; state_z[i] = valz
+        else
+            a = exp(-dt / τ)
+            b = sqrt(max(one(T) - a*a, zero(T)))
+            nx = a * state_x[i] + b * s * randn(T)
+            ny = a * state_y[i] + b * s * randn(T)
+            nz = a * state_z[i] + b * s * randn(T)
+            beta_x[i] = nx; beta_y[i] = ny; beta_z[i] = nz
+            state_x[i] = nx; state_y[i] = ny; state_z[i] = nz
+        end
+    end
+    return
+end
+
 function vv_prepare_noise!(beta_x::CuArray{T,1},
                            beta_y::CuArray{T,1},
                            noise_scale::CuArray{T,1};
-                           beta_z::Union{Nothing,CuArray{T,1}}=nothing) where {T<:AbstractFloat}
+                           beta_z::Union{Nothing,CuArray{T,1}}=nothing,
+                           corr_time::Union{Nothing,CuArray{T,1}}=nothing,
+                           state_x::Union{Nothing,CuArray{T,1}}=nothing,
+                           state_y::Union{Nothing,CuArray{T,1}}=nothing,
+                           state_z::Union{Nothing,CuArray{T,1}}=nothing,
+                           dt::Union{Nothing,T}=nothing) where {T<:AbstractFloat}
     @assert length(beta_x) == length(noise_scale) == length(beta_y)
     N = length(beta_x)
     threads = (N < 100_000) ? 128 : 256
     blocks  = cld(N, threads)
+    use_correlated = (corr_time !== nothing)
     if beta_z === nothing
-        k = CUDA.@cuda launch=false _vv_noise2_kernel!(beta_x, beta_y, noise_scale)
-        k(beta_x, beta_y, noise_scale; threads, blocks)
+        if use_correlated
+            @assert state_x !== nothing && state_y !== nothing "OU state buffers required for correlated noise"
+            @assert dt !== nothing "dt required for correlated noise"
+            k = CUDA.@cuda launch=false _vv_noise2_ou_kernel!(beta_x, beta_y, noise_scale, corr_time, state_x, state_y, dt::T)
+            k(beta_x, beta_y, noise_scale, corr_time, state_x, state_y, dt::T; threads, blocks)
+        else
+            k = CUDA.@cuda launch=false _vv_noise2_kernel!(beta_x, beta_y, noise_scale)
+            k(beta_x, beta_y, noise_scale; threads, blocks)
+        end
     else
         @assert length(beta_z) == length(noise_scale)
-        k = CUDA.@cuda launch=false _vv_noise3_kernel!(beta_x, beta_y, beta_z, noise_scale)
-        k(beta_x, beta_y, beta_z, noise_scale; threads, blocks)
+        if use_correlated
+            @assert state_x !== nothing && state_y !== nothing && state_z !== nothing "OU state buffers required for correlated noise"
+            @assert dt !== nothing "dt required for correlated noise"
+            k = CUDA.@cuda launch=false _vv_noise3_ou_kernel!(beta_x, beta_y, beta_z, noise_scale, corr_time, state_x, state_y, state_z, dt::T)
+            k(beta_x, beta_y, beta_z, noise_scale, corr_time, state_x, state_y, state_z, dt::T; threads, blocks)
+        else
+            k = CUDA.@cuda launch=false _vv_noise3_kernel!(beta_x, beta_y, beta_z, noise_scale)
+            k(beta_x, beta_y, beta_z, noise_scale; threads, blocks)
+        end
     end
     return nothing
 end
@@ -382,7 +473,7 @@ function _baoab_OU3!(vx::CuDeviceVector{T}, vy::CuDeviceVector{T}, vz::CuDeviceV
         dtA = Float64(dt)
         mA = Float64(mass)
         c  = exp(-gA*dtA/mA)
-        r = sqrt((one(T) - c*c) / (T(2)*g*dt*mass))
+        r = sqrt((one(T) - c*c) / (T(2)*gA*dtA*mA))
 
         vpx = Float64(vx[i]); vpy = Float64(vy[i]); vpz = Float64(vz[i])
         bx  = Float64(beta_x[i]); by = Float64(beta_y[i]); bz = Float64(beta_z[i])
