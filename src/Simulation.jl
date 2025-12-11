@@ -39,6 +39,10 @@ mutable struct SimulationState{T<:AbstractFloat}
     # per-step random impulse (shared between pos/vel updates)
     rf_x::CuArray{T,1}; rf_y::CuArray{T,1}
     rf_z::Union{Nothing,CuArray{T,1}}
+    # persistent OU noise state (used when corr_time is set)
+    ou_x::Union{Nothing,CuArray{T,1}}
+    ou_y::Union{Nothing,CuArray{T,1}}
+    ou_z::Union{Nothing,CuArray{T,1}}
 
     # per-particle type id
     typeid::CuArray{Int32,1}
@@ -120,11 +124,11 @@ struct EMSpec{T<:AbstractFloat} <: IntegratorSpec{T}
 end
 
 velocityverlet(st::SimulationState{T}) where {T<:AbstractFloat} = VVSpec{T}(st.vv)
-baoab(st::SimulationState{T}) where {T<:AbstractFloat} = BAOABSpec{T}(LangevinIntegrators.BAOABParams{T}(st.vv.gamma, st.vv.mass, st.vv.noise_scale))
-baoa(st::SimulationState{T}) where {T<:AbstractFloat} = BAOASpec{T}(LangevinIntegrators.BAOABParams{T}(st.vv.gamma, st.vv.mass, st.vv.noise_scale))
-gsm(st::SimulationState{T})  where {T<:AbstractFloat} = GSMSpec{T}(LangevinIntegrators.BAOABParams{T}(st.vv.gamma, st.vv.mass, st.vv.noise_scale))
+baoab(st::SimulationState{T}) where {T<:AbstractFloat} = BAOABSpec{T}(LangevinIntegrators.BAOABParams{T}(st.vv.gamma, st.vv.mass, st.vv.noise_scale, st.vv.corr_time))
+baoa(st::SimulationState{T}) where {T<:AbstractFloat} = BAOASpec{T}(LangevinIntegrators.BAOABParams{T}(st.vv.gamma, st.vv.mass, st.vv.noise_scale, st.vv.corr_time))
+gsm(st::SimulationState{T})  where {T<:AbstractFloat} = GSMSpec{T}(LangevinIntegrators.BAOABParams{T}(st.vv.gamma, st.vv.mass, st.vv.noise_scale, st.vv.corr_time))
 eulerheun(st::SimulationState{T}) where {T<:AbstractFloat} = BrownianSpec{T}(BrownianIntegrators.BrownianParams(st))
-eulermaruyama(st::SimulationState{T}) where {T<:AbstractFloat} = EMSpec{T}(BrownianIntegrators.EMParams(st.vv.gamma, st.vv.noise_scale))
+eulermaruyama(st::SimulationState{T}) where {T<:AbstractFloat} = EMSpec{T}(BrownianIntegrators.EMParams(st.vv.gamma, st.vv.noise_scale, st.vv.corr_time))
 """
 BrownianIntegrators.BrownianParams(st)
 
@@ -132,13 +136,34 @@ Build a Brownian parameter container reusing the simulation's current
 `gamma` and `noise_scale` buffers. Keeps element type `T` consistent.
 """
 function BrownianIntegrators.BrownianParams(st::SimulationState{T}) where {T<:AbstractFloat}
-    return BrownianIntegrators.BrownianParams{T}(st.vv.gamma, st.vv.noise_scale)
+    return BrownianIntegrators.BrownianParams{T}(st.vv.gamma, st.vv.noise_scale, st.vv.corr_time)
 end
 
 function zero_forces!(st::SimulationState{T}) where {T<:AbstractFloat}
     fill!(st.fx, zero(T)); fill!(st.fy, zero(T))
     st.fz === nothing || fill!(st.fz, zero(T))
     return nothing
+end
+
+# Ensure OU state buffers exist when correlated noise is requested.
+function _ensure_ou_state!(st::SimulationState{T},
+                           corr_time::Union{Nothing,CuArray{T,1}}=st.vv.corr_time) where {T<:AbstractFloat}
+    corr_time === nothing && return
+    if st.ou_x === nothing
+        st.ou_x = CUDA.CuArray{T}(undef, length(st.rx))
+        st.ou_y = CUDA.CuArray{T}(undef, length(st.ry))
+        fill!(st.ou_x, zero(T)); fill!(st.ou_y, zero(T))
+        if st.rz === nothing
+            st.ou_z = nothing
+        else
+            st.ou_z = CUDA.CuArray{T}(undef, length(st.rz))
+            fill!(st.ou_z, zero(T))
+        end
+    elseif st.rz !== nothing && st.ou_z === nothing
+        st.ou_z = CUDA.CuArray{T}(undef, length(st.rz))
+        fill!(st.ou_z, zero(T))
+    end
+    return
 end
 
 # -------------------------
@@ -251,6 +276,7 @@ function build_simulation(;N::Int,
                            gamma::Union{Vector{Real},Real}=1,
                            temperature::Union{Vector{Real},Real}=1,
                            init_temperature::Union{Nothing,Real}=nothing,
+                           noise_corr_time::Union{Vector{Real},Real,Nothing}=nothing,
                            dt::Real=0.001,
                            mass::Real=1,
                            bonds::Union{Nothing,Vector{Tuple{Int32,Int32}}}=nothing,
@@ -281,10 +307,24 @@ function build_simulation(;N::Int,
     f0y = CUDA.CuArray{T}(undef, N)
     f0z = nothing
 
+    # Optional per-particle exponential correlation time (τ); if not provided, noise is white
+    local corr_time_vec::Union{Nothing,CuArray{T,1}}
+    if noise_corr_time === nothing
+        corr_time_vec = nothing
+    elseif noise_corr_time isa Real
+        corr_time_vec = CUDA.fill(T(noise_corr_time), N)
+    else
+        @assert length(noise_corr_time) == N "noise_corr_time vector must have length N"
+        corr_time_vec = CuArray(T.(noise_corr_time))
+    end
+
     # per-step random impulse
     rf_x = CUDA.CuArray{T}(undef, N)
     rf_y = CUDA.CuArray{T}(undef, N)
     rf_z = nothing
+    ou_x = nothing
+    ou_y = nothing
+    ou_z = nothing
 
     if D == 3
         rz  = CUDA.CuArray{T}(undef, N)
@@ -292,6 +332,11 @@ function build_simulation(;N::Int,
         fz  = CUDA.CuArray{T}(undef, N)
         f0z = CUDA.CuArray{T}(undef, N)
         rf_z = CUDA.CuArray{T}(undef, N)
+        ou_z = corr_time_vec === nothing ? nothing : CUDA.CuArray{T}(undef, N)
+    end
+    if corr_time_vec !== nothing
+        ou_x = CUDA.CuArray{T}(undef, N)
+        ou_y = CUDA.CuArray{T}(undef, N)
     end
 
     fill!(rx, zero(T)); fill!(ry, zero(T))
@@ -300,6 +345,7 @@ function build_simulation(;N::Int,
     fill!(fx, zero(T)); fill!(fy, zero(T)); fz === nothing || fill!(fz, zero(T))
     fill!(f0x, zero(T)); fill!(f0y, zero(T)); f0z === nothing || fill!(f0z, zero(T))
     fill!(rf_x, zero(T)); fill!(rf_y, zero(T)); rf_z === nothing || fill!(rf_z, zero(T))
+    ou_x === nothing || fill!(ou_x, zero(T)); ou_y === nothing || fill!(ou_y, zero(T)); ou_z === nothing || fill!(ou_z, zero(T))
 
     # Maxwell-Boltzmann initial velocities on GPU
     # Back-compat: init_temperature overrides temperature when provided
@@ -348,8 +394,7 @@ function build_simulation(;N::Int,
 
     noise_scale = CuArray(sqrt.(T(2) .* gamma_vec .* temperature_vec .* T(dt)))
 
-
-    vv = LangevinIntegrators.VVParams{T}(gamma_vec, T(mass), noise_scale)
+    vv = LangevinIntegrators.VVParams{T}(gamma_vec, T(mass), noise_scale, corr_time_vec)
 
     Epot = CUDA.CuArray{T}(undef, N); fill!(Epot, zero(T))
     dq   = CUDA.CuArray{T}(undef, N); fill!(dq, zero(T))
@@ -404,6 +449,7 @@ function build_simulation(;N::Int,
     st = SimulationState(rx, ry, rz, vx, vy, vz, fx, fy, fz,
                          f0x, f0y, f0z,
                          rf_x, rf_y, rf_z,
+                         ou_x, ou_y, ou_z,
                          typeid,
                          nothing,   # box2
                          nothing,   # box3
@@ -638,13 +684,22 @@ function step!(st::SimulationState{T}, dt::Real; compute_energy::Bool=true) wher
     end
 
     # Prepare noise ONCE for the step and reuse in both updates
+    _ensure_ou_state!(st)
     if D == 2
-        LangevinIntegrators.vv_prepare_noise!(st.rf_x, st.rf_y, st.vv.noise_scale; beta_z=nothing)
+        LangevinIntegrators.vv_prepare_noise!(st.rf_x, st.rf_y, st.vv.noise_scale;
+                                              beta_z=nothing,
+                                              corr_time=st.vv.corr_time,
+                                              state_x=st.ou_x, state_y=st.ou_y, state_z=nothing,
+                                              dt=dtT)
         LangevinIntegrators.vv_positions_soa!(st.rx, st.ry, st.vx, st.vy, st.f0x, st.f0y,
                                               st.rf_x, st.rf_y, st.vv, dtT, st.box2::Definitions.Box2)
         _collisions_update_after_positions!(st)
     else
-        LangevinIntegrators.vv_prepare_noise!(st.rf_x, st.rf_y, st.vv.noise_scale; beta_z=st.rf_z)
+        LangevinIntegrators.vv_prepare_noise!(st.rf_x, st.rf_y, st.vv.noise_scale;
+                                              beta_z=st.rf_z,
+                                              corr_time=st.vv.corr_time,
+                                              state_x=st.ou_x, state_y=st.ou_y, state_z=st.ou_z,
+                                              dt=dtT)
         LangevinIntegrators.vv_positions_soa!(st.rx, st.ry, st.rz, st.vx, st.vy, st.vz,
                                               st.f0x, st.f0y, st.f0z,
                                               st.rf_x, st.rf_y, st.rf_z, st.vv, dtT, st.box3::Definitions.Box3)
@@ -926,9 +981,14 @@ function step_graph!(st::SimulationState{T}, dt::Real; compute_energy::Bool=true
         end
     end
 
+    _ensure_ou_state!(st)
     if D == 2
         CUDA.@captured begin
-            LangevinIntegrators.vv_prepare_noise!(st.rf_x, st.rf_y, st.vv.noise_scale; beta_z=nothing)
+            LangevinIntegrators.vv_prepare_noise!(st.rf_x, st.rf_y, st.vv.noise_scale;
+                                                  beta_z=nothing,
+                                                  corr_time=st.vv.corr_time,
+                                                  state_x=st.ou_x, state_y=st.ou_y, state_z=nothing,
+                                                  dt=dtT)
         LangevinIntegrators.vv_positions_soa!(st.rx, st.ry, st.vx, st.vy, st.f0x, st.f0y,
                                               st.rf_x, st.rf_y, st.vv, dtT, st.box2::Definitions.Box2)
         _collisions_update_after_positions!(st)
@@ -963,7 +1023,11 @@ function step_graph!(st::SimulationState{T}, dt::Real; compute_energy::Bool=true
         end
     else
         CUDA.@captured begin
-            LangevinIntegrators.vv_prepare_noise!(st.rf_x, st.rf_y, st.vv.noise_scale; beta_z=st.rf_z)
+            LangevinIntegrators.vv_prepare_noise!(st.rf_x, st.rf_y, st.vv.noise_scale;
+                                                  beta_z=st.rf_z,
+                                                  corr_time=st.vv.corr_time,
+                                                  state_x=st.ou_x, state_y=st.ou_y, state_z=st.ou_z,
+                                                  dt=dtT)
         LangevinIntegrators.vv_positions_soa!(st.rx, st.ry, st.rz, st.vx, st.vy, st.vz,
                                               st.f0x, st.f0y, st.f0z,
                                               st.rf_x, st.rf_y, st.rf_z, st.vv, dtT, st.box3::Definitions.Box3)
@@ -1213,6 +1277,7 @@ function step!(st::SimulationState{T}, spec::BAOASpec{T}, dt::Real; compute_ener
         end
     end
 
+    _ensure_ou_state!(st, spec.params.corr_time)
     if D == 2
         # B(1): full kick using f(t)
         LangevinIntegrators.baoab_B_2d!(st.vx, st.vy, st.f0x, st.f0y, spec.params, T(2)*dtT, st.Ekin, st.dU)
@@ -1220,7 +1285,10 @@ function step!(st::SimulationState{T}, spec::BAOASpec{T}, dt::Real; compute_ener
         LangevinIntegrators.baoab_A_2d!(st.rx, st.ry, st.vx, st.vy, dtT, st.box2::Definitions.Box2)
         _collisions_update_after_positions!(st)
         # O(1): OU using pre-generated noise (reuse VV noise draw)
-        LangevinIntegrators.vv_prepare_noise!(st.rf_x, st.rf_y, st.vv.noise_scale)
+        LangevinIntegrators.vv_prepare_noise!(st.rf_x, st.rf_y, spec.params.noise_scale;
+                                              corr_time=spec.params.corr_time,
+                                              state_x=st.ou_x, state_y=st.ou_y, state_z=nothing,
+                                              dt=dtT)
         LangevinIntegrators.baoab_OU_2d!(st.vx, st.vy, st.rf_x, st.rf_y, spec.params, dtT, st.dq)
         # A(1/2)
         LangevinIntegrators.baoab_A_2d!(st.rx, st.ry, st.vx, st.vy, dtT, st.box2::Definitions.Box2)
@@ -1297,7 +1365,11 @@ function step!(st::SimulationState{T}, spec::BAOASpec{T}, dt::Real; compute_ener
         LangevinIntegrators.baoab_B_3d!(st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z, spec.params, T(2)*dtT, st.Ekin, st.dU)
         LangevinIntegrators.baoab_A_3d!(st.rx, st.ry, st.rz, st.vx, st.vy, st.vz, dtT, st.box3::Definitions.Box3)
         _collisions_update_after_positions!(st)
-        LangevinIntegrators.vv_prepare_noise!(st.rf_x, st.rf_y, st.vv.noise_scale; beta_z=st.rf_z)
+        LangevinIntegrators.vv_prepare_noise!(st.rf_x, st.rf_y, spec.params.noise_scale;
+                                              beta_z=st.rf_z,
+                                              corr_time=spec.params.corr_time,
+                                              state_x=st.ou_x, state_y=st.ou_y, state_z=st.ou_z,
+                                              dt=dtT)
         LangevinIntegrators.baoab_OU_3d!(st.vx, st.vy, st.vz, st.rf_x, st.rf_y, st.rf_z, spec.params, dtT, st.dq)
         LangevinIntegrators.baoab_A_3d!(st.rx, st.ry, st.rz, st.vx, st.vy, st.vz, dtT, st.box3::Definitions.Box3)
         _collisions_update_after_positions!(st)
@@ -1546,10 +1618,14 @@ function step!(st::SimulationState{T}, bao::LangevinIntegrators.BAOABParams{T}, 
     end
 
     # BAOAB sequence
+    _ensure_ou_state!(st, bao.corr_time)
     if D == 2
         LangevinIntegrators.baoab_BA_2d!(st.rx, st.ry, st.vx, st.vy, st.f0x, st.f0y, bao, dtT, st.box2::Definitions.Box2)
         # Prepare OU noise using the same generator as VV (β = s * N(0,1))
-        LangevinIntegrators.vv_prepare_noise!(st.rf_x, st.rf_y, st.vv.noise_scale)
+        LangevinIntegrators.vv_prepare_noise!(st.rf_x, st.rf_y, bao.noise_scale;
+                                              corr_time=bao.corr_time,
+                                              state_x=st.ou_x, state_y=st.ou_y, state_z=nothing,
+                                              dt=dtT)
         LangevinIntegrators.baoab_OU_2d!(st.vx, st.vy, st.rf_x, st.rf_y, bao, dtT, st.dq)
         LangevinIntegrators.baoab_A_2d!(st.rx, st.ry, st.vx, st.vy, dtT, st.box2::Definitions.Box2)
 
@@ -1626,7 +1702,11 @@ function step!(st::SimulationState{T}, bao::LangevinIntegrators.BAOABParams{T}, 
         LangevinIntegrators.baoab_B_2d!(st.vx, st.vy, st.fx, st.fy, bao, dtT, st.Ekin, st.dU)
     else
         LangevinIntegrators.baoab_BA_3d!(st.rx, st.ry, st.rz, st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z, bao, dtT, st.box3::Definitions.Box3)
-        LangevinIntegrators.vv_prepare_noise!(st.rf_x, st.rf_y, st.vv.noise_scale; beta_z=st.rf_z)
+        LangevinIntegrators.vv_prepare_noise!(st.rf_x, st.rf_y, bao.noise_scale;
+                                              beta_z=st.rf_z,
+                                              corr_time=bao.corr_time,
+                                              state_x=st.ou_x, state_y=st.ou_y, state_z=st.ou_z,
+                                              dt=dtT)
         LangevinIntegrators.baoab_OU_3d!(st.vx, st.vy, st.vz, st.rf_x, st.rf_y, st.rf_z, bao, dtT, st.dq)
         LangevinIntegrators.baoab_A_3d!(st.rx, st.ry, st.rz, st.vx, st.vy, st.vz, dtT, st.box3::Definitions.Box3)
 
@@ -1725,6 +1805,7 @@ function step!(st::SimulationState{T}, bp::BrownianIntegrators.BrownianParams{T}
     dtT = T(dt)
     st.last_integrator = UInt8(2)
     D = st.rz === nothing ? 2 : 3
+    _ensure_ou_state!(st, bp.corr_time)
 
     do_check = (st.step % st.neigh_interval == 0)
     if do_check
@@ -1780,7 +1861,11 @@ function step!(st::SimulationState{T}, bp::BrownianIntegrators.BrownianParams{T}
 
     if D == 2
         # Draw noise once and compute midpoint positions into vx,vy
-        BrownianIntegrators.bd_prepare_noise_2d!(st.rf_x, st.rf_y)
+        BrownianIntegrators.bd_prepare_noise_2d!(st.rf_x, st.rf_y;
+                                                 noise_scale=bp.noise_scale,
+                                                 corr_time=bp.corr_time,
+                                                 state_x=st.ou_x, state_y=st.ou_y,
+                                                 dt=dtT)
         BrownianIntegrators.bd_midpoint_positions_2d!(
             st.rx, st.ry, st.fx, st.fy,
             st.rf_x, st.rf_y,
@@ -1885,7 +1970,11 @@ function step!(st::SimulationState{T}, bp::BrownianIntegrators.BrownianParams{T}
             _apply_bonds2!(st, st.fx, st.fy, compute_energy ? st.Epot : nothing, compute_energy)
         end
     else
-        BrownianIntegrators.bd_prepare_noise_3d!(st.rf_x, st.rf_y, st.rf_z)
+        BrownianIntegrators.bd_prepare_noise_3d!(st.rf_x, st.rf_y, st.rf_z;
+                                                 noise_scale=bp.noise_scale,
+                                                 corr_time=bp.corr_time,
+                                                 state_x=st.ou_x, state_y=st.ou_y, state_z=st.ou_z,
+                                                 dt=dtT)
         BrownianIntegrators.bd_midpoint_positions_3d!(
             st.rx, st.ry, st.rz, st.fx, st.fy, st.fz,
             st.rf_x, st.rf_y, st.rf_z,
@@ -2013,6 +2102,7 @@ function step!(st::SimulationState{T}, em::BrownianIntegrators.EMParams{T}, dt::
     dtT = T(dt)
     st.last_integrator = UInt8(2)
     D = st.rz === nothing ? 2 : 3
+    _ensure_ou_state!(st, em.corr_time)
 
     # Neighbor-list maintenance (mirror Brownian EH implementation)
     do_check = (st.step % st.neigh_interval == 0)
@@ -2103,7 +2193,11 @@ function step!(st::SimulationState{T}, em::BrownianIntegrators.EMParams{T}, dt::
     # Position update and dq/dU accumulation using midpoint so EPR == UPR
     if D == 2
         # Predictor: draw noise then compute midpoint positions into vx,vy
-        BrownianIntegrators.bd_prepare_noise_2d!(st.rf_x, st.rf_y)
+        BrownianIntegrators.bd_prepare_noise_2d!(st.rf_x, st.rf_y;
+                                                 noise_scale=em.noise_scale,
+                                                 corr_time=em.corr_time,
+                                                 state_x=st.ou_x, state_y=st.ou_y,
+                                                 dt=dtT)
         BrownianIntegrators.bd_midpoint_positions_2d!(
             st.rx, st.ry, st.fx, st.fy,
             st.rf_x, st.rf_y,
@@ -2186,7 +2280,11 @@ function step!(st::SimulationState{T}, em::BrownianIntegrators.EMParams{T}, dt::
         end
     else
         # Predictor: draw noise then compute midpoint positions into vx,vy,vz
-        BrownianIntegrators.bd_prepare_noise_3d!(st.rf_x, st.rf_y, st.rf_z)
+        BrownianIntegrators.bd_prepare_noise_3d!(st.rf_x, st.rf_y, st.rf_z;
+                                                 noise_scale=em.noise_scale,
+                                                 corr_time=em.corr_time,
+                                                 state_x=st.ou_x, state_y=st.ou_y, state_z=st.ou_z,
+                                                 dt=dtT)
         BrownianIntegrators.bd_midpoint_positions_3d!(
             st.rx, st.ry, st.rz, st.fx, st.fy, st.fz,
             st.rf_x, st.rf_y, st.rf_z,
