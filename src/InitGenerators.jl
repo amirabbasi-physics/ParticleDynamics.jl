@@ -1,3 +1,10 @@
+"""
+High-level initial configuration generators for 2D simulations.
+
+The helper functions in this module reproduce the hexagonal arrangements used
+throughout `examples/` (random hex placements, concentric circles, etc.) so that
+scripts can lift proven particle packings without rewriting geometry code.
+"""
 module InitGenerators
 
 using Random
@@ -12,10 +19,12 @@ export box_from_phi_2d,
        hex_circle_in_box_2d
 
 """
-box_from_phi_2d(N, ϕ, σ; T=Float32)
+    box_from_phi_2d(N, ϕ, σ; T=Float32)
 
-Compute a square 2D box (L,L) that achieves the desired area fraction ϕ for N
-disks of diameter σ. Returns an NTuple{2,T} compatible with the simulation API.
+Compute a square 2D box `(L, L)` whose area fraction matches the target `ϕ`
+when populated with `N` disks of diameter `σ`. `examples/TwoT_2D_LD_VV.jl`
+calls this with `(N=2000, ϕ=0.5, σ=1.0)` to fix the box before the random
+hex-based placement.
 """
 function box_from_phi_2d(N::Integer, ϕ::Real, σ::Real; T=Float32)
     @assert ϕ > 0 "Area fraction must be positive"
@@ -26,11 +35,11 @@ function box_from_phi_2d(N::Integer, ϕ::Real, σ::Real; T=Float32)
 end
 
 """
-hex_sites_in_box_2d(box, σ; T=eltype(box))
+    hex_sites_in_box_2d(box, σ)
 
-Generate all 2D hex (triangular) lattice sites inside a periodic square box
-centered at the origin, using nearest-neighbor spacing a = σ. Coordinates are
-returned as SVector{2,T} shifted to [-L/2, L/2) in each dimension.
+Enumerate all hexagonal lattice sites inside a periodic square box of side
+lengths `box`. `a = σ` fixes the nearest-neighbor spacing, which matches the
+setups used in `examples/SingleT_2D_LD_VV.jl` and friends.
 """
 function hex_sites_in_box_2d(box::Box2{T}, σ::T) where {T<:AbstractFloat}
     Lx, Ly = box
@@ -74,14 +83,17 @@ function _choose_indices_without_replacement(M::Integer, K::Integer; rng::Abstra
 end
 
 """
-hex_random_2d(N, σ, ϕ; T=Float32, rng=Random.default_rng())
+    hex_random_2d(N, σ, ϕ; T=Float32, rng=Random.default_rng())
 
-Randomly place N particles on hex-lattice sites inside a square box sized from
-area fraction ϕ and diameter σ. Uses a = σ for nearest-neighbor spacing (no
-overlaps under periodic BCs). Returns a named tuple:
-  (box, positions, indices)
-where `box::NTuple{2,T}`, `positions::Vector{SVector{2,T}}`, and `indices` are
-the selected site indices in the full site list (handy for further sampling).
+Sample `N` distinct hexagonal lattice sites at random inside the box computed
+by [`box_from_phi_2d`](@ref). This is the entry point used by
+`examples/TwoT_2D_LD_VV.jl` (with `σ = 1.0`, `ϕ = 0.5`) before assigning hot
+and cold type IDs.
+
+# Returns
+- `box`: square box tuple `(L, L)` in the requested precision.
+- `positions`: vector of `SVector{2,T}` coordinates centered in `[-L/2, L/2)`.
+- `indices`: indices into the full lattice site list (handy for re-sampling).
 """
 function hex_random_2d(N::Integer, σ::Real, ϕ::Real; T=Float32, rng::AbstractRNG=Random.default_rng())
     box = box_from_phi_2d(N, ϕ, σ; T=T)
@@ -93,10 +105,11 @@ function hex_random_2d(N::Integer, σ::Real, ϕ::Real; T=Float32, rng::AbstractR
 end
 
 """
-hex_circle_2d(N, σ, ϕ; T=Float32)
+    hex_circle_2d(N, σ, ϕ; T=Float32)
 
-Place N particles as the innermost hex-lattice sites forming a circular cluster
-around the box center. The box is sized from (N, ϕ, σ). Returns (box, positions).
+Return the innermost `N` hex-lattice sites (ordered by radius) so that the
+configuration forms a densely packed circular cluster. The single-temperature
+circles in `examples/SingleT_2D_LD_VV_Circle.jl` are assembled with this helper.
 """
 function hex_circle_2d(N::Integer, σ::Real, ϕ::Real; T=Float32)
     box = box_from_phi_2d(N, ϕ, σ; T=T)
@@ -111,12 +124,12 @@ function hex_circle_2d(N::Integer, σ::Real, ϕ::Real; T=Float32)
 end
 
 """
-hex_circle_plus_random_2d(N, σ, ϕ, frac_circle; T=Float32, rng=Random.default_rng())
+    hex_circle_plus_random_2d(N, σ, ϕ, frac_circle; T=Float32, rng=Random.default_rng())
 
-Place floor(frac_circle*N) particles as the innermost circular hex cluster, and
-place the remaining particles uniformly at random on hex-lattice sites outside
-that circle. Returns (box, positions), with positions concatenated as
-[circle_positions; random_outside].
+Hybrid generator used by `examples/TwoT_2D_LD_VV_frac.jl`: `frac_circle` of the
+particles occupy the innermost circle while the rest are randomly drawn from
+sites outside that radius. The return value bundles the circle and random
+indices so scripts can assign different types or temperatures to each set.
 """
 function hex_circle_plus_random_2d(N::Integer, σ::Real, ϕ::Real, frac_circle::Real;
                                    T=Float32, rng::AbstractRNG=Random.default_rng())
@@ -150,12 +163,11 @@ function hex_circle_plus_random_2d(N::Integer, σ::Real, ϕ::Real, frac_circle::
 end
 
 """
-hex_circle_in_box_2d(N, box; T=Float32, margin=zero(T))
+    hex_circle_in_box_2d(N, box; margin=0)
 
-Compute a hexagonal-lattice circle of N sites centered in a given fixed box.
-This adapts the lattice spacing so that at least N lattice sites fall inside a
-circle of radius R = min(box...)/2 - margin. Returns (positions, a, R, sites)
-where positions are the selected N innermost SVector{2,T}.
+Variant used when the box is fixed a priori (e.g. restart from a recorded GSD).
+The helper shrinks the lattice spacing until at least `N` sites fall inside the
+target circle of radius `min(box)/2 - margin`.
 """
 function hex_circle_in_box_2d(N::Integer, box::Box2{T}; margin::T=zero(T)) where {T<:AbstractFloat}
     Lx, Ly = box

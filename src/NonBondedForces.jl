@@ -262,6 +262,37 @@ function _lj3_allpairs_noE_kernel_excl!(
 end
 
 # Host wrappers for AllPairsNeighborMatrix (LJ)
+"""
+    lj_forces_soa!(rx, ry[, rz], fx, fy[, fz], Epot, nbh, box, params)
+
+Accumulate Lennard-Jones forces and per-particle potential energies into the
+structure-of-arrays buffers. Dispatches on the neighbor matrix:
+
+- `NeighborMatrix` / `StencilNeighborMatrix`: iterate CSR rows built with
+  `build_neighbors_dense!` or `build_neighbors_stencil!`.
+- `AllPairsNeighborMatrix`: evaluate every pair (used in
+  `examples/2D_allpairs_quicktest.jl` when validating kernels).
+
+`Epot[i]` stores half the pair energy so that summing the array yields the
+total potential energy without double counting.
+
+# Examples
+The 3D LJ example (`examples/3D_example.jl`) uses the same parameter
+relationships; the snippet below scales `N` down to 4096 for a quick check:
+
+```julia
+st = build_simulation(D=3, N=4096, box=(250f0, 250f0, 250f0),
+                      cutoff=Float32(2^(1/6)), skin=0.4f0, cap=Int32(100),
+                      neigh_interval=1,
+                      epsilon=10f0, sigma=1f0,
+                      gamma=10f0, temperature=1f0, dt=5f-5)
+zero_forces!(st)
+lj_forces_soa!(st.rx, st.ry, st.rz,
+               st.fx, st.fy, st.fz,
+               st.Epot, st.nbh,
+               st.box3::Box3{Float32}, st.pair_lj)
+```
+"""
 function lj_forces_soa!(rx::CuArray{T,1}, ry::CuArray{T,1},
                         fx::CuArray{T,1}, fy::CuArray{T,1}, Epot::CuArray{T,1},
                         ::NeighborLists.AllPairsNeighborMatrix{T},
@@ -287,6 +318,13 @@ function lj_forces_soa!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
     return nothing
 end
 
+"""
+    lj_forces_soa_noE!(rx, ry[, rz], fx, fy[, fz], nbh, box, params)
+
+Lennard-Jones force accumulation without touching `Epot`. Used when the caller
+does not require instantaneous energies (e.g. the inner `step!` loops that
+only sample `Epot` every `log_interval` steps in `examples/TwoT_2D_LD_VV.jl`).
+"""
 function lj_forces_soa_noE!(rx::CuArray{T,1}, ry::CuArray{T,1},
                             fx::CuArray{T,1}, fy::CuArray{T,1},
                             ::NeighborLists.AllPairsNeighborMatrix{T},
@@ -598,6 +636,14 @@ function _wca3_allpairs_noE_kernel_excl!(rx::CuDeviceVector{T}, ry::CuDeviceVect
     return
 end
 
+"""
+    wca_forces_soa!(rx, ry[, rz], fx, fy[, fz], Epot, nbh, box, params)
+
+Weeks–Chandler–Andersen variant of [`lj_forces_soa!`](@ref) that enforces
+`rcut = 2^(1/6) σ` and shifts the energy by `+ϵ`. All validated WCA examples
+(`examples/2D_allpairs_quicktest.jl`, `examples/TwoT_2D_LD_VV.jl`) use this
+function via `build_simulation(... nonbonded=:wca)`.
+"""
 function wca_forces_soa!(rx::CuArray{T,1}, ry::CuArray{T,1},
                         fx::CuArray{T,1}, fy::CuArray{T,1}, Epot::CuArray{T,1},
                         ::NeighborLists.AllPairsNeighborMatrix{T},
@@ -621,6 +667,13 @@ function wca_forces_soa!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
     return nothing
 end
 
+"""
+    wca_forces_soa_noE!(rx, ry[, rz], fx, fy[, fz], nbh, box, params)
+
+WCA forces without accumulating energies. Mirrors the settings in
+`examples/2D_allpairs_quicktest.jl`, where the step loop only cares about the
+force magnitudes.
+"""
 function wca_forces_soa_noE!(rx::CuArray{T,1}, ry::CuArray{T,1},
                              fx::CuArray{T,1}, fy::CuArray{T,1},
                              ::NeighborLists.AllPairsNeighborMatrix{T},
@@ -794,6 +847,13 @@ function _harmrep3_allpairs_noE_kernel!(rx::CuDeviceVector{T}, ry::CuDeviceVecto
     return
 end
 
+"""
+    harmonic_rep_forces_soa!(rx, ry[, rz], fx, fy[, fz], Epot, nbh, box, params)
+
+Compute the truncated harmonic repulsion used in the soft-repulsive
+two-temperature scripts (e.g. `examples/TwoT_2D_LD_VV.jl` uses
+`σ = 1.0`, `ϵ = 1e9`). The cutoff equals `σ`.
+"""
 function harmonic_rep_forces_soa!(rx::CuArray{T,1}, ry::CuArray{T,1},
                                   fx::CuArray{T,1}, fy::CuArray{T,1}, Epot::CuArray{T,1},
                                   ::NeighborLists.AllPairsNeighborMatrix{T},
@@ -819,6 +879,12 @@ function harmonic_rep_forces_soa!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArra
     return nothing
 end
 
+"""
+    harmonic_rep_forces_soa_noE!(rx, ry[, rz], fx, fy[, fz], nbh, box, params)
+
+Soft repulsive forces without per-particle energies. Used by the filters tests
+(`test/runtests.jl`) when checking force updates independent of energy accumulators.
+"""
 function harmonic_rep_forces_soa_noE!(rx::CuArray{T,1}, ry::CuArray{T,1},
                                       fx::CuArray{T,1}, fy::CuArray{T,1},
                                       ::NeighborLists.AllPairsNeighborMatrix{T},

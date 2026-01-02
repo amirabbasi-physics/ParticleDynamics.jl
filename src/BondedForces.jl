@@ -1,3 +1,6 @@
+"""
+Bonded interaction kernels (harmonic and FENE) used by the polymer examples.
+"""
 module BondedForces
 
 using CUDA
@@ -17,12 +20,26 @@ export BondList, build_bondlist,
     return dx
 end
 
+"""
+CSR-style adjacency list describing bead connectivity.
+"""
 struct BondList
     index::CuArray{Int32,1}
     flat::CuArray{Int32,1}
     counts::CuArray{Int32,1}
 end
 
+"""
+    build_bondlist(N, bonds) -> BondList
+
+Construct a GPU-ready bond list from a collection of `(i, j)` tuples (1-based).
+`examples/2D_polymer_bonded.jl` builds its chains via:
+
+```julia
+chain = collect(zip(1:(n-1), 2:n))
+bond_list = build_bondlist(n, chain)
+```
+"""
 function build_bondlist(N::Integer, bonds)
     N = Int(N)
     deg = zeros(Int32, N)
@@ -302,6 +319,13 @@ end
 # Public wrappers
 # ------------------------------------------------------------------
 
+"""
+    harmonic_forces_soa!(rx, ry[, rz], fx, fy[, fz], E, bonds, box, params)
+
+Evaluate harmonic bond forces and per-particle energies. The bead–spring chains
+in `examples/2D_polymer_bonded.jl` use this helper after calling
+`build_bondlist`.
+"""
 function harmonic_forces_soa!(
     rx::CuArray{T,1}, ry::CuArray{T,1},
     fx::CuArray{T,1}, fy::CuArray{T,1}, E::CuArray{T,1},
@@ -320,6 +344,12 @@ function harmonic_forces_soa!(
     return nothing
 end
 
+"""
+    harmonic_forces_soa_noE!(rx, ry[, rz], fx, fy[, fz], bonds, box, params)
+
+Force-only harmonic bonds. Handy for warmup segments when energies are not
+recorded.
+"""
 function harmonic_forces_soa_noE!(
     rx::CuArray{T,1}, ry::CuArray{T,1},
     fx::CuArray{T,1}, fy::CuArray{T,1},
@@ -376,6 +406,12 @@ function harmonic_forces_soa_noE!(
     return nothing
 end
 
+"""
+    fene_forces_soa!(rx, ry[, rz], fx, fy[, fz], E, bonds, box, params)
+
+Finite extensible nonlinear elastic bonds. Matches the `fene_bond(k=300, r0=1.5)`
+configuration used in `examples/2D_polymer_bonded_BP.jl`.
+"""
 function fene_forces_soa!(
     rx::CuArray{T,1}, ry::CuArray{T,1},
     fx::CuArray{T,1}, fy::CuArray{T,1}, E::CuArray{T,1},
@@ -394,6 +430,11 @@ function fene_forces_soa!(
     return nothing
 end
 
+"""
+    fene_forces_soa_noE!(rx, ry[, rz], fx, fy[, fz], bonds, box, params)
+
+FENE bonds without per-particle energy accumulation.
+"""
 function fene_forces_soa_noE!(
     rx::CuArray{T,1}, ry::CuArray{T,1},
     fx::CuArray{T,1}, fy::CuArray{T,1},

@@ -1,3 +1,6 @@
+"""
+Overdamped (Brownian) integrators used by `examples/*BD*.jl`.
+"""
 module BrownianIntegrators
 
 using CUDA
@@ -9,6 +12,13 @@ export BrownianParams,
        bd_finish_step_2d!, bd_finish_step_3d!,
        EMParams, em_step_2d!, em_step_3d!
 
+"""
+    BrownianParams(gamma, noise_scale; corr_time=nothing)
+
+Parameters for the stochastic midpoint Brownian integrator. `gamma` and
+`noise_scale` are CuArrays so filters can assign different temperatures to
+different particle groups (as in `examples/TwoT_2D_BD_EH.jl`).
+"""
 struct BrownianParams{T<:AbstractFloat}
     gamma::CuArray{T,1}
     noise_scale::CuArray{T,1}
@@ -40,6 +50,13 @@ function BrownianParams(::Type{T}, gamma::Real, temperature::Real, dt::Real, N::
 end
 
 # Euler–Maruyama parameters (reuse gamma/noise scale like BrownianParams)
+"""
+    EMParams(gamma, noise_scale; corr_time=nothing)
+
+Parameter bundle for the Euler–Maruyama step (`em_step_*`). Shares the same
+layout as [`BrownianParams`](@ref) so utilities such as
+`Filters.set_temperature!` operate on either type.
+"""
 struct EMParams{T<:AbstractFloat}
     gamma::CuArray{T,1}
     noise_scale::CuArray{T,1}
@@ -318,6 +335,14 @@ function _fin3!(
     return nothing
 end
 
+"""
+    bd_midpoint_positions_2d!(rx, ry, fx, fy, ξx, ξy, rxm, rym, gamma, noise_scale, dt, box)
+
+Generate midpoint trial positions (`rxm`, `rym`) by combining deterministic
+forces and stochastic kicks. Matches the workflow in
+`examples/2D_soft_repulsive_BD.jl`, which subsequently evaluates forces at the
+midpoints before calling [`bd_finish_step_2d!`](@ref).
+"""
 function bd_midpoint_positions_2d!(rx, ry, fx, fy, ξx, ξy, rxm, rym,
                                    gamma::CuArray{T,1}, noise_scale::CuArray{T,1},
                                    dt::Real, box::Definitions.Box2{T}) where {T<:AbstractFloat}
@@ -335,6 +360,9 @@ end
 
  
 
+"""
+3D variant of [`bd_midpoint_positions_2d!`](@ref).
+"""
 function bd_midpoint_positions_3d!(rx, ry, rz, fx, fy, fz, ξx, ξy, ξz, rxm, rym, rzm,
                                    gamma::CuArray{T,1}, noise_scale::CuArray{T,1},
                                    dt::Real, box::Definitions.Box3{T}) where {T<:AbstractFloat}
@@ -353,6 +381,12 @@ end
 
  
 
+"""
+    bd_finish_step_2d!(rx, ry, fxm, fym, ξx, ξy, gamma, noise_scale, dt, dq, dU, box)
+
+Finalize the midpoint Brownian step by combining midpoint forces (`fxm`, `fym`)
+with noise to update positions and the heat/energy buffers.
+"""
 function bd_finish_step_2d!(rx, ry, fxm, fym, ξx, ξy,
                             gamma::CuArray{T,1}, noise_scale::CuArray{T,1},
                             dt::Real, dq::CuArray{T,1}, dU::CuArray{T,1}, box::Definitions.Box2{T}) where {T<:AbstractFloat}
@@ -368,6 +402,9 @@ function bd_finish_step_2d!(rx, ry, fxm, fym, ξx, ξy,
     return nothing
 end
 
+"""
+3D finishing step (see [`bd_finish_step_2d!`](@ref)).
+"""
 function bd_finish_step_3d!(rx, ry, rz, fxm, fym, fzm, ξx, ξy, ξz,
                             gamma::CuArray{T,1}, noise_scale::CuArray{T,1},
                             dt::Real, dq::CuArray{T,1}, dU::CuArray{T,1}, box::Definitions.Box3{T}) where {T<:AbstractFloat}
@@ -456,6 +493,13 @@ function _em3!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{
     return nothing
 end
 
+"""
+    em_step_2d!(rx, ry, fx, fy, params, dt, dq, dU, box)
+
+Euler–Maruyama update for overdamped dynamics using the per-particle friction
+and noise stored in `params`. Used in `examples/3D_BD.jl` via
+`eulermaruyama(st)`.
+"""
 function em_step_2d!(rx::CuArray{T,1}, ry::CuArray{T,1},
                      fx::CuArray{T,1}, fy::CuArray{T,1},
                      params::EMParams{T}, dt::Real,
@@ -471,6 +515,9 @@ function em_step_2d!(rx::CuArray{T,1}, ry::CuArray{T,1},
     return nothing
 end
 
+"""
+3D Euler–Maruyama step (see [`em_step_2d!`](@ref)).
+"""
 function em_step_3d!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
                      fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1},
                      params::EMParams{T}, dt::Real,

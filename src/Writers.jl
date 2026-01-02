@@ -112,6 +112,10 @@ Base.Tuple(f::GSDFrameData) = (f.step, f.rx, f.ry, f.rz, f.vx, f.vy, f.vz,
 # =======================================================================
 abstract type Writer end
 
+"""
+Lightweight logger that records selected observables in host memory every
+`every` steps. Useful for quick ad-hoc diagnostics during testing.
+"""
 mutable struct InMemoryLogger <: Writer
     every::Int
     data::Dict{String, Vector}
@@ -139,8 +143,10 @@ end
 # =======================================================================
 
 """
-Append simple observables to CSV (host side).
-Columns: step,Etot,Kavg,Qtot
+    write_observables_csv!(path, step; Epot, Ekin, dq)
+
+Append a single line with `step, Etot, Kavg, Qtot` (mirrors
+`examples/2D_example.jl` and the 3D variants).
 """
 function write_observables_csv!(path::AbstractString, step::Int;
                                 Epot::CuArray{T,1},
@@ -163,6 +169,10 @@ end
 # Particle CSV writer (kept for completeness; expects SoA SimulationState)
 # =======================================================================
 
+"""
+Stream particle tables to CSV (one row per particle). Mirrors the logging used
+in the earlier `examples/` scripts.
+"""
 mutable struct CSVWriter <: Writer
     path::String
     every::Int
@@ -223,6 +233,10 @@ end
 # XYZ writer (SoA)
 # =======================================================================
 
+"""
+Minimal XYZ trajectory writer. Each call to `write!` appends one frame; z is
+set to zero for 2D states, matching the usage in `examples/2D_example.jl`.
+"""
 mutable struct XYZWriter <: Writer
     path::String
     every::Int
@@ -271,7 +285,10 @@ function write!(w::XYZWriter, st, step::Int, _dt::Real)
 end
 
 """
-Direct helper: write an XYZ snapshot without a writer object.
+    write_xyz!(path; rx, ry[, rz], atomsym=\"A\")
+
+Write a single XYZ frame without constructing an `XYZWriter`. Mirrors the
+ad-hoc dumping performed in `examples/2D_example.jl`.
 """
 function write_xyz!(path::AbstractString; rx::CuArray{T,1},
                     ry::CuArray{T,1},
@@ -295,7 +312,10 @@ end
 # =======================================================================
 
 """
-Open a GSD file for writing.
+    gsd_open(path; application=\"NonEqSimGPU\", schema=\"hoomd\")
+
+Open a GSD trajectory for appending frames. Used extensively in `examples/`.
+Call [`gsd_close`](@ref) when finished or use the do-block form.
 """
 function gsd_open(path::AbstractString; application="NonEqSimGPU", schema="hoomd", schema_version=(1,4))
     mkpath(dirname(path))

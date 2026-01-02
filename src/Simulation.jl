@@ -11,6 +11,8 @@ using ..Collisions
  
 
 const NL_CHECK_STRIDE = 20  # only check NL rebuild every N steps to cut overhead
+# Weeks-Chandler-Andersen cutoff factor: r_c = 2^(1/6) * σ ≈ 1.12246 σ
+const WCA_RC_FACTOR = 1.122462048309373
 
 # Nonbonded kind tags (host-side routing only)
 const NB_KIND_LJ      = UInt8(1)
@@ -23,6 +25,31 @@ export IntegratorSpec, VVSpec, BAOABSpec, BAOASpec, GSMSpec, BrownianSpec, EMSpe
 # =========================
 #   Simulation state (SoA)
 # =========================
+"""
+    SimulationState{T}
+
+Structure-of-arrays storage for all GPU-resident buffers required to evolve a
+non-equilibrium simulation. Users normally do not construct this type manually;
+[`build_simulation`](@ref) assembles a fully initialized instance with concrete
+CuArray fields and consistent dimensionality inferred from the `box` argument.
+
+Key fields that user code may read or mutate:
+- `rx, ry[, rz]`, `vx, vy[, vz]`, `fx, fy[, fz]`: positions, velocities, and
+  force accumulators in GPU memory. Arrays are sized `N` and remain allocated
+  for the entire simulation so that stepping is allocation-free.
+- `nbh`: neighbor matrix (either dense cell list or sentinel all-pairs) built
+  with [`NeighborLists.build_neighbors_*`](@ref) using the requested cutoff,
+  skin, and capacity.
+- `vv`: Langevin integrator parameters (`γ`, noise scale, per-particle OU state).
+- `Epot`, `Ekin`, `dq`, `dU` plus the corresponding `*_accum` buffers: energy
+  and heat observables that can be sampled directly on the GPU.
+- `typeid`: per-particle type ids used by `Filters` and mixed-size LJ kernels.
+- `coll_*`: optional buffers that appear when collision counting is enabled via
+  `enable_collision_counting!`.
+
+All other fields are internal implementation details (neighbor rebuild state,
+bond lists, cached LJ parameters, etc.) and should be treated as read-only.
+"""
 mutable struct SimulationState{T<:AbstractFloat}
     # SoA arrays
     rx::CuArray{T,1}; ry::CuArray{T,1}
@@ -97,37 +124,91 @@ end
 # -------------------------
 # Unified integrator specs
 # -------------------------
+"""
+Marker type used to dispatch `step!(st, spec, dt)` onto specific integrators.
+"""
 abstract type IntegratorSpec{T<:AbstractFloat} end
 
+"""
+Wrapper storing a reference to `st.vv` so `step!(st, velocityverlet(st), dt)`
+dispatches to the Langevin velocity-Verlet integrator (`examples/TwoT_2D_LD_VV.jl`).
+"""
 struct VVSpec{T<:AbstractFloat} <: IntegratorSpec{T}
     params::LangevinIntegrators.VVParams{T}
 end
 
+"""
+BAOAB splitting spec used in `examples/TwoT_2D_LD_BAOAB.jl`.
+"""
 struct BAOABSpec{T<:AbstractFloat} <: IntegratorSpec{T}
     params::LangevinIntegrators.BAOABParams{T}
 end
 
+"""
+BAOA splitting (no trailing B) for legacy scripts.
+"""
 struct BAOASpec{T<:AbstractFloat} <: IntegratorSpec{T}
     params::LangevinIntegrators.BAOABParams{T}
 end
 
+"""
+Generalized simulation scheme (GSM) spec, which reuses the BAOAB parameter type.
+"""
 struct GSMSpec{T<:AbstractFloat} <: IntegratorSpec{T}
     params::LangevinIntegrators.BAOABParams{T}
 end
 
+"""
+Midpoint Brownian integrator spec created by [`eulerheun`](@ref).
+"""
 struct BrownianSpec{T<:AbstractFloat} <: IntegratorSpec{T}
     params::BrownianIntegrators.BrownianParams{T}
 end
 
+"""
+Euler–Maruyama overdamped spec created by [`eulermaruyama`](@ref).
+"""
 struct EMSpec{T<:AbstractFloat} <: IntegratorSpec{T}
     params::BrownianIntegrators.EMParams{T}
 end
 
+"""
+    velocityverlet(st) -> VVSpec
+
+Convenience wrapper so `step!(st, velocityverlet(st), dt)` selects the GJF/Langevin
+velocity-Verlet path.
+"""
 velocityverlet(st::SimulationState{T}) where {T<:AbstractFloat} = VVSpec{T}(st.vv)
+"""
+    baoab(st) -> BAOABSpec
+
+Return a BAOAB spec built from `st.vv` buffers (gamma/noise_scale). Used in
+`examples/TwoT_2D_LD_BAOAB.jl`.
+"""
 baoab(st::SimulationState{T}) where {T<:AbstractFloat} = BAOABSpec{T}(LangevinIntegrators.BAOABParams{T}(st.vv.gamma, st.vv.mass, st.vv.noise_scale, st.vv.corr_time))
+"""
+    baoa(st) -> BAOASpec
+
+Legacy BAOA variant (no final B kick).
+"""
 baoa(st::SimulationState{T}) where {T<:AbstractFloat} = BAOASpec{T}(LangevinIntegrators.BAOABParams{T}(st.vv.gamma, st.vv.mass, st.vv.noise_scale, st.vv.corr_time))
+"""
+    gsm(st) -> GSMSpec
+
+Construct a GSM spec (used by `examples/TwoT_2D_LD_GSM.jl`).
+"""
 gsm(st::SimulationState{T})  where {T<:AbstractFloat} = GSMSpec{T}(LangevinIntegrators.BAOABParams{T}(st.vv.gamma, st.vv.mass, st.vv.noise_scale, st.vv.corr_time))
+"""
+    eulerheun(st) -> BrownianSpec
+
+Build a midpoint Brownian spec sharing `st.vv`'s gamma/noise-scale buffers.
+"""
 eulerheun(st::SimulationState{T}) where {T<:AbstractFloat} = BrownianSpec{T}(BrownianIntegrators.BrownianParams(st))
+"""
+    eulermaruyama(st) -> EMSpec
+
+Return an Euler–Maruyama spec for overdamped dynamics (`examples/3D_BD.jl`).
+"""
 eulermaruyama(st::SimulationState{T}) where {T<:AbstractFloat} = EMSpec{T}(BrownianIntegrators.EMParams(st.vv.gamma, st.vv.noise_scale, st.vv.corr_time))
 """
 BrownianIntegrators.BrownianParams(st)
@@ -139,6 +220,13 @@ function BrownianIntegrators.BrownianParams(st::SimulationState{T}) where {T<:Ab
     return BrownianIntegrators.BrownianParams{T}(st.vv.gamma, st.vv.noise_scale, st.vv.corr_time)
 end
 
+"""
+    zero_forces!(st)
+
+Fill `st.fx`, `st.fy`, (`st.fz` if present) with zeros. Called by the tests
+before running isolated force kernels and safe to use between manual force
+evaluations.
+"""
 function zero_forces!(st::SimulationState{T}) where {T<:AbstractFloat}
     fill!(st.fx, zero(T)); fill!(st.fy, zero(T))
     st.fz === nothing || fill!(st.fz, zero(T))
@@ -264,6 +352,47 @@ end
 # =========================
 #   Build simulation
 # =========================
+"""
+    build_simulation(; N, box, cutoff=1, skin=0.4, cap=Int32(96),
+                      neigh_interval=20, use_neighborlist=true,
+                      epsilon=1, sigma=1, gamma=1, temperature=1,
+                      noise_corr_time=nothing, dt=0.001,
+                      mass=1, bonds=nothing, bonding=nothing,
+                      nonbonded=:lj, softrep_params=nothing,
+                      precision=:f32)
+
+Construct a [`SimulationState`](@ref) with GPU-resident SoA arrays and a
+neighbor list configured for the requested potential. All inputs are keyword
+arguments so that scripts can copy known-good parameter sets directly from the
+`examples/` directory without ambiguity.
+
+Key behaviors:
+- The simulation dimensionality (2D vs 3D) is inferred from the length of
+  `box`. Positions/velocities/forces allocate the corresponding CuArrays.
+- For `nonbonded = :wca` the neighbor cutoff is forced to the physical WCA
+  value `r_c = 2^(1/6) σ` even if a larger `cutoff` was passed, guaranteeing
+  that kernels reuse the validated parameter sets from the packaged examples.
+- `gamma`, `temperature`, and `noise_corr_time` accept either scalars or
+  length-`N` vectors. Scalars are broadcast on the GPU using the chosen
+  floating-point precision (`:f32` or `:f64`).
+- Initial velocities are drawn from a Maxwell–Boltzmann distribution at
+  `temperature` and then centered to remove center-of-mass drift.
+
+Example (mirrors `examples/2D_example.jl`, scaled down to N=4096 for testing):
+
+```julia
+st = build_simulation(N=4096, box=(250f0, 250f0),
+                      cutoff=Float32(2^(1/6)), skin=Float32(2^(1/6))/2,
+                      cap=Int32(250), neigh_interval=50,
+                      epsilon=1f4, sigma=1f0,
+                      gamma=615f0, temperature=10f0,
+                      dt=1f-5, nonbonded=:wca, precision=:f32)
+step!(st, 1f-5; compute_energy=false)
+```
+
+Returns a fully initialized `SimulationState` ready for stepping with the
+Langevin (Velocity Verlet / BAOAB / GSM) or Brownian integrators.
+"""
 function build_simulation(;N::Int,
                            box,
                            cutoff::Real=1.0,
@@ -275,7 +404,6 @@ function build_simulation(;N::Int,
                            sigma::Real=1,
                            gamma::Union{Vector{Real},Real}=1,
                            temperature::Union{Vector{Real},Real}=1,
-                           init_temperature::Union{Nothing,Real}=nothing,
                            noise_corr_time::Union{Vector{Real},Real,Nothing}=nothing,
                            dt::Real=0.001,
                            mass::Real=1,
@@ -287,7 +415,7 @@ function build_simulation(;N::Int,
 
     # Dimension from box
     D = length(box)
-    
+
     if precision == :f32
         T = Float32
     elseif precision == :f64
@@ -295,6 +423,12 @@ function build_simulation(;N::Int,
     else
         error("Unknown precision=$(precision). Use :f32 or :f64")
     end
+
+    epsilonT = T(epsilon)
+    sigmaT   = T(sigma)
+    requested_cutoff = T(cutoff)
+    nb_cutoff = (nonbonded === :wca) ? (sigmaT * T(WCA_RC_FACTOR)) : requested_cutoff
+    rcut_factor = sigmaT == zero(T) ? T(1) : nb_cutoff / sigmaT
 
     # Allocate SoA buffers
     rx = CUDA.CuArray{T}(undef, N); ry = CUDA.CuArray{T}(undef, N)
@@ -348,17 +482,10 @@ function build_simulation(;N::Int,
     ou_x === nothing || fill!(ou_x, zero(T)); ou_y === nothing || fill!(ou_y, zero(T)); ou_z === nothing || fill!(ou_z, zero(T))
 
     # Maxwell-Boltzmann initial velocities on GPU
-    # Back-compat: init_temperature overrides temperature when provided
-    local temp_choice
-    if init_temperature !== nothing
-        temp_choice = init_temperature
+    if temperature isa Real
+        temperature_vec = CUDA.fill(T(temperature), N)
     else
-        temp_choice = temperature
-    end
-    if temp_choice isa Real
-        temperature_vec = CUDA.fill(T(temp_choice), N)
-    else
-        temperature_vec = CuArray(T.(temp_choice))
+        temperature_vec = CuArray(T.(temperature))
     end
 
     if D == 2
@@ -367,24 +494,36 @@ function build_simulation(;N::Int,
         _init_vel3!(vx, vy, vz, temperature_vec)
     end
 
+    # Remove center-of-mass drift from the initial velocities
+    if N > 0
+        Vx = CUDA.sum(vx) / T(N)
+        Vy = CUDA.sum(vy) / T(N)
+        @. vx = vx - Vx
+        @. vy = vy - Vy
+        if D == 3
+            Vz = CUDA.sum(vz) / T(N)
+            @. vz = vz - Vz
+        end
+    end
+
     typeid = CUDA.fill(Int32(1), N)
 
     # Neighbors (dense cell-list or sentinel all-pairs)
     if use_neighborlist
         if D == 2
-            nbh = NeighborLists.build_neighbors_dense!(rx, ry; box=(T(box[1]), T(box[2])), cutoff=T(cutoff), cap, skin=T(skin))
+            nbh = NeighborLists.build_neighbors_dense!(rx, ry; box=(T(box[1]), T(box[2])), cutoff=nb_cutoff, cap, skin=T(skin))
         else
-            nbh = NeighborLists.build_neighbors_dense!(rx, ry, rz; box=(T(box[1]), T(box[2]), T(box[3])), cutoff=T(cutoff), cap, skin=T(skin))
+            nbh = NeighborLists.build_neighbors_dense!(rx, ry, rz; box=(T(box[1]), T(box[2]), T(box[3])), cutoff=nb_cutoff, cap, skin=T(skin))
         end
     else
         if D == 2
-            nbh = NeighborLists.build_neighbors_allpairs!(rx, ry; box=(T(box[1]), T(box[2])), cutoff=T(cutoff), cap, skin=T(skin))
+            nbh = NeighborLists.build_neighbors_allpairs!(rx, ry; box=(T(box[1]), T(box[2])), cutoff=nb_cutoff, cap, skin=T(skin))
         else
-            nbh = NeighborLists.build_neighbors_allpairs!(rx, ry, rz; box=(T(box[1]), T(box[2]), T(box[3])), cutoff=T(cutoff), cap, skin=T(skin))
+            nbh = NeighborLists.build_neighbors_allpairs!(rx, ry, rz; box=(T(box[1]), T(box[2]), T(box[3])), cutoff=nb_cutoff, cap, skin=T(skin))
         end
     end
 
-    lj = Definitions.LJParams{T}(T(epsilon), T(sigma), T(cutoff))
+    lj = Definitions.LJParams{T}(epsilonT, sigmaT, nb_cutoff)
 
     if gamma isa Real
         gamma_vec = CUDA.fill(T(gamma), N)
@@ -423,7 +562,7 @@ function build_simulation(;N::Int,
         srp = nothing
     elseif nonbonded === :soft_repulsive || nonbonded === :softrep || nonbonded === :soft
         nb_tag = NB_KIND_SOFTREP
-        srp = softrep_params === nothing ? Definitions.SoftRepulsiveParams{T}(T(epsilon), T(sigma)) : softrep_params
+        srp = softrep_params === nothing ? Definitions.SoftRepulsiveParams{T}(epsilonT, sigmaT) : softrep_params
     else
         error("Unknown nonbonded=:$(nonbonded). Use :lj, :wca, or :soft_repulsive")
     end
@@ -454,7 +593,7 @@ function build_simulation(;N::Int,
                          nothing,   # box2
                          nothing,   # box3
                          nbh, neigh_interval, lj,
-                         nothing, T(2^(1/6)),
+                         nothing, rcut_factor,
                          nothing, nothing, nothing,
                          bondlist, bond_spec,
                          vv,
@@ -486,6 +625,13 @@ function _accumulate_energies!(Ekin_accum, Epot_accum, Ekin, Epot)
     return
 end
 
+"""
+    accumulate_energies!(st)
+
+Add the instantaneous `Ekin`/`Epot` buffers into their per-interval accumulators.
+Called once per logging interval in `examples/TwoT_2D_LD_VV.jl` before computing
+entropy production.
+"""
 function accumulate_energies!(st::SimulationState{T}) where {T<:AbstractFloat}
     N = length(st.Ekin)
     threads = min(256, N)
@@ -498,7 +644,52 @@ end
 # =========================
 #   One integrator step
 # =========================
+"""
+    step!(st, dt; compute_energy=true)
+    step!(st, spec::IntegratorSpec, dt; compute_energy=true)
+
+Advance [`SimulationState`](@ref) by one time step. The default method reuses
+the last integrator attached to `st` (Langevin VV or Brownian), while the
+variant accepting an [`IntegratorSpec`](@ref) lets scripts such as
+`examples/TwoT_2D_LD_BAOAB.jl` switch to BAOAB/GSM/Euler–Heun explicitly.
+
+Pipeline overview:
+1. Every `st.neigh_interval` steps call [`NeighborLists.update_needed!`](@ref)
+   to test whether the displacement-based skin criterion was violated; rebuild
+   in place (and reset collision state) when needed.
+2. Swap the cached force buffers so the previous-step forces become `f₀`, or
+   compute them from scratch if this is the first step.
+3. Prepare correlated or white noise via `LangevinIntegrators.vv_prepare_noise!`
+   (or the Brownian noise helpers) and advance positions on the GPU.
+4. Optionally update collision statistics right after the position move.
+5. Recompute nonbonded/bonded forces at `t + Δt` and update velocities;
+   per-particle energy/heat accumulators are updated when `compute_energy=true`.
+
+Pass `compute_energy=false` for production runs where observables are sampled
+only every few thousand steps. All overloads reuse the same neighbor-list and
+collision infrastructure, so switching integrators mid-run is inexpensive.
+
+Examples mirroring `examples/2D_example.jl` and `examples/3D_example.jl`:
+
+```julia
+st2d = build_simulation(N=8192, box=(250f0, 250f0), cutoff=Float32(2^(1/6)),
+                        skin=Float32(2^(1/6))/2, cap=Int32(250),
+                        epsilon=1f4, sigma=1f0,
+                        gamma=615f0, temperature=10f0,
+                        dt=1f-5, nonbonded=:wca, precision=:f32)
+step!(st2d, 1f-5; compute_energy=false)
+
+st3d = build_simulation(N=4096, box=(250f0, 250f0, 250f0),
+                        cutoff=Float32(2^(1/6)), skin=0.4f0,
+                        cap=Int32(100), epsilon=10f0, sigma=1f0,
+                        gamma=10f0, temperature=1f0, dt=5f-5)
+step!(st3d, 5f-5; compute_energy=true)
+```
+"""
 function step!(st::SimulationState{T}, dt::Real; compute_energy::Bool=true) where {T<:AbstractFloat}
+    # Pipeline order: check/rebuild neighbor list → swap previous forces →
+    # Langevin noise prep and position update → collision update hook →
+    # new nonbonded/bonded forces → velocity update and optional energy accumulation.
     # Ensure the time step matches the simulation precision
     dtT = T(dt)
     st.last_integrator = UInt8(1)

@@ -1,3 +1,41 @@
+"""
+GPU-accelerated non-equilibrium particle simulations with Langevin and
+Brownian dynamics.
+
+`NonEqSimGPU` orchestrates SoA GPU buffers, neighbor lists, nonbonded and
+bonded force kernels, integrators, collision counters, and writers so that
+research scripts can copy validated parameter sets from `examples/` and run
+production simulations without touching CUDA code. The top-level module
+re-exports the most common types (`SimulationState`, `LJParams`, filters,
+integrator specs, writers, …) so a user usually only needs `using NonEqSimGPU`.
+
+# Example
+The snippet below mirrors `examples/2D_allpairs_quicktest.jl`, which checks the
+all-pairs WCA path with `N = 256` particles and a WCA cutoff of `2^(1/6)σ`.
+
+```julia
+using NonEqSimGPU
+
+N = 256
+box = (80.0f0, 80.0f0)
+dt = 2.0f-4
+rcut = Float32(2^(1/6))
+
+st = build_simulation(N=N, box=box, dt=dt,
+                      cutoff=rcut, skin=0.4f0, cap=Int32(64),
+                      neigh_interval=10, use_neighborlist=false,
+                      epsilon=10f0, sigma=1f0,
+                      gamma=50f0, temperature=1f0,
+                      nonbonded=:wca, precision=:f32)
+
+for _ in 1:50
+    step!(st, dt; compute_energy=true)
+end
+```
+
+See the README and the scripts under `examples/` for richer setups (two-temperature
+filters, bonded polymers, Brownian dynamics, collision histograms, etc.).
+"""
 module NonEqSimGPU
 
 using CUDA
