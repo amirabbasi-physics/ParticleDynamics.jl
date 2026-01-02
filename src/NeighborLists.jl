@@ -1,3 +1,18 @@
+"""
+Neighbor list builders and query utilities used by the force kernels.
+
+`NeighborLists` implements three strategies:
+
+- [`NeighborMatrix`](@ref) — dense cell lists with uniform cutoffs (default in
+  `build_simulation`, parameter choices mirror `examples/2D_example.jl`).
+- [`StencilNeighborMatrix`](@ref) — particle- or type-dependent cutoffs as used
+  in `examples/3D_stencil_two_sizes*.jl`.
+- [`AllPairsNeighborMatrix`](@ref) — sentinel representing O(N²) evaluation
+  (`examples/2D_allpairs_quicktest.jl`).
+
+All stores use a CSR-style `(neighbors_index, neighbors_flat, counts)` layout
+so that kernels can iterate neighbors without branches.
+"""
 module NeighborLists
 
 using CUDA
@@ -9,6 +24,18 @@ export AbstractNeighborMatrix,
        update_neighbors_inplace!, update_needed!,
        build_neighbors_allpairs!, AllPairsNeighborMatrix
 
+"""
+    AbstractNeighborMatrix
+
+Common supertype for all neighbor containers. Kernels expect the following
+fields to be present:
+
+- `neighbors_index`, `neighbors_flat`, `counts`: CSR layout describing, for
+  every particle, the range of valid neighbor indices in `neighbors_flat`.
+- `cap`: maximum number of stored neighbors per particle (sets memory layout).
+- `skin`: additional radial buffer used by `update_needed!` to delay rebuilds.
+- `N`, `D`: particle count and dimensionality.
+"""
 abstract type AbstractNeighborMatrix end
 
 # ============================================================================
@@ -44,6 +71,15 @@ end
 # Data structures
 # ============================================================================
 
+"""
+    NeighborMatrix{T}
+
+Dense neighbor matrix that bins particles into a regular grid (`nx×ny×nz`)
+with cell size `cutoff + skin`. Suitable for uniform-cutoff Lennard-Jones/WCA
+simulations such as `examples/2D_example.jl` and the regression tests. The CSR
+arrays (`neighbors_index`, `neighbors_flat`, `counts`) reference particle IDs
+directly; MIC handling happens inside the force kernels.
+"""
 mutable struct NeighborMatrix{T<:AbstractFloat} <: AbstractNeighborMatrix
     neighbors_index::CuArray{Int32,1}
     neighbors_flat::CuArray{Int32,1}
@@ -76,6 +112,14 @@ mutable struct NeighborMatrix{T<:AbstractFloat} <: AbstractNeighborMatrix
     target_interval::Int
 end
 
+"""
+    StencilNeighborMatrix{T}
+
+Neighbor list variant where each particle carries its own interaction radius
+(`rlist`, `rlist2`). Used by `examples/2D/3D_stencil_two_sizes*.jl` when mixing
+different particle diameters. The per-particle cutoff is `σ_i + skin`, so the
+`skin` argument still controls rebuild latency.
+"""
 mutable struct StencilNeighborMatrix{T<:AbstractFloat} <: AbstractNeighborMatrix
     neighbors_index::CuArray{Int32,1}
     neighbors_flat::CuArray{Int32,1}
@@ -120,7 +164,8 @@ Lightweight sentinel type indicating that all-to-all interactions should be
 computed (no neighbor list), using periodic MIC and excluding i==j.
 
 Fields are kept minimal but include `skin` so existing calls that read
-`st.nbh.skin` continue to work without changes.
+`st.nbh.skin` continue to work without changes. `examples/2D_allpairs_quicktest.jl`
+uses this type when validating the WCA path without the cell list overhead.
 """
 struct AllPairsNeighborMatrix{T<:AbstractFloat} <: AbstractNeighborMatrix
     skin::T
@@ -243,6 +288,7 @@ end
 # Core kernels
 # ============================================================================
 
+# Initialize the CSR row start pointer for each particle: row i starts at i*cap.
 function _kernel_set_rowstarts!(neighbors_index::CuDeviceVector{Int32}, cap::Int32)
     i = (blockIdx().x-1)*blockDim().x + threadIdx().x
     N = length(neighbors_index); if i > N; return; end
@@ -250,6 +296,7 @@ function _kernel_set_rowstarts!(neighbors_index::CuDeviceVector{Int32}, cap::Int
     return
 end
 
+# Pack `(cell_id, particle_id)` pairs so particles can be sorted by cell id.
 function _kernel_compute_packed2!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
                                   Lx::T, Ly::T, inv_cs::T,
                                   nx::Int32, ny::Int32,
@@ -267,6 +314,7 @@ function _kernel_compute_packed2!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
     return
 end
 
+# 3D variant of the packing kernel described above.
 function _kernel_compute_packed3!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
                                   Lx::T, Ly::T, Lz::T, inv_cs::T,
                                   nx::Int32, ny::Int32, nz::Int32,
@@ -334,6 +382,8 @@ function _kernel_cell_offsets!(cell_ids_sorted::CuDeviceVector{Int32},
     return
 end
 
+# Scan the 3×3 neighborhood around the cell containing particle `i1`
+# (with periodic wrapping) and append neighbors that satisfy the cutoff² test.
 function _kernel_neighbors2!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
                              neighbors_index::CuDeviceVector{Int32},
                              neighbors_flat::CuDeviceVector{Int32},
@@ -378,6 +428,7 @@ function _kernel_neighbors2!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
     return
 end
 
+# 3D version of `_kernel_neighbors2!`, now looping over 27 neighboring cells.
 function _kernel_neighbors3!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
                              neighbors_index::CuDeviceVector{Int32},
                              neighbors_flat::CuDeviceVector{Int32},
@@ -429,6 +480,7 @@ function _kernel_neighbors3!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::C
     return
 end
 
+# Store the coordinates used for the last successful rebuild.
 function _kernel_copy_refs_2d!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
                                rref_x::CuDeviceVector{T}, rref_y::CuDeviceVector{T}) where {T<:AbstractFloat}
     i = (blockIdx().x-1)*blockDim().x + threadIdx().x
@@ -453,6 +505,7 @@ function _kernel_copy_refs_3d!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz:
     return
 end
 
+# Accumulate the squared displacement from the reference coordinates.
 function _kernel_accum_dr2_2d!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
                                rref_x::CuDeviceVector{T}, rref_y::CuDeviceVector{T},
                                dr2::CuDeviceVector{T},
@@ -556,6 +609,21 @@ _bin_particles!(nbh::StencilNeighborMatrix{T}, rx::CuArray{T,1}, ry::CuArray{T,1
 # Public build routines
 # ============================================================================
 
+"""
+    build_neighbors_dense!(rx, ry[, rz]; box, cutoff, cap, skin)
+
+Construct a [`NeighborMatrix`](@ref) with uniform cutoff `cutoff` and
+displacement buffer `skin`. The default path taken by `build_simulation`
+(`examples/2D_example.jl` uses `cutoff = 2^(1/6)σ`, `skin = cutoff/2`).
+
+# Arguments
+- `rx, ry[, rz]`: Position components in `[-L/2, L/2)`.
+- `box`: `(Lx, Ly[, Lz])` periodic extents.
+- `cutoff`: Interaction cutoff; must be consistent with the potential (WCA or LJ).
+- `cap`: Maximum stored neighbors per particle (e.g. `Int32(250)` in the WCA example).
+- `skin`: Additional tolerance that delays rebuilds until particles move by
+  `≈ skin/2`. Chosen from the validated examples/test (0.3–0.5 σ).
+"""
 function build_neighbors_dense!(rx::CuArray{T,1}, ry::CuArray{T,1};
                                 box::Tuple{T,T}, cutoff::Real,
                                 cap::Int32, skin::Real) where {T<:AbstractFloat}
@@ -574,6 +642,13 @@ function build_neighbors_dense!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{
     return nbh
 end
 
+"""
+    build_neighbors_stencil!(rx, ry[, rz]; box, rcut_particle, cap, skin)
+
+Stencil neighbor list where each particle `i` owns a cutoff `rcut_particle[i]`.
+`examples/3D_stencil_two_sizes.jl` uses this to mix `σ=5` and `σ=1` particles
+by passing per-type cutoffs computed from the Lorentz mixing rule.
+"""
 function build_neighbors_stencil!(rx::CuArray{T,1}, ry::CuArray{T,1};
                                   box::Tuple{T,T},
                                   rcut_particle::AbstractVector{<:Real},
@@ -610,6 +685,14 @@ function build_neighbors_stencil!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArra
     return nbh
 end
 
+"""
+    build_neighbors_stencil_by_types!(rx, ry[, rz]; box, typeid, rcut_pair, cap, skin)
+
+Variant of [`build_neighbors_stencil!`](@ref) where the per-particle cutoff is
+derived from a type–type lookup table `rcut_pair`. This mirrors the setup in
+`examples/3D_stencil_two_sizes.jl`, which supplies the 2×2 `RCUT_PAIR` matrix
+shown there.
+"""
 function build_neighbors_stencil_by_types!(rx::CuArray{T,1}, ry::CuArray{T,1};
                                            box::Tuple{T,T},
                                            typeid::CuArray{Int32,1},
@@ -678,6 +761,14 @@ end
 # Update in place
 # ============================================================================
 
+"""
+    update_neighbors_inplace!(nbh, rx, ry[, rz]; box, step=0)
+
+Re-bin particles into cells, rebuild the CSR neighbor rows, and record the
+reference coordinates used by [`update_needed!`](@ref). Called by `step!`
+whenever the accumulated displacement exceeds `skin/2` or when the user forces
+an update (e.g. after randomizing the configuration).
+"""
 function update_neighbors_inplace!(nbh::NeighborMatrix{T},
                                    rx::CuArray{T,1}, ry::CuArray{T,1};
                                    box::Tuple{T,T}, step::Int=0) where {T<:AbstractFloat}
@@ -797,6 +888,7 @@ end
 # Stencil neighbor kernels
 # ============================================================================
 
+# Stencil neighbor search: expand the search radius based on each particle's rlist.
 function _kernel_neighbors_stencil2!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
                                      rlist::CuDeviceVector{T}, rlist2::CuDeviceVector{T},
                                      neighbors_index::CuDeviceVector{Int32},
@@ -849,6 +941,7 @@ function _kernel_neighbors_stencil2!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T
     return
 end
 
+# 3D stencil neighbor builder with per-particle cutoff radii.
 function _kernel_neighbors_stencil3!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
                                      rlist::CuDeviceVector{T}, rlist2::CuDeviceVector{T},
                                      neighbors_index::CuDeviceVector{Int32},
@@ -909,6 +1002,14 @@ end
 # Update needed? logic
 # ============================================================================
 
+"""
+    update_needed!(nbh, rx, ry[, rz]; skin, Lx, Ly[, Lz], step)
+
+Check whether the maximum displacement since the last rebuild exceeds
+`skin/2`, or whether the adaptive rebuild interval (`target_interval`) has
+elapsed. `step!` calls this every `NL_CHECK_STRIDE` steps. The heuristic mirrors
+the values tuned in the 2D/3D production scripts (skin between 0.3 and 0.5 σ).
+"""
 function update_needed!(nbh::NeighborMatrix{T}, rx::CuArray{T,1}, ry::CuArray{T,1};
                         skin::Real, Lx::T, Ly::T, step::Int) where {T<:AbstractFloat}
     threads, blocks = _launchdims(length(rx))

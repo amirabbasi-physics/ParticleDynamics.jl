@@ -19,7 +19,7 @@ CUDA.allowscalar(false)
                                          epsilon=1f0,
                                          sigma=1f0,
                                          gamma=1f0,
-                                         init_temperature=1f0)
+                                         temperature=1f0)
 
         type_host = vcat(fill(Int32(1), N ÷ 2), fill(Int32(2), N - N ÷ 2))
         st.typeid .= CuArray(type_host)
@@ -108,7 +108,7 @@ CUDA.allowscalar(false)
                                          cap=Int32(16),
                                          neigh_interval=5,
                                          gamma=1f0,
-                                         init_temperature=1f0,
+                                         temperature=1f0,
                                          noise_corr_time=0.05f0)
         @test st.vv.corr_time !== nothing
         @test st.ou_x !== nothing && st.ou_y !== nothing
@@ -138,6 +138,26 @@ CUDA.allowscalar(false)
                                                  dt=dt)
         CUDA.synchronize()
         @test all(isfinite.(Array(st.rf_x)))
+    end
+
+    @testset "WCA cutoff override" begin
+        sigma = 1.3f0
+        st = Simulation.build_simulation(N=32,
+                                         box=(20f0, 20f0),
+                                         cutoff=2.5f0,
+                                         skin=0.3f0,
+                                         cap=Int32(32),
+                                         neigh_interval=5,
+                                         epsilon=0.5f0,
+                                         sigma=sigma,
+                                         gamma=1f0,
+                                         temperature=1f0,
+                                         nonbonded=:wca)
+        factor = Float32(1.122462048309373)
+        expected = sigma * factor
+        @test isapprox(st.pair_lj.rcut, expected; rtol=1f-6)
+        @test isapprox(st.nbh.cutoff, expected; rtol=1f-6)
+        @test isapprox(st.rcut_factor * sigma, expected; rtol=1f-6)
     end
 
 end

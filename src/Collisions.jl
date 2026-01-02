@@ -20,6 +20,8 @@ end
     return lut[ti, tj]
 end
 
+# Seed the contact state bitset (2D uniform cutoff) so the first counted step
+# does not register already overlapping pairs.
 function _init_prev2!(
     rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
     neighbors_index::CuDeviceVector{Int32}, neighbors_flat::CuDeviceVector{Int32}, counts::CuDeviceVector{Int32},
@@ -40,6 +42,7 @@ function _init_prev2!(
     return
 end
 
+# Same as `_init_prev2!` but uses per-type pair cutoffs.
 function _init_prev2_pair!(
     rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, typeid::CuDeviceVector{Int32},
     neighbors_index::CuDeviceVector{Int32}, neighbors_flat::CuDeviceVector{Int32}, counts::CuDeviceVector{Int32},
@@ -64,6 +67,7 @@ function _init_prev2_pair!(
     return
 end
 
+# 3D initialization for uniform cutoff.
 function _init_prev3!(
     rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
     neighbors_index::CuDeviceVector{Int32}, neighbors_flat::CuDeviceVector{Int32}, counts::CuDeviceVector{Int32},
@@ -85,6 +89,7 @@ function _init_prev3!(
     return
 end
 
+# 3D initialization with per-type cutoffs.
 function _init_prev3_pair!(
     rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T}, typeid::CuDeviceVector{Int32},
     neighbors_index::CuDeviceVector{Int32}, neighbors_flat::CuDeviceVector{Int32}, counts::CuDeviceVector{Int32},
@@ -110,6 +115,8 @@ function _init_prev3_pair!(
     return
 end
 
+# Detect contact entry events in 2D (uniform cutoff). When `i<j` transitions
+# from "separated" to "overlapping", increment the appropriate bin.
 function _events2!(
     rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, typeid::CuDeviceVector{Int32},
     neighbors_index::CuDeviceVector{Int32}, neighbors_flat::CuDeviceVector{Int32}, counts::CuDeviceVector{Int32},
@@ -144,6 +151,7 @@ function _events2!(
     return
 end
 
+# 2D contact events with per-type cutoffs.
 function _events2_pair!(
     rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, typeid::CuDeviceVector{Int32},
     neighbors_index::CuDeviceVector{Int32}, neighbors_flat::CuDeviceVector{Int32}, counts::CuDeviceVector{Int32},
@@ -180,6 +188,7 @@ function _events2_pair!(
     return
 end
 
+# 3D contact events (uniform cutoff).
 function _events3!(
     rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T}, typeid::CuDeviceVector{Int32},
     neighbors_index::CuDeviceVector{Int32}, neighbors_flat::CuDeviceVector{Int32}, counts::CuDeviceVector{Int32},
@@ -215,6 +224,7 @@ function _events3!(
     return
 end
 
+# 3D contact events with per-type cutoffs.
 function _events3_pair!(
     rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T}, typeid::CuDeviceVector{Int32},
     neighbors_index::CuDeviceVector{Int32}, neighbors_flat::CuDeviceVector{Int32}, counts::CuDeviceVector{Int32},
@@ -257,9 +267,22 @@ end
 """
     enable_collision_counting!(st; ntypes=nothing, bins=:all_pairs)
 
-Allocate and enable GPU collision event counting. By default, creates bins for
-all unordered type pairs (1..ntypes). Users can pass a custom `ntypes`; if not
-given, it is inferred from `maximum(typeid)` on host.
+Attach GPU buffers that count contact-entry events (pairs whose separation
+crosses below the collision cutoff). `examples/TwoT_2D_LD_VV.jl` enables this
+with `ntypes=2` to log `cold/cold`, `cold/hot`, and `hot/hot` encounters.
+
+# Arguments
+- `ntypes`: Number of particle types; defaults to `maximum(Array(st.typeid))`.
+- `bins`: Currently only `:all_pairs`, which bins every unordered type pair.
+
+# Examples
+```julia
+enable_collision_counting!(st; ntypes=2, bins=:all_pairs)
+for _ in 1:1_000_000
+    step!(st, velocityverlet(st), dt; compute_energy=false)
+end
+counts = collisions_read_counts!(st) ./ (dt * 1_000_000)
+```
 """
 function enable_collision_counting!(st; ntypes::Union{Nothing,Int}=nothing, bins::Symbol=:all_pairs)
     T = eltype(st.rx)
@@ -297,6 +320,11 @@ function enable_collision_counting!(st; ntypes::Union{Nothing,Int}=nothing, bins
     return st
 end
 
+"""
+    disable_collision_counting!(st)
+
+Tear down all collision-counting buffers.
+"""
 function disable_collision_counting!(st)
     st.coll_enabled = false
     st.coll_prev = nothing
@@ -306,7 +334,10 @@ function disable_collision_counting!(st)
 end
 
 """
-Reset device-side collision counters to zero (does not touch contact_prev).
+    collisions_reset_counts!(st)
+
+Clear the histogram without reinitializing the contact state. Handy after a
+warmup period (mirrors the procedure in `examples/TwoT_2D_LD_VV.jl`).
 """
 function collisions_reset_counts!(st)
     if st.coll_enabled && st.coll_counts !== nothing
@@ -318,7 +349,8 @@ end
 """
     collisions_read_counts!(st) -> Vector{Int64}
 
-Copy device counters to host.
+Copy device counters to host. The vector ordering matches the bin assignment
+printed by `enable_collision_counting!` (unordered type pairs).
 """
 function collisions_read_counts!(st)
     if !st.coll_enabled || st.coll_counts === nothing
@@ -333,10 +365,9 @@ end
 """
     set_collision_pair_cutoffs!(st, rcut_pair)
 
-Upload a per-type pair cutoff matrix (ntypes×ntypes) to the device. Values are
-interpreted as distances; the kernels square them internally when comparing r^2.
-If you are already using LJ per-pair cutoffs in the simulation, it is enough to
-assign `st.rcut_pair` directly; this helper mirrors that path for convenience.
+Override the contact cutoff used for counting with an `ntypes×ntypes` matrix.
+Each entry stores the distance (not squared). This mirrors the `RCUT_PAIR`
+setup in `examples/3D_stencil_two_sizes.jl`.
 """
 function set_collision_pair_cutoffs!(st, rcut_pair::AbstractMatrix{<:Real})
     T = eltype(st.rx)

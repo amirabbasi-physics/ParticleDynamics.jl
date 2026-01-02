@@ -1,3 +1,7 @@
+"""
+Particle-selection helpers used to assign per-group parameters (temperatures,
+frictions, correlation times) as in `examples/TwoT_2D_LD_VV.jl`.
+"""
 module Filters
 
 using Base: Set
@@ -12,22 +16,38 @@ export Filter, All, TypeIDs, Indices, Selection,
        assign_scalar!, assign_values!, gather, sum,
        set_noise_scale!, set_temperature!, set_friction!, set_corr_time!
 
+"""
+Base type for particle selections that operate on `SimulationState`.
+"""
 abstract type Filter end
 
+"""
+Select all particles.
+"""
 struct All <: Filter end
 
+"""
+Filter by type IDs (`st.typeid`). Accepts a single `Int` or a vector.
+"""
 struct TypeIDs{I<:Integer} <: Filter
     ids::Vector{I}
 end
 TypeIDs(ids::AbstractVector{<:Integer}) = TypeIDs{Int}(Int.(ids))
 TypeIDs(id::Integer) = TypeIDs([Int(id)])
 
+"""
+Explicit list of particle indices.
+"""
 struct Indices{I<:Integer} <: Filter
     idx::Vector{I}
 end
 Indices(idx::AbstractVector{<:Integer}) = Indices{Int}(Int.(idx))
 Indices(id::Integer) = Indices([Int(id)])
 
+"""
+GPU/host selection pair returned by [`selection`](@ref). Access `.host` for
+CPU arrays and `.device` for `CuArray{Int32}` indexing.
+"""
 struct Selection
     host::Vector{Int}
     device::CuArray{Int32,1}
@@ -67,8 +87,20 @@ function resolve(f::TypeIDs, st::SimulationState)
     return idx
 end
 
+"""
+    resolve(filter, st) -> Vector{Int}
+
+Return host indices matching `filter`. Used in the Filters unit tests to verify
+type-based selections.
+"""
 resolve(st::SimulationState, f::Filter) = resolve(f, st)
 
+"""
+    resolve_gpu(filter, st) -> CuArray{Int32}
+
+GPU version of [`resolve`](@ref), used by `assign_scalar!` and friends when
+updating `CuArray` buffers directly.
+"""
 function resolve_gpu(f::Filter, st::SimulationState)
     host = resolve(f, st)
     return CuArray(Int32.(host))
@@ -76,6 +108,11 @@ end
 
 resolve_gpu(st::SimulationState, f::Filter) = resolve_gpu(f, st)
 
+"""
+    selection(st, filter) -> Selection
+
+Allocate a [`Selection`](@ref) (host+device indices) for repeated use.
+"""
 function selection(st::SimulationState, f::Filter)
     host = resolve(f, st)
     return Selection(host)
@@ -88,6 +125,11 @@ function _validate_indices(idx::Vector{Int}, N::Int)
     nothing
 end
 
+"""
+    count(filter, st)
+
+Number of particles matched by `filter`.
+"""
 count(f::Filter, st::SimulationState) = length(resolve(f, st))
 count(st::SimulationState, f::Filter) = count(f, st)
 
@@ -176,6 +218,13 @@ end
 # Assign helpers
 # -----------------------------------------------------------------------------
 
+"""
+    assign_scalar!(dest, st[, filter], value)
+
+Fill elements of `dest` referenced by `filter` (or all particles) with `value`.
+This underpins `set_friction!` and the temperature setup in
+`examples/TwoT_2D_LD_VV.jl`.
+"""
 function assign_scalar!(dest::CuArray{T,1}, idx::CuArray{Int32,1}, value::Real) where {T}
     N = length(idx)
     N == 0 && return dest
@@ -219,6 +268,12 @@ function assign_scalar!(dest::AbstractVector{T}, st::SimulationState; filter::Fi
     return assign_scalar!(dest, st, filter, value)
 end
 
+"""
+    assign_values!(dest, st[, filter], values)
+
+Assign distinct values per particle according to `values`. Useful when setting
+custom noise scales per lattice site.
+"""
 function assign_values!(dest::CuArray{T,1}, idx::CuArray{Int32,1}, values::CuArray{T,1}) where {T}
     N = length(idx)
     @assert length(values) == N "values length $(length(values)) must match index length $(N)"
@@ -272,6 +327,12 @@ end
 # Gather / sum
 # -----------------------------------------------------------------------------
 
+"""
+    gather(src, st[, filter]) -> Vector
+
+Collect the values referenced by `filter` onto the host. Used in the tests to
+verify that per-type energies match expectations.
+"""
 function gather(src::CuArray{T,1}, idx::CuArray{Int32,1}) where {T}
     N = length(idx)
     N == 0 && return T[]
@@ -305,6 +366,12 @@ function gather(src::AbstractVector{T}, st::SimulationState, f::Filter) where {T
     return gather(src, idx)
 end
 
+"""
+    sum(src, st[, filter])
+
+Sum the selected entries of `src`, returning a scalar on the host. Mirrors the
+heat/energy aggregation in `examples/TwoT_2D_LD_VV.jl`.
+"""
 function sum(src::CuArray{T,1}, idx::CuArray{Int32,1}) where {T<:Real}
     N = length(idx)
     N == 0 && return zero(T)
@@ -346,6 +413,12 @@ end
 # Convenience APIs
 # -----------------------------------------------------------------------------
 
+"""
+    set_noise_scale!(st, value; filter=All())
+
+Directly assign the Langevin noise scale (`√(2 γ T Δt)`) for the selected
+particles. Usually invoked indirectly via [`set_temperature!`](@ref).
+"""
 function set_noise_scale!(st::SimulationState, value::Real; filter::Filter=All())
     sel = selection(st, filter)
     set_noise_scale!(st, value, sel)
@@ -411,6 +484,12 @@ function set_noise_scale!(bp::BrownianIntegrators.BrownianParams{T}, st::Simulat
 end
 
 # Correlation time setters (allocates corr_time array when first used; τ<=0 disables correlation)
+"""
+    set_corr_time!(st, τ; filter=All())
+
+Allocate (if needed) and fill the per-particle Ornstein–Uhlenbeck correlation
+time array. `τ <= 0` disables correlation.
+"""
 function set_corr_time!(st::SimulationState{T}, value::Real; filter::Filter=All()) where {T<:AbstractFloat}
     corr = _ensure_corr_time_array(st)
     assign_scalar!(corr, st; filter=filter, value=value)
@@ -455,6 +534,12 @@ function set_corr_time!(em::BrownianIntegrators.EMParams{T}, value::Real) where 
     return em2
 end
 
+"""
+    set_friction!(st, γ; filter=All())
+
+Adjust the per-particle friction coefficient stored in `st.vv.gamma`. The
+filters unit tests ramp different friction values for cold vs hot particles.
+"""
 function set_friction!(st::SimulationState, value::Real; filter::Filter=All())
     sel = selection(st, filter)
     set_friction!(st, value, sel)
@@ -519,6 +604,13 @@ function set_friction!(bp::BrownianIntegrators.BrownianParams{T}, st::Simulation
     return bp
 end
 
+"""
+    set_temperature!(st, dt, T; filter=All())
+
+Compute `noise_scale = √(2 γ T Δt)` for the selected particles. This is the
+API exercised throughout the examples (e.g. `TwoT_2D_LD_VV.jl`) to couple hot
+and cold baths to different groups.
+"""
 function set_temperature!(st::SimulationState, dt::Real, temperature::Real; filter::Filter=All())
     sel = selection(st, filter)
     set_temperature!(st, dt, temperature, sel)

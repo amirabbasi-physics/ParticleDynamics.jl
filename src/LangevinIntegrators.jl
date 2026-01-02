@@ -16,6 +16,14 @@ export VVParams,
 # Parameter containers
 # ------------------------------------------------------------------
 
+"""
+    VVParams(gamma, mass, noise_scale; corr_time=nothing)
+
+Parameters for the Grønbech-Jensen/Farago (velocity-Verlet) Langevin scheme.
+`gamma` and `noise_scale` are CuArrays so `Filters.set_temperature!` can update
+them in-place (see `examples/TwoT_2D_LD_VV.jl`). `corr_time` stores optional
+per-particle Ornstein–Uhlenbeck correlation times.
+"""
 struct VVParams{T<:AbstractFloat}
     gamma::CuArray{T,1}
     mass::T
@@ -27,6 +35,12 @@ VVParams(gamma::CuArray{T,1}, mass::T, noise_scale::CuArray{T,1}; corr_time::Uni
     VVParams{T}(gamma, mass, noise_scale, corr_time)
 end
 
+"""
+    BAOABParams(gamma, mass, noise_scale; corr_time=nothing)
+
+Parameter container for BAOAB/BAOA/GSM splitting schemes. Matches the API
+expected by `baoab_BA_*`, `baoab_OU_*`, `baoab_A_*`, and `baoab_B_*`.
+"""
 struct BAOABParams{T<:AbstractFloat}
     gamma::CuArray{T,1}
     mass::T
@@ -131,6 +145,13 @@ function _vv_noise3_ou_kernel!(beta_x::CuDeviceVector{T},
     return
 end
 
+"""
+    vv_prepare_noise!(βx, βy[, βz], noise_scale; corr_time, state_x, state_y[, state_z], dt)
+
+Draw the stochastic impulses used by the velocity-Verlet Langevin solver.
+Supports both white noise and correlated (OU) draws. The correlated path is
+used in `test/runtests.jl` by supplying `noise_corr_time=0.05f0`.
+"""
 function vv_prepare_noise!(beta_x::CuArray{T,1},
                            beta_y::CuArray{T,1},
                            noise_scale::CuArray{T,1};
@@ -227,6 +248,13 @@ function _vv_pos3!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVec
     return
 end
 
+"""
+    vv_positions_soa!(rx, ry[, rz], vx, vy[, vz], fx, fy[, fz], βx, βy[, βz], params, dt, box)
+
+Velocity-Verlet B step: update positions using half-step velocities,
+deterministic forces, and stochastic impulses. Called internally by `step!` and
+mirrors the implementation in `examples/TwoT_2D_LD_VV.jl`.
+"""
 function vv_positions_soa!(rx::CuArray{T,1}, ry::CuArray{T,1},
                            vx::CuArray{T,1}, vy::CuArray{T,1},
                            fx::CuArray{T,1}, fy::CuArray{T,1},
@@ -346,6 +374,13 @@ function _vv_vel3!(vx::CuDeviceVector{T}, vy::CuDeviceVector{T}, vz::CuDeviceVec
     return
 end
 
+"""
+    vv_velocities_soa!(vx, vy[, vz], f0x, f0y[, f0z], fx, fy[, fz], βx, βy[, βz], dq, dU, Ekin, params, dt)
+
+Velocity-Verlet O step: advance velocities with previous and current forces,
+then update the heat and kinetic-energy buffers. The power accounting matches
+the entropy production diagnostics in `examples/TwoT_2D_LD_VV.jl`.
+"""
 function vv_velocities_soa!(vx::CuArray{T,1}, vy::CuArray{T,1},
                             f0x::CuArray{T,1}, f0y::CuArray{T,1},
                             fx::CuArray{T,1}, fy::CuArray{T,1},
@@ -577,6 +612,13 @@ end
 # Public BAOAB wrappers
 # ------------------------------------------------------------------
 
+"""
+    baoab_BA_2d!(rx, ry, vx, vy, f0x, f0y, params, dt, box)
+
+Combined B/A half-step for BAOAB in 2D: kick velocities by half a force step
+and drift positions by `½ Δt`. Mirrors the integrator sequencing in
+`examples/TwoT_2D_LD_BAOAB.jl`.
+"""
 function baoab_BA_2d!(rx, ry, vx, vy, f0x, f0y, params::BAOABParams{T}, dt::T, box::Definitions.Box2{T}) where {T<:AbstractFloat}
     N = length(rx); threads = min(256, N); blocks = cld(N, threads)
     k = CUDA.@cuda launch=false _baoab_BA2!(rx, ry, vx, vy, f0x, f0y, params.mass, dt, box[1], box[2])
@@ -621,6 +663,9 @@ function cons_power_3d!(vx::CuArray{T,1}, vy::CuArray{T,1}, vz::CuArray{T,1}, fx
     return nothing
 end
 
+"""
+3D variant of [`baoab_BA_2d!`](@ref).
+"""
 function baoab_BA_3d!(rx, ry, rz, vx, vy, vz, f0x, f0y, f0z, params::BAOABParams{T}, dt::T, box::Definitions.Box3{T}) where {T<:AbstractFloat}
     N = length(rx); threads = min(256, N); blocks = cld(N, threads)
     k = CUDA.@cuda launch=false _baoab_BA3!(rx, ry, rz, vx, vy, vz, f0x, f0y, f0z, params.mass, dt, box[1], box[2], box[3])
@@ -628,6 +673,12 @@ function baoab_BA_3d!(rx, ry, rz, vx, vy, vz, f0x, f0y, f0z, params::BAOABParams
     return nothing
 end
 
+"""
+    baoab_OU_2d!(vx, vy, βx, βy, params, dt, dq)
+
+Ornstein–Uhlenbeck velocity update (O step) for the BAOAB scheme in 2D. Uses
+the same per-particle `gamma` and noise scales as `VVParams`.
+"""
 function baoab_OU_2d!(vx, vy, beta_x, beta_y, params::BAOABParams{T}, dt::T, dq) where {T<:AbstractFloat}
     N = length(vx); threads = min(256, N); blocks = cld(N, threads)
     k = CUDA.@cuda launch=false _baoab_OU2!(vx, vy, beta_x, beta_y, params.noise_scale, params.gamma, params.mass, dt, dq)
@@ -635,6 +686,9 @@ function baoab_OU_2d!(vx, vy, beta_x, beta_y, params::BAOABParams{T}, dt::T, dq)
     return nothing
 end
 
+"""
+3D OU step for BAOAB (see [`baoab_OU_2d!`](@ref)).
+"""
 function baoab_OU_3d!(vx, vy, vz, beta_x, beta_y, beta_z, params::BAOABParams{T}, dt::T, dq) where {T<:AbstractFloat}
     N = length(vx); threads = min(256, N); blocks = cld(N, threads)
     k = CUDA.@cuda launch=false _baoab_OU3!(vx, vy, vz, beta_x, beta_y, beta_z, params.noise_scale, params.gamma, params.mass, dt, dq)
@@ -642,6 +696,12 @@ function baoab_OU_3d!(vx, vy, vz, beta_x, beta_y, beta_z, params::BAOABParams{T}
     return nothing
 end
 
+"""
+    baoab_A_2d!(rx, ry, vx, vy, dt, box)
+
+Pure drift (A step) that advances coordinates by `½ Δt` using the already
+updated velocities.
+"""
 function baoab_A_2d!(rx, ry, vx, vy, dt::T, box::Definitions.Box2{T}) where {T<:AbstractFloat}
     N = length(rx); threads = min(256, N); blocks = cld(N, threads)
     k = CUDA.@cuda launch=false _baoab_A2!(rx, ry, vx, vy, dt, box[1], box[2])
@@ -649,6 +709,9 @@ function baoab_A_2d!(rx, ry, vx, vy, dt::T, box::Definitions.Box2{T}) where {T<:
     return nothing
 end
 
+"""
+3D drift step (see [`baoab_A_2d!`](@ref)).
+"""
 function baoab_A_3d!(rx, ry, rz, vx, vy, vz, dt::T, box::Definitions.Box3{T}) where {T<:AbstractFloat}
     N = length(rx); threads = min(256, N); blocks = cld(N, threads)
     k = CUDA.@cuda launch=false _baoab_A3!(rx, ry, rz, vx, vy, vz, dt, box[1], box[2], box[3])
@@ -656,6 +719,12 @@ function baoab_A_3d!(rx, ry, rz, vx, vy, vz, dt::T, box::Definitions.Box3{T}) wh
     return nothing
 end
 
+"""
+    baoab_B_2d!(vx, vy, fx, fy, params, dt, Ekin, dU)
+
+Final B step of BAOAB: kick velocities with the fresh forces and update the
+conservative power/kinetic energy accumulators.
+"""
 function baoab_B_2d!(vx, vy, fx, fy, params::BAOABParams{T}, dt::T, Ekin, dU) where {T<:AbstractFloat}
     N = length(vx); threads = min(256, N); blocks = cld(N, threads)
     k = CUDA.@cuda launch=false _baoab_B2!(vx, vy, fx, fy, params.mass, dt, Ekin, dU)
@@ -663,6 +732,9 @@ function baoab_B_2d!(vx, vy, fx, fy, params::BAOABParams{T}, dt::T, Ekin, dU) wh
     return nothing
 end
 
+"""
+3D version of [`baoab_B_2d!`](@ref).
+"""
 function baoab_B_3d!(vx, vy, vz, fx, fy, fz, params::BAOABParams{T}, dt::T, Ekin, dU) where {T<:AbstractFloat}
     N = length(vx); threads = min(256, N); blocks = cld(N, threads)
     k = CUDA.@cuda launch=false _baoab_B3!(vx, vy, vz, fx, fy, fz, params.mass, dt, Ekin, dU)
