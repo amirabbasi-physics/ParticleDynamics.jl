@@ -19,6 +19,11 @@ const NB_KIND_LJ      = UInt8(1)
 const NB_KIND_WCA     = UInt8(2)
 const NB_KIND_SOFTREP = UInt8(3)
 
+# Freeze modes
+const FREEZE_NONE   = UInt8(0)
+const FREEZE_HOLD   = UInt8(1)
+const FREEZE_SPRING = UInt8(2)
+
 export SimulationState, build_simulation, step!, step_graph!, step_fused!, zero_forces!
 export IntegratorSpec, VVSpec, BAOABSpec, BAOASpec, GSMSpec, BrownianSpec, EMSpec, velocityverlet, baoab, baoa, gsm, eulerheun, eulermaruyama
 
@@ -44,6 +49,7 @@ Key fields that user code may read or mutate:
 - `Epot`, `Ekin`, `dq`, `dU` plus the corresponding `*_accum` buffers: energy
   and heat observables that can be sampled directly on the GPU.
 - `typeid`: per-particle type ids used by `Filters` and mixed-size LJ kernels.
+- `freeze_*`: optional buffers used by the freeze/tether helpers in `Filters`.
 - `coll_*`: optional buffers that appear when collision counting is enabled via
   `enable_collision_counting!`.
 
@@ -114,6 +120,15 @@ mutable struct SimulationState{T<:AbstractFloat}
     last_integrator::UInt8
     nb_kind::UInt8
     softrep::Union{Nothing,Definitions.SoftRepulsiveParams{T}}
+    # freeze controls (optional)
+    freeze_mode::UInt8
+    freeze_until::Int
+    freeze_include_energy::Bool
+    freeze_mask::Union{Nothing,CuArray{UInt8,1}}
+    freeze_k::T
+    freeze_rx::Union{Nothing,CuArray{T,1}}
+    freeze_ry::Union{Nothing,CuArray{T,1}}
+    freeze_rz::Union{Nothing,CuArray{T,1}}
     # Collision counting (optional)
     coll_enabled::Bool
     coll_prev::Union{Nothing,CuArray{UInt8,1}}
@@ -301,6 +316,251 @@ function _apply_bonds3!(st::SimulationState{T}, fx::CuArray{T,1}, fy::CuArray{T,
     return
 end
 
+# -------------------------
+# Freeze helpers
+# -------------------------
+
+@inline function _freeze_active!(st::SimulationState)
+    if st.freeze_mode == FREEZE_NONE
+        return false
+    end
+    if st.freeze_until >= 0 && st.step >= st.freeze_until
+        st.freeze_mode = FREEZE_NONE
+        st.freeze_until = -1
+        return false
+    end
+    return true
+end
+
+function _freeze_hold2_kernel!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
+                               mask::CuDeviceVector{UInt8},
+                               ax::CuDeviceVector{T}, ay::CuDeviceVector{T}) where {T<:AbstractFloat}
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    @inbounds begin
+        if mask[i] != 0
+            rx[i] = ax[i]
+            ry[i] = ay[i]
+        end
+    end
+    return
+end
+
+function _freeze_hold3_kernel!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
+                               mask::CuDeviceVector{UInt8},
+                               ax::CuDeviceVector{T}, ay::CuDeviceVector{T}, az::CuDeviceVector{T}) where {T<:AbstractFloat}
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    @inbounds begin
+        if mask[i] != 0
+            rx[i] = ax[i]
+            ry[i] = ay[i]
+            rz[i] = az[i]
+        end
+    end
+    return
+end
+
+function _freeze_hold2!(rx::CuArray{T,1}, ry::CuArray{T,1},
+                        mask::CuArray{UInt8,1},
+                        ax::CuArray{T,1}, ay::CuArray{T,1}) where {T<:AbstractFloat}
+    N = length(rx); N == 0 && return nothing
+    threads = min(256, N); blocks = cld(N, threads)
+    k = CUDA.@cuda launch=false _freeze_hold2_kernel!(rx, ry, mask, ax, ay)
+    k(rx, ry, mask, ax, ay; threads, blocks)
+    return nothing
+end
+
+function _freeze_hold3!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
+                        mask::CuArray{UInt8,1},
+                        ax::CuArray{T,1}, ay::CuArray{T,1}, az::CuArray{T,1}) where {T<:AbstractFloat}
+    N = length(rx); N == 0 && return nothing
+    threads = min(256, N); blocks = cld(N, threads)
+    k = CUDA.@cuda launch=false _freeze_hold3_kernel!(rx, ry, rz, mask, ax, ay, az)
+    k(rx, ry, rz, mask, ax, ay, az; threads, blocks)
+    return nothing
+end
+
+function _freeze_spring2_kernel!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
+                                 fx::CuDeviceVector{T}, fy::CuDeviceVector{T},
+                                 mask::CuDeviceVector{UInt8},
+                                 ax::CuDeviceVector{T}, ay::CuDeviceVector{T}, k::T) where {T<:AbstractFloat}
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    @inbounds begin
+        if mask[i] != 0
+            dx = rx[i] - ax[i]
+            dy = ry[i] - ay[i]
+            fx[i] -= k * dx
+            fy[i] -= k * dy
+        end
+    end
+    return
+end
+
+function _freeze_spring2_energy_kernel!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
+                                        fx::CuDeviceVector{T}, fy::CuDeviceVector{T},
+                                        Epot::CuDeviceVector{T},
+                                        mask::CuDeviceVector{UInt8},
+                                        ax::CuDeviceVector{T}, ay::CuDeviceVector{T}, k::T) where {T<:AbstractFloat}
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    @inbounds begin
+        if mask[i] != 0
+            dx = rx[i] - ax[i]
+            dy = ry[i] - ay[i]
+            fx[i] -= k * dx
+            fy[i] -= k * dy
+            Epot[i] += T(0.5) * k * (dx * dx + dy * dy)
+        end
+    end
+    return
+end
+
+function _freeze_spring3_kernel!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
+                                 fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, fz::CuDeviceVector{T},
+                                 mask::CuDeviceVector{UInt8},
+                                 ax::CuDeviceVector{T}, ay::CuDeviceVector{T}, az::CuDeviceVector{T}, k::T) where {T<:AbstractFloat}
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    @inbounds begin
+        if mask[i] != 0
+            dx = rx[i] - ax[i]
+            dy = ry[i] - ay[i]
+            dz = rz[i] - az[i]
+            fx[i] -= k * dx
+            fy[i] -= k * dy
+            fz[i] -= k * dz
+        end
+    end
+    return
+end
+
+function _freeze_spring3_energy_kernel!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
+                                        fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, fz::CuDeviceVector{T},
+                                        Epot::CuDeviceVector{T},
+                                        mask::CuDeviceVector{UInt8},
+                                        ax::CuDeviceVector{T}, ay::CuDeviceVector{T}, az::CuDeviceVector{T}, k::T) where {T<:AbstractFloat}
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    @inbounds begin
+        if mask[i] != 0
+            dx = rx[i] - ax[i]
+            dy = ry[i] - ay[i]
+            dz = rz[i] - az[i]
+            fx[i] -= k * dx
+            fy[i] -= k * dy
+            fz[i] -= k * dz
+            Epot[i] += T(0.5) * k * (dx * dx + dy * dy + dz * dz)
+        end
+    end
+    return
+end
+
+function _freeze_spring2!(rx::CuArray{T,1}, ry::CuArray{T,1},
+                          fx::CuArray{T,1}, fy::CuArray{T,1},
+                          mask::CuArray{UInt8,1},
+                          ax::CuArray{T,1}, ay::CuArray{T,1}, k::T) where {T<:AbstractFloat}
+    N = length(rx); N == 0 && return nothing
+    threads = min(256, N); blocks = cld(N, threads)
+    ker = CUDA.@cuda launch=false _freeze_spring2_kernel!(rx, ry, fx, fy, mask, ax, ay, k)
+    ker(rx, ry, fx, fy, mask, ax, ay, k; threads, blocks)
+    return nothing
+end
+
+function _freeze_spring2_energy!(rx::CuArray{T,1}, ry::CuArray{T,1},
+                                 fx::CuArray{T,1}, fy::CuArray{T,1},
+                                 Epot::CuArray{T,1},
+                                 mask::CuArray{UInt8,1},
+                                 ax::CuArray{T,1}, ay::CuArray{T,1}, k::T) where {T<:AbstractFloat}
+    N = length(rx); N == 0 && return nothing
+    threads = min(256, N); blocks = cld(N, threads)
+    ker = CUDA.@cuda launch=false _freeze_spring2_energy_kernel!(rx, ry, fx, fy, Epot, mask, ax, ay, k)
+    ker(rx, ry, fx, fy, Epot, mask, ax, ay, k; threads, blocks)
+    return nothing
+end
+
+function _freeze_spring3!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
+                          fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1},
+                          mask::CuArray{UInt8,1},
+                          ax::CuArray{T,1}, ay::CuArray{T,1}, az::CuArray{T,1}, k::T) where {T<:AbstractFloat}
+    N = length(rx); N == 0 && return nothing
+    threads = min(256, N); blocks = cld(N, threads)
+    ker = CUDA.@cuda launch=false _freeze_spring3_kernel!(rx, ry, rz, fx, fy, fz, mask, ax, ay, az, k)
+    ker(rx, ry, rz, fx, fy, fz, mask, ax, ay, az, k; threads, blocks)
+    return nothing
+end
+
+function _freeze_spring3_energy!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
+                                 fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1},
+                                 Epot::CuArray{T,1},
+                                 mask::CuArray{UInt8,1},
+                                 ax::CuArray{T,1}, ay::CuArray{T,1}, az::CuArray{T,1}, k::T) where {T<:AbstractFloat}
+    N = length(rx); N == 0 && return nothing
+    threads = min(256, N); blocks = cld(N, threads)
+    ker = CUDA.@cuda launch=false _freeze_spring3_energy_kernel!(rx, ry, rz, fx, fy, fz, Epot, mask, ax, ay, az, k)
+    ker(rx, ry, rz, fx, fy, fz, Epot, mask, ax, ay, az, k; threads, blocks)
+    return nothing
+end
+
+function _apply_freeze_hold!(st::SimulationState{T}, rx::CuArray{T,1}, ry::CuArray{T,1}) where {T<:AbstractFloat}
+    mask = st.freeze_mask
+    ax = st.freeze_rx
+    ay = st.freeze_ry
+    if mask === nothing || ax === nothing || ay === nothing
+        return nothing
+    end
+    return _freeze_hold2!(rx, ry, mask, ax, ay)
+end
+
+function _apply_freeze_hold!(st::SimulationState{T}, rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1}) where {T<:AbstractFloat}
+    mask = st.freeze_mask
+    ax = st.freeze_rx
+    ay = st.freeze_ry
+    az = st.freeze_rz
+    if mask === nothing || ax === nothing || ay === nothing || az === nothing
+        return nothing
+    end
+    return _freeze_hold3!(rx, ry, rz, mask, ax, ay, az)
+end
+
+function _apply_freeze_spring!(st::SimulationState{T},
+                               rx::CuArray{T,1}, ry::CuArray{T,1},
+                               fx::CuArray{T,1}, fy::CuArray{T,1},
+                               E::Union{Nothing,CuArray{T,1}}, compute_energy::Bool) where {T<:AbstractFloat}
+    mask = st.freeze_mask
+    ax = st.freeze_rx
+    ay = st.freeze_ry
+    if mask === nothing || ax === nothing || ay === nothing
+        return nothing
+    end
+    k = st.freeze_k
+    k <= zero(T) && return nothing
+    if compute_energy && st.freeze_include_energy && E !== nothing
+        return _freeze_spring2_energy!(rx, ry, fx, fy, E, mask, ax, ay, k)
+    end
+    return _freeze_spring2!(rx, ry, fx, fy, mask, ax, ay, k)
+end
+
+function _apply_freeze_spring!(st::SimulationState{T},
+                               rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
+                               fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1},
+                               E::Union{Nothing,CuArray{T,1}}, compute_energy::Bool) where {T<:AbstractFloat}
+    mask = st.freeze_mask
+    ax = st.freeze_rx
+    ay = st.freeze_ry
+    az = st.freeze_rz
+    if mask === nothing || ax === nothing || ay === nothing || az === nothing
+        return nothing
+    end
+    k = st.freeze_k
+    k <= zero(T) && return nothing
+    if compute_energy && st.freeze_include_energy && E !== nothing
+        return _freeze_spring3_energy!(rx, ry, rz, fx, fy, fz, E, mask, ax, ay, az, k)
+    end
+    return _freeze_spring3!(rx, ry, rz, fx, fy, fz, mask, ax, ay, az, k)
+end
+
 # ==========================================
 #  Top-level, non-capturing init kernels
 #  (avoid nested functions / closures)
@@ -402,9 +662,9 @@ function build_simulation(;N::Int,
                            use_neighborlist::Bool=true,
                            epsilon::Real=1,
                            sigma::Real=1,
-                           gamma::Union{Vector{Real},Real}=1,
-                           temperature::Union{Vector{Real},Real}=1,
-                           noise_corr_time::Union{Vector{Real},Real,Nothing}=nothing,
+                           gamma::Union{AbstractVector{<:Real},Real}=1,
+                           temperature::Union{AbstractVector{<:Real},Real}=1,
+                           noise_corr_time::Union{AbstractVector{<:Real},Real,Nothing}=nothing,
                            dt::Real=0.001,
                            mass::Real=1,
                            bonds::Union{Nothing,Vector{Tuple{Int32,Int32}}}=nothing,
@@ -598,6 +858,7 @@ function build_simulation(;N::Int,
                          bondlist, bond_spec,
                          vv,
                          Epot, dq, dU, Ekin, Epot_accum, Ekin_accum, 0, UInt8(0), nb_tag, srp,
+                         FREEZE_NONE, -1, true, nothing, zero(T), nothing, nothing, nothing,
                          false, nothing, nothing, nothing) 
 
     # Assign the appropriate box directly (no extra tuple layer)
@@ -692,6 +953,9 @@ function step!(st::SimulationState{T}, dt::Real; compute_energy::Bool=true) wher
     # new nonbonded/bonded forces → velocity update and optional energy accumulation.
     # Ensure the time step matches the simulation precision
     dtT = T(dt)
+    freeze_active = _freeze_active!(st)
+    freeze_hold = freeze_active && st.freeze_mode == FREEZE_HOLD
+    freeze_spring = freeze_active && st.freeze_mode == FREEZE_SPRING
     st.last_integrator = UInt8(1)
     D = st.rz === nothing ? 2 : 3
 
@@ -800,6 +1064,10 @@ function step!(st::SimulationState{T}, dt::Real; compute_energy::Bool=true) wher
             end
             # bonded contributions at t
             _apply_bonds2!(st, st.f0x, st.f0y, compute_energy ? st.Epot : nothing, compute_energy)
+            if freeze_spring
+                _apply_freeze_spring!(st, st.rx, st.ry, st.f0x, st.f0y,
+                                      compute_energy ? st.Epot : nothing, compute_energy)
+            end
         else
             if st.nb_kind == NB_KIND_LJ
                 if st.sigma_particle === nothing
@@ -871,6 +1139,10 @@ function step!(st::SimulationState{T}, dt::Real; compute_energy::Bool=true) wher
             end
             # bonded contributions at t
             _apply_bonds3!(st, st.f0x, st.f0y, st.f0z, compute_energy ? st.Epot : nothing, compute_energy)
+            if freeze_spring
+                _apply_freeze_spring!(st, st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
+                                      compute_energy ? st.Epot : nothing, compute_energy)
+            end
         end
     end
 
@@ -884,6 +1156,9 @@ function step!(st::SimulationState{T}, dt::Real; compute_energy::Bool=true) wher
                                               dt=dtT)
         LangevinIntegrators.vv_positions_soa!(st.rx, st.ry, st.vx, st.vy, st.f0x, st.f0y,
                                               st.rf_x, st.rf_y, st.vv, dtT, st.box2::Definitions.Box2)
+        if freeze_hold
+            _apply_freeze_hold!(st, st.rx, st.ry)
+        end
         _collisions_update_after_positions!(st)
     else
         LangevinIntegrators.vv_prepare_noise!(st.rf_x, st.rf_y, st.vv.noise_scale;
@@ -894,6 +1169,9 @@ function step!(st::SimulationState{T}, dt::Real; compute_energy::Bool=true) wher
         LangevinIntegrators.vv_positions_soa!(st.rx, st.ry, st.rz, st.vx, st.vy, st.vz,
                                               st.f0x, st.f0y, st.f0z,
                                               st.rf_x, st.rf_y, st.rf_z, st.vv, dtT, st.box3::Definitions.Box3)
+        if freeze_hold
+            _apply_freeze_hold!(st, st.rx, st.ry, st.rz)
+        end
         _collisions_update_after_positions!(st)
     end
 
@@ -979,6 +1257,10 @@ function step!(st::SimulationState{T}, dt::Real; compute_energy::Bool=true) wher
         end
         # bonded contributions at t+dt
         _apply_bonds2!(st, st.fx, st.fy, compute_energy ? st.Epot : nothing, compute_energy)
+        if freeze_spring
+            _apply_freeze_spring!(st, st.rx, st.ry, st.fx, st.fy,
+                                  compute_energy ? st.Epot : nothing, compute_energy)
+        end
         LangevinIntegrators.vv_velocities_soa!(st.vx, st.vy, st.f0x, st.f0y, st.fx, st.fy,
                                                st.rf_x, st.rf_y, st.dq, st.dU, st.Ekin, st.vv, dtT)
     else
@@ -1062,6 +1344,10 @@ function step!(st::SimulationState{T}, dt::Real; compute_energy::Bool=true) wher
         end
         # bonded contributions at t+dt
         _apply_bonds3!(st, st.fx, st.fy, st.fz, compute_energy ? st.Epot : nothing, compute_energy)
+        if freeze_spring
+            _apply_freeze_spring!(st, st.rx, st.ry, st.rz, st.fx, st.fy, st.fz,
+                                  compute_energy ? st.Epot : nothing, compute_energy)
+        end
         LangevinIntegrators.vv_velocities_soa!(st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z,
                                                st.fx, st.fy, st.fz,
                                                st.rf_x, st.rf_y, st.rf_z,
@@ -1081,6 +1367,9 @@ are executed outside the graph when needed. The executable graph is cached and r
 across calls.
 """
 function step_graph!(st::SimulationState{T}, dt::Real; compute_energy::Bool=true) where {T<:AbstractFloat}
+    if _freeze_active!(st)
+        return step!(st, dt; compute_energy)
+    end
     dtT = T(dt)
     D = st.rz === nothing ? 2 : 3
 
@@ -1168,6 +1457,10 @@ function step_graph!(st::SimulationState{T}, dt::Real; compute_energy::Bool=true
                     NonBondedForces.harmonic_rep_forces_soa_noE!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
                                                                   st.nbh, st.box3::Definitions.Box3, st.softrep)
                 end
+            end
+            if freeze_spring
+                _apply_freeze_spring!(st, st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
+                                      compute_energy ? st.Epot : nothing, compute_energy)
             end
         end
     end
@@ -1290,6 +1583,9 @@ end
 function step!(st::SimulationState{T}, spec::BAOASpec{T}, dt::Real; compute_energy::Bool=true) where {T<:AbstractFloat}
     # BAOA: B(1) → A(1/2) → O(1) → A(1/2)
     dtT = T(dt)
+    freeze_active = _freeze_active!(st)
+    freeze_hold = freeze_active && st.freeze_mode == FREEZE_HOLD
+    freeze_spring = freeze_active && st.freeze_mode == FREEZE_SPRING
     st.last_integrator = UInt8(1)
     D = st.rz === nothing ? 2 : 3
 
@@ -1395,6 +1691,10 @@ function step!(st::SimulationState{T}, spec::BAOASpec{T}, dt::Real; compute_ener
             end
             # bonded contributions at t
             _apply_bonds2!(st, st.f0x, st.f0y, compute_energy ? st.Epot : nothing, compute_energy)
+            if freeze_spring
+                _apply_freeze_spring!(st, st.rx, st.ry, st.f0x, st.f0y,
+                                      compute_energy ? st.Epot : nothing, compute_energy)
+            end
         else
             if st.nb_kind == NB_KIND_LJ
                 if st.sigma_particle === nothing
@@ -1465,6 +1765,10 @@ function step!(st::SimulationState{T}, spec::BAOASpec{T}, dt::Real; compute_ener
                 end
             end
             _apply_bonds3!(st, st.f0x, st.f0y, st.f0z, compute_energy ? st.Epot : nothing, compute_energy)
+            if freeze_spring
+                _apply_freeze_spring!(st, st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
+                                      compute_energy ? st.Epot : nothing, compute_energy)
+            end
         end
     end
 
@@ -1474,6 +1778,9 @@ function step!(st::SimulationState{T}, spec::BAOASpec{T}, dt::Real; compute_ener
         LangevinIntegrators.baoab_B_2d!(st.vx, st.vy, st.f0x, st.f0y, spec.params, T(2)*dtT, st.Ekin, st.dU)
         # A(1/2)
         LangevinIntegrators.baoab_A_2d!(st.rx, st.ry, st.vx, st.vy, dtT, st.box2::Definitions.Box2)
+        if freeze_hold
+            _apply_freeze_hold!(st, st.rx, st.ry)
+        end
         _collisions_update_after_positions!(st)
         # O(1): OU using pre-generated noise (reuse VV noise draw)
         LangevinIntegrators.vv_prepare_noise!(st.rf_x, st.rf_y, spec.params.noise_scale;
@@ -1483,6 +1790,9 @@ function step!(st::SimulationState{T}, spec::BAOASpec{T}, dt::Real; compute_ener
         LangevinIntegrators.baoab_OU_2d!(st.vx, st.vy, st.rf_x, st.rf_y, spec.params, dtT, st.dq)
         # A(1/2)
         LangevinIntegrators.baoab_A_2d!(st.rx, st.ry, st.vx, st.vy, dtT, st.box2::Definitions.Box2)
+        if freeze_hold
+            _apply_freeze_hold!(st, st.rx, st.ry)
+        end
         _collisions_update_after_positions!(st)
 
         # forces at t+dt (2D)
@@ -1544,6 +1854,10 @@ function step!(st::SimulationState{T}, spec::BAOASpec{T}, dt::Real; compute_ener
             if st.bonds !== nothing
                 _apply_bonds2!(st, st.fx, st.fy, compute_energy ? st.Epot : nothing, compute_energy)
             end
+            if freeze_spring
+                _apply_freeze_spring!(st, st.rx, st.ry, st.fx, st.fy,
+                                      compute_energy ? st.Epot : nothing, compute_energy)
+            end
         end
 
         # Conservative power like VV at end of step (BAOA has no final B)
@@ -1555,6 +1869,9 @@ function step!(st::SimulationState{T}, spec::BAOASpec{T}, dt::Real; compute_ener
         # 3D variant
         LangevinIntegrators.baoab_B_3d!(st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z, spec.params, T(2)*dtT, st.Ekin, st.dU)
         LangevinIntegrators.baoab_A_3d!(st.rx, st.ry, st.rz, st.vx, st.vy, st.vz, dtT, st.box3::Definitions.Box3)
+        if freeze_hold
+            _apply_freeze_hold!(st, st.rx, st.ry, st.rz)
+        end
         _collisions_update_after_positions!(st)
         LangevinIntegrators.vv_prepare_noise!(st.rf_x, st.rf_y, spec.params.noise_scale;
                                               beta_z=st.rf_z,
@@ -1563,6 +1880,9 @@ function step!(st::SimulationState{T}, spec::BAOASpec{T}, dt::Real; compute_ener
                                               dt=dtT)
         LangevinIntegrators.baoab_OU_3d!(st.vx, st.vy, st.vz, st.rf_x, st.rf_y, st.rf_z, spec.params, dtT, st.dq)
         LangevinIntegrators.baoab_A_3d!(st.rx, st.ry, st.rz, st.vx, st.vy, st.vz, dtT, st.box3::Definitions.Box3)
+        if freeze_hold
+            _apply_freeze_hold!(st, st.rx, st.ry, st.rz)
+        end
         _collisions_update_after_positions!(st)
 
         # forces at t+dt (3D)
@@ -1638,6 +1958,10 @@ function step!(st::SimulationState{T}, spec::BAOASpec{T}, dt::Real; compute_ener
             if st.bonds !== nothing
                 _apply_bonds3!(st, st.fx, st.fy, st.fz, compute_energy ? st.Epot : nothing, compute_energy)
             end
+            if freeze_spring
+                _apply_freeze_spring!(st, st.rx, st.ry, st.rz, st.fx, st.fy, st.fz,
+                                      compute_energy ? st.Epot : nothing, compute_energy)
+            end
         end
 
         # Conservative power like VV at end of step (BAOA has no final B)
@@ -1672,6 +1996,9 @@ Uses forces at t for the first half-kick, then forces at t+dt for the final half
 """
 function step!(st::SimulationState{T}, bao::LangevinIntegrators.BAOABParams{T}, dt::Real; compute_energy::Bool=true) where {T<:AbstractFloat}
     dtT = T(dt)
+    freeze_active = _freeze_active!(st)
+    freeze_hold = freeze_active && st.freeze_mode == FREEZE_HOLD
+    freeze_spring = freeze_active && st.freeze_mode == FREEZE_SPRING
     st.last_integrator = UInt8(1)
     D = st.rz === nothing ? 2 : 3
 
@@ -1766,6 +2093,10 @@ function step!(st::SimulationState{T}, bao::LangevinIntegrators.BAOABParams{T}, 
             if st.bonds !== nothing
                 _apply_bonds2!(st, st.f0x, st.f0y, compute_energy ? st.Epot : nothing, compute_energy)
             end
+            if freeze_spring
+                _apply_freeze_spring!(st, st.rx, st.ry, st.f0x, st.f0y,
+                                      compute_energy ? st.Epot : nothing, compute_energy)
+            end
         else
             if st.nb_kind == NB_KIND_LJ
                 if st.sigma_particle === nothing
@@ -1812,6 +2143,9 @@ function step!(st::SimulationState{T}, bao::LangevinIntegrators.BAOABParams{T}, 
     _ensure_ou_state!(st, bao.corr_time)
     if D == 2
         LangevinIntegrators.baoab_BA_2d!(st.rx, st.ry, st.vx, st.vy, st.f0x, st.f0y, bao, dtT, st.box2::Definitions.Box2)
+        if freeze_hold
+            _apply_freeze_hold!(st, st.rx, st.ry)
+        end
         # Prepare OU noise using the same generator as VV (β = s * N(0,1))
         LangevinIntegrators.vv_prepare_noise!(st.rf_x, st.rf_y, bao.noise_scale;
                                               corr_time=bao.corr_time,
@@ -1819,6 +2153,9 @@ function step!(st::SimulationState{T}, bao::LangevinIntegrators.BAOABParams{T}, 
                                               dt=dtT)
         LangevinIntegrators.baoab_OU_2d!(st.vx, st.vy, st.rf_x, st.rf_y, bao, dtT, st.dq)
         LangevinIntegrators.baoab_A_2d!(st.rx, st.ry, st.vx, st.vy, dtT, st.box2::Definitions.Box2)
+        if freeze_hold
+            _apply_freeze_hold!(st, st.rx, st.ry)
+        end
 
         # forces at t+dt (write to fx,fy)
         if st.nb_kind == NB_KIND_LJ && st.sigma_pair !== nothing
@@ -1890,9 +2227,16 @@ function step!(st::SimulationState{T}, bao::LangevinIntegrators.BAOABParams{T}, 
                 end
             end
         end
+        if freeze_spring
+            _apply_freeze_spring!(st, st.rx, st.ry, st.fx, st.fy,
+                                  compute_energy ? st.Epot : nothing, compute_energy)
+        end
         LangevinIntegrators.baoab_B_2d!(st.vx, st.vy, st.fx, st.fy, bao, dtT, st.Ekin, st.dU)
     else
         LangevinIntegrators.baoab_BA_3d!(st.rx, st.ry, st.rz, st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z, bao, dtT, st.box3::Definitions.Box3)
+        if freeze_hold
+            _apply_freeze_hold!(st, st.rx, st.ry, st.rz)
+        end
         LangevinIntegrators.vv_prepare_noise!(st.rf_x, st.rf_y, bao.noise_scale;
                                               beta_z=st.rf_z,
                                               corr_time=bao.corr_time,
@@ -1900,6 +2244,9 @@ function step!(st::SimulationState{T}, bao::LangevinIntegrators.BAOABParams{T}, 
                                               dt=dtT)
         LangevinIntegrators.baoab_OU_3d!(st.vx, st.vy, st.vz, st.rf_x, st.rf_y, st.rf_z, bao, dtT, st.dq)
         LangevinIntegrators.baoab_A_3d!(st.rx, st.ry, st.rz, st.vx, st.vy, st.vz, dtT, st.box3::Definitions.Box3)
+        if freeze_hold
+            _apply_freeze_hold!(st, st.rx, st.ry, st.rz)
+        end
 
         # forces at t+dt (3D)
         if st.nb_kind == NB_KIND_LJ && st.sigma_pair !== nothing
@@ -1972,6 +2319,10 @@ function step!(st::SimulationState{T}, bao::LangevinIntegrators.BAOABParams{T}, 
                 end
             end
         end
+        if freeze_spring
+            _apply_freeze_spring!(st, st.rx, st.ry, st.rz, st.fx, st.fy, st.fz,
+                                  compute_energy ? st.Epot : nothing, compute_energy)
+        end
         LangevinIntegrators.baoab_B_3d!(st.vx, st.vy, st.vz, st.fx, st.fy, st.fz, bao, dtT, st.Ekin, st.dU)
     end
 
@@ -1994,6 +2345,9 @@ state are reused as temporary storage for midpoint positions.
 function step!(st::SimulationState{T}, bp::BrownianIntegrators.BrownianParams{T}, dt::Real; compute_energy::Bool=true
     ) where {T<:AbstractFloat}
     dtT = T(dt)
+    freeze_active = _freeze_active!(st)
+    freeze_hold = freeze_active && st.freeze_mode == FREEZE_HOLD
+    freeze_spring = freeze_active && st.freeze_mode == FREEZE_SPRING
     st.last_integrator = UInt8(2)
     D = st.rz === nothing ? 2 : 3
     _ensure_ou_state!(st, bp.corr_time)
@@ -2032,6 +2386,10 @@ function step!(st::SimulationState{T}, bp::BrownianIntegrators.BrownianParams{T}
                 @assert st.softrep !== nothing "softrep params missing"
                 NonBondedForces.harmonic_rep_forces_soa!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.nbh, st.box2::Definitions.Box2, st.softrep)
             end
+            if freeze_spring
+                _apply_freeze_spring!(st, st.rx, st.ry, st.fx, st.fy,
+                                      compute_energy ? st.Epot : nothing, compute_energy)
+            end
         else
             if st.nb_kind == NB_KIND_LJ
                 if st.sigma_particle === nothing
@@ -2046,6 +2404,10 @@ function step!(st::SimulationState{T}, bp::BrownianIntegrators.BrownianParams{T}
             else
                 @assert st.softrep !== nothing "softrep params missing"
                 NonBondedForces.harmonic_rep_forces_soa!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.nbh, st.box3::Definitions.Box3, st.softrep)
+            end
+            if freeze_spring
+                _apply_freeze_spring!(st, st.rx, st.ry, st.rz, st.fx, st.fy, st.fz,
+                                      compute_energy ? st.Epot : nothing, compute_energy)
             end
         end
     end
@@ -2063,6 +2425,9 @@ function step!(st::SimulationState{T}, bp::BrownianIntegrators.BrownianParams{T}
             st.vx, st.vy,
             bp.gamma, bp.noise_scale,
             dtT, st.box2::Definitions.Box2)
+        if freeze_hold
+            _apply_freeze_hold!(st, st.vx, st.vy)
+        end
         if st.nb_kind == NB_KIND_LJ
             if st.sigma_particle === nothing
                 if st.bonds === nothing
@@ -2094,12 +2459,18 @@ function step!(st::SimulationState{T}, bp::BrownianIntegrators.BrownianParams{T}
         if st.bonds !== nothing
             _apply_bonds2!(st, st.f0x, st.f0y, nothing, false)
         end
+        if freeze_spring
+            _apply_freeze_spring!(st, st.vx, st.vy, st.f0x, st.f0y, nothing, false)
+        end
         # Finalize step using forces at midpoint (in f0*) and same noise
         BrownianIntegrators.bd_finish_step_2d!(
             st.rx, st.ry, st.f0x, st.f0y,
             st.rf_x, st.rf_y,
             bp.gamma, bp.noise_scale,
             dtT, st.dq, st.dU, st.box2::Definitions.Box2)
+        if freeze_hold
+            _apply_freeze_hold!(st, st.rx, st.ry)
+        end
         _collisions_update_after_positions!(st)
         if st.nb_kind == NB_KIND_LJ
             if st.sigma_particle === nothing
@@ -2160,6 +2531,10 @@ function step!(st::SimulationState{T}, bp::BrownianIntegrators.BrownianParams{T}
         if st.bonds !== nothing
             _apply_bonds2!(st, st.fx, st.fy, compute_energy ? st.Epot : nothing, compute_energy)
         end
+        if freeze_spring
+            _apply_freeze_spring!(st, st.rx, st.ry, st.fx, st.fy,
+                                  compute_energy ? st.Epot : nothing, compute_energy)
+        end
     else
         BrownianIntegrators.bd_prepare_noise_3d!(st.rf_x, st.rf_y, st.rf_z;
                                                  noise_scale=bp.noise_scale,
@@ -2172,6 +2547,9 @@ function step!(st::SimulationState{T}, bp::BrownianIntegrators.BrownianParams{T}
             st.vx, st.vy, st.vz,
             bp.gamma, bp.noise_scale,
             dtT, st.box3::Definitions.Box3)
+        if freeze_hold
+            _apply_freeze_hold!(st, st.vx, st.vy, st.vz)
+        end
         if st.nb_kind == NB_KIND_LJ
             if st.sigma_particle === nothing
                 if st.bonds === nothing
@@ -2203,12 +2581,18 @@ function step!(st::SimulationState{T}, bp::BrownianIntegrators.BrownianParams{T}
         if st.bonds !== nothing
             _apply_bonds3!(st, st.f0x, st.f0y, st.f0z, nothing, false)
         end
+        if freeze_spring
+            _apply_freeze_spring!(st, st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z, nothing, false)
+        end
         BrownianIntegrators.bd_finish_step_3d!(
             st.rx, st.ry, st.rz,
             st.f0x, st.f0y, st.f0z,
             st.rf_x, st.rf_y, st.rf_z,
             bp.gamma, bp.noise_scale,
             dtT, st.dq, st.dU, st.box3::Definitions.Box3)
+        if freeze_hold
+            _apply_freeze_hold!(st, st.rx, st.ry, st.rz)
+        end
         _collisions_update_after_positions!(st)
         if st.nb_kind == NB_KIND_LJ
             if st.sigma_particle === nothing
@@ -2269,6 +2653,10 @@ function step!(st::SimulationState{T}, bp::BrownianIntegrators.BrownianParams{T}
         if st.bonds !== nothing
             _apply_bonds3!(st, st.fx, st.fy, st.fz, compute_energy ? st.Epot : nothing, compute_energy)
         end
+        if freeze_spring
+            _apply_freeze_spring!(st, st.rx, st.ry, st.rz, st.fx, st.fy, st.fz,
+                                  compute_energy ? st.Epot : nothing, compute_energy)
+        end
     end
 
     st.step += 1
@@ -2291,6 +2679,9 @@ Accumulates conservative work w = f · Δr into dq (heat) and dU (conservative p
 """
 function step!(st::SimulationState{T}, em::BrownianIntegrators.EMParams{T}, dt::Real; compute_energy::Bool=true) where {T<:AbstractFloat}
     dtT = T(dt)
+    freeze_active = _freeze_active!(st)
+    freeze_hold = freeze_active && st.freeze_mode == FREEZE_HOLD
+    freeze_spring = freeze_active && st.freeze_mode == FREEZE_SPRING
     st.last_integrator = UInt8(2)
     D = st.rz === nothing ? 2 : 3
     _ensure_ou_state!(st, em.corr_time)
@@ -2379,6 +2770,15 @@ function step!(st::SimulationState{T}, em::BrownianIntegrators.EMParams{T}, dt::
                 _apply_bonds3!(st, st.fx, st.fy, st.fz, compute_energy ? st.Epot : nothing, compute_energy)
             end
         end
+        if freeze_spring
+            if D == 2
+                _apply_freeze_spring!(st, st.rx, st.ry, st.fx, st.fy,
+                                      compute_energy ? st.Epot : nothing, compute_energy)
+            else
+                _apply_freeze_spring!(st, st.rx, st.ry, st.rz, st.fx, st.fy, st.fz,
+                                      compute_energy ? st.Epot : nothing, compute_energy)
+            end
+        end
     end
 
     # Position update and dq/dU accumulation using midpoint so EPR == UPR
@@ -2395,6 +2795,9 @@ function step!(st::SimulationState{T}, em::BrownianIntegrators.EMParams{T}, dt::
             st.vx, st.vy,
             em.gamma, em.noise_scale,
             dtT, st.box2::Definitions.Box2)
+        if freeze_hold
+            _apply_freeze_hold!(st, st.vx, st.vy)
+        end
         # Forces at midpoint positions (no energy)
         if st.nb_kind == NB_KIND_LJ
             if st.sigma_particle === nothing
@@ -2427,12 +2830,18 @@ function step!(st::SimulationState{T}, em::BrownianIntegrators.EMParams{T}, dt::
         if st.bonds !== nothing
             _apply_bonds2!(st, st.f0x, st.f0y, nothing, false)
         end
+        if freeze_spring
+            _apply_freeze_spring!(st, st.vx, st.vy, st.f0x, st.f0y, nothing, false)
+        end
         # Finish step: advance positions with midpoint force; accumulate dq and dU equally
         BrownianIntegrators.bd_finish_step_2d!(
             st.rx, st.ry, st.f0x, st.f0y,
             st.rf_x, st.rf_y,
             em.gamma, em.noise_scale,
             dtT, st.dq, st.dU, st.box2::Definitions.Box2)
+        if freeze_hold
+            _apply_freeze_hold!(st, st.rx, st.ry)
+        end
         _collisions_update_after_positions!(st)
         # New forces
         if compute_energy
@@ -2469,6 +2878,10 @@ function step!(st::SimulationState{T}, em::BrownianIntegrators.EMParams{T}, dt::
                 _apply_bonds2!(st, st.fx, st.fy, nothing, false)
             end
         end
+        if freeze_spring
+            _apply_freeze_spring!(st, st.rx, st.ry, st.fx, st.fy,
+                                  compute_energy ? st.Epot : nothing, compute_energy)
+        end
     else
         # Predictor: draw noise then compute midpoint positions into vx,vy,vz
         BrownianIntegrators.bd_prepare_noise_3d!(st.rf_x, st.rf_y, st.rf_z;
@@ -2482,6 +2895,9 @@ function step!(st::SimulationState{T}, em::BrownianIntegrators.EMParams{T}, dt::
             st.vx, st.vy, st.vz,
             em.gamma, em.noise_scale,
             dtT, st.box3::Definitions.Box3)
+        if freeze_hold
+            _apply_freeze_hold!(st, st.vx, st.vy, st.vz)
+        end
         # Forces at midpoint positions (no energy)
         if st.nb_kind == NB_KIND_LJ
             if st.sigma_particle === nothing
@@ -2512,12 +2928,18 @@ function step!(st::SimulationState{T}, em::BrownianIntegrators.EMParams{T}, dt::
         if st.bonds !== nothing
             _apply_bonds3!(st, st.f0x, st.f0y, st.f0z, nothing, false)
         end
+        if freeze_spring
+            _apply_freeze_spring!(st, st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z, nothing, false)
+        end
         # Finish step: advance positions with midpoint force; accumulate dq and dU equally
         BrownianIntegrators.bd_finish_step_3d!(
             st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
             st.rf_x, st.rf_y, st.rf_z,
             em.gamma, em.noise_scale,
             dtT, st.dq, st.dU, st.box3::Definitions.Box3)
+        if freeze_hold
+            _apply_freeze_hold!(st, st.rx, st.ry, st.rz)
+        end
         _collisions_update_after_positions!(st)
         if compute_energy
             if st.nb_kind == NB_KIND_LJ
@@ -2551,6 +2973,10 @@ function step!(st::SimulationState{T}, em::BrownianIntegrators.EMParams{T}, dt::
             if st.bonds !== nothing
                 _apply_bonds3!(st, st.fx, st.fy, st.fz, nothing, false)
             end
+        end
+        if freeze_spring
+            _apply_freeze_spring!(st, st.rx, st.ry, st.rz, st.fx, st.fy, st.fz,
+                                  compute_energy ? st.Epot : nothing, compute_energy)
         end
     end
 

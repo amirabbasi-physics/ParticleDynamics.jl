@@ -160,4 +160,96 @@ CUDA.allowscalar(false)
         @test isapprox(st.rcut_factor * sigma, expected; rtol=1f-6)
     end
 
+    @testset "Freeze hold" begin
+        N = 4
+        dt = 0.01f0
+        st = Simulation.build_simulation(N=N,
+                                         box=(20f0, 20f0),
+                                         cutoff=2.5f0,
+                                         skin=0.3f0,
+                                         cap=Int32(8),
+                                         neigh_interval=5,
+                                         epsilon=0f0,
+                                         sigma=1f0,
+                                         gamma=0f0,
+                                         temperature=0f0,
+                                         nonbonded=:lj,
+                                         precision=:f32)
+        # Non-overlapping positions
+        rx = Float32[-1, 1, -1, 1]
+        ry = Float32[-1, -1, 1, 1]
+        copyto!(st.rx, rx); copyto!(st.ry, ry)
+        # Deterministic velocities
+        fill!(st.vx, 0.1f0); fill!(st.vy, -0.05f0)
+
+        type_host = Int32[1, 2, 1, 2]
+        st.typeid .= CuArray(type_host)
+        frozen = Filters.selection(st, Filters.TypeIDs(2))
+
+        Filters.freeze_particles!(st; filter=Filters.TypeIDs(2), mode=:hold, steps=2)
+        rx0 = Filters.gather(st.rx, frozen)
+        ry0 = Filters.gather(st.ry, frozen)
+
+        for _ in 1:2
+            Simulation.step!(st, Simulation.velocityverlet(st), dt; compute_energy=false)
+            rx_now = Filters.gather(st.rx, frozen)
+            ry_now = Filters.gather(st.ry, frozen)
+            @test all(isapprox.(rx_now, rx0; atol=1f-6))
+            @test all(isapprox.(ry_now, ry0; atol=1f-6))
+        end
+
+        # Freeze released after 2 steps: positions should advance
+        Simulation.step!(st, Simulation.velocityverlet(st), dt; compute_energy=false)
+        rx_after = Filters.gather(st.rx, frozen)
+        ry_after = Filters.gather(st.ry, frozen)
+        @test any(abs.(rx_after .- rx0) .> 1f-5)
+        @test any(abs.(ry_after .- ry0) .> 1f-5)
+
+        vx_after = Filters.gather(st.vx, frozen)
+        vy_after = Filters.gather(st.vy, frozen)
+        @test all(isapprox.(vx_after, fill(0.1f0, length(vx_after)); atol=1f-6))
+        @test all(isapprox.(vy_after, fill(-0.05f0, length(vy_after)); atol=1f-6))
+    end
+
+    @testset "Freeze spring" begin
+        N = 2
+        dt = 0.001f0
+        st = Simulation.build_simulation(N=N,
+                                         box=(20f0, 20f0),
+                                         cutoff=2.5f0,
+                                         skin=0.3f0,
+                                         cap=Int32(4),
+                                         neigh_interval=5,
+                                         epsilon=0f0,
+                                         sigma=1f0,
+                                         gamma=1f0,
+                                         temperature=0f0,
+                                         nonbonded=:lj,
+                                         precision=:f32)
+        rx = Float32[-2, 2]
+        ry = Float32[0, 0]
+        copyto!(st.rx, rx); copyto!(st.ry, ry)
+
+        st.typeid .= CuArray(Int32[1, 2])
+        Filters.freeze_particles!(st; filter=Filters.TypeIDs(2), mode=:spring, k=100f0, steps=1, include_energy=true)
+
+        # Displace the frozen particle away from its anchor
+        rx_shift = copy(rx); rx_shift[2] += 0.25f0
+        copyto!(st.rx, rx_shift)
+
+        Simulation.step!(st, Simulation.eulermaruyama(st), dt; compute_energy=true)
+
+        rx_now = Array(st.rx)
+        ry_now = Array(st.ry)
+        rx_anchor = Array(st.freeze_rx)
+        ry_anchor = Array(st.freeze_ry)
+        Epot = Array(st.Epot)
+        k = 100f0
+        dx = rx_now[2] - rx_anchor[2]
+        dy = ry_now[2] - ry_anchor[2]
+        expected = 0.5f0 * k * (dx * dx + dy * dy)
+        @test isapprox(Epot[2], expected; rtol=1f-4, atol=1f-6)
+        @test isapprox(Epot[1], 0f0; atol=1f-6)
+    end
+
 end

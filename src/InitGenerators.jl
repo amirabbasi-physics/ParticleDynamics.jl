@@ -34,29 +34,33 @@ function box_from_phi_2d(N::Integer, ϕ::Real, σ::Real; T=Float32)
     return (L, L)::Box2{T}
 end
 
-"""
-    hex_sites_in_box_2d(box, σ)
+function _hex_sites_count_2d(Lx::T, a::T, ny::Int) where {T<:AbstractFloat}
+    ax = a
+    count = 0
+    for j in 0:(ny - 1)
+        xoff = isodd(j) ? (ax / T(2)) : zero(T)
+        nx = max(0, floor(Int, (Lx - xoff) / ax))
+        count += nx
+    end
+    return count
+end
 
-Enumerate all hexagonal lattice sites inside a periodic square box of side
-lengths `box`. `a = σ` fixes the nearest-neighbor spacing, which matches the
-setups used in `examples/SingleT_2D_LD_VV.jl` and friends.
-"""
-function hex_sites_in_box_2d(box::Box2{T}, σ::T) where {T<:AbstractFloat}
+function _hex_sites_in_box_2d(box::Box2{T}, a::T, ny::Int) where {T<:AbstractFloat}
     Lx, Ly = box
-    a = σ
     ax = a
     ay = a * sqrt(T(3)) / T(2)  # vertical spacing between rows
-
-    # number of rows that fit
-    ny = max(0, floor(Int, Ly / ay))
 
     sites = Vector{SVector{2,T}}()
     sites_cap = ceil(Int, (Lx * Ly) * (T(2) / (sqrt(T(3)) * a^2)))  # density of triangular lattice = 2/(√3 a^2)
     sizehint!(sites, sites_cap)
 
-    for j in 0:ny
-        y = T(j) * ay
-        if y >= Ly - eps(T); break; end
+    if ny == 0
+        return sites
+    end
+
+    y0 = (Ly - (T(ny - 1) * ay)) / T(2)
+    for j in 0:(ny - 1)
+        y = y0 + T(j) * ay
         xoff = isodd(j) ? (ax / T(2)) : zero(T)
         # number of columns that fit given offset
         nx = max(0, floor(Int, (Lx - xoff) / ax))
@@ -67,6 +71,35 @@ function hex_sites_in_box_2d(box::Box2{T}, σ::T) where {T<:AbstractFloat}
         end
     end
     return sites
+end
+
+"""
+    hex_sites_in_box_2d(box, σ)
+
+Enumerate hexagonal lattice sites inside a periodic square box of side lengths
+`box`. `a = σ` fixes the nearest-neighbor spacing, which matches the setups
+used in `examples/SingleT_2D_LD_VV.jl` and friends. Rows are centered in the
+box, and if an odd row count would place periodic images closer than `a`,
+the last row is dropped to avoid overlaps while minimizing empty space.
+"""
+function hex_sites_in_box_2d(box::Box2{T}, σ::T) where {T<:AbstractFloat}
+    Lx, Ly = box
+    a = σ
+    ay = a * sqrt(T(3)) / T(2)  # vertical spacing between rows
+
+    # number of full rows that fit; if odd rows would overlap across y-wrap, drop one
+    ny = max(0, floor(Int, Ly / ay))
+    if ny == 0
+        return Vector{SVector{2,T}}()
+    end
+
+    gap = Ly - (T(ny - 1) * ay)
+    if isodd(ny) && gap < a
+        ny -= 1
+        ny == 0 && return Vector{SVector{2,T}}()
+    end
+
+    return _hex_sites_in_box_2d(box, a, ny)
 end
 
 # Partial Fisher-Yates sampling without replacement (O(N) swaps, no big perm)
@@ -82,22 +115,48 @@ function _choose_indices_without_replacement(M::Integer, K::Integer; rng::Abstra
     return sel
 end
 
+function _commensurate_hex_spacing_2d(box::Box2{T}, σ::T, N::Integer) where {T<:AbstractFloat}
+    Lx, Ly = box
+    sqrt3 = sqrt(T(3))
+
+    # Largest even row count that keeps a >= σ (i.e., no overlaps).
+    ny_max = floor(Int, (T(2) * Ly) / (sqrt3 * σ))
+    ny_even = ny_max - (ny_max % 2)
+    ny_even < 2 && error("Box too small to fit a hex lattice with spacing >= σ")
+
+    a = (T(2) * Ly) / (sqrt3 * T(ny_even))
+    count = _hex_sites_count_2d(Lx, a, ny_even)
+    if count < N
+        error("Cannot fit $N particles with spacing >= σ in this box; reduce N/ϕ or set fit_box=false")
+    end
+
+    return (a=a, ny=ny_even)
+end
+
 """
-    hex_random_2d(N, σ, ϕ; T=Float32, rng=Random.default_rng())
+    hex_random_2d(N, σ, ϕ; T=Float32, rng=Random.default_rng(), fit_box=true)
 
 Sample `N` distinct hexagonal lattice sites at random inside the box computed
 by [`box_from_phi_2d`](@ref). This is the entry point used by
 `examples/TwoT_2D_LD_VV.jl` (with `σ = 1.0`, `ϕ = 0.5`) before assigning hot
-and cold type IDs.
+and cold type IDs. When `fit_box=true`, the lattice spacing is adjusted so an
+even row count fits exactly in `Ly`, avoiding overlaps across the periodic
+y-wrap without leaving an empty strip. The spacing is only increased (never
+reduced below `σ`); an error is raised if there is insufficient room.
 
 # Returns
 - `box`: square box tuple `(L, L)` in the requested precision.
 - `positions`: vector of `SVector{2,T}` coordinates centered in `[-L/2, L/2)`.
 - `indices`: indices into the full lattice site list (handy for re-sampling).
 """
-function hex_random_2d(N::Integer, σ::Real, ϕ::Real; T=Float32, rng::AbstractRNG=Random.default_rng())
+function hex_random_2d(N::Integer, σ::Real, ϕ::Real; T=Float32, rng::AbstractRNG=Random.default_rng(), fit_box::Bool=true)
     box = box_from_phi_2d(N, ϕ, σ; T=T)
-    sites = hex_sites_in_box_2d(box, T(σ))
+    if fit_box
+        spacing = _commensurate_hex_spacing_2d(box, T(σ), N)
+        sites = _hex_sites_in_box_2d(box, spacing.a, spacing.ny)
+    else
+        sites = hex_sites_in_box_2d(box, T(σ))
+    end
     @assert length(sites) >= N "Not enough lattice sites generated for given parameters"
     idx = _choose_indices_without_replacement(length(sites), N; rng=rng)
     pos = [sites[i] for i in idx]
