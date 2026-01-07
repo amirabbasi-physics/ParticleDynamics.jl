@@ -447,9 +447,13 @@ Usage (2D):
     Writers.write_gsd_frame!(h, state; diameter=1.0, types_names=["A"], step=state.step)
     Writers.gsd_close(h)
 
-Usage (3D) is identical; z-components are written when present.
+Usage (3D) is identical; z-components are written when present. Set
+`write_unwrapped=true` to store unwrapped positions in the custom
+`particles/position_unwrapped` chunk.
 """
-function write_gsd_frame!(h, st; diameter=1.0, types_names=["A"], step::Int=0, write_forces::Bool=false, sync_on_write::Bool=false)
+function write_gsd_frame!(h, st; diameter=1.0, types_names=["A"], step::Int=0,
+                          write_forces::Bool=false, write_unwrapped::Bool=false,
+                          sync_on_write::Bool=false)
     # Element type used for numeric conversions
     T = eltype(st.rx)
     N = length(st.rx)
@@ -467,6 +471,20 @@ function write_gsd_frame!(h, st; diameter=1.0, types_names=["A"], step::Int=0, w
     if write_forces
         frcM = st.fz === nothing ? _soa_to_frcmat(st.fx, st.fy) :
                                    _soa_to_frcmat(st.fx, st.fy, st.fz)
+    end
+
+    if write_unwrapped
+        if st.rz === nothing
+            if st.rx_unwrap === nothing || st.ry_unwrap === nothing
+                error("write_unwrapped=true requires unwrapped_positions=true in build_simulation")
+            end
+            posM_unwrap = _soa_to_posmat(st.rx_unwrap, st.ry_unwrap)
+        else
+            if st.rx_unwrap === nothing || st.ry_unwrap === nothing || st.rz_unwrap === nothing
+                error("write_unwrapped=true requires unwrapped_positions=true in build_simulation")
+            end
+            posM_unwrap = _soa_to_posmat(st.rx_unwrap, st.ry_unwrap, st.rz_unwrap)
+        end
     end
 
     # dimensionality & box
@@ -509,6 +527,13 @@ function write_gsd_frame!(h, st; diameter=1.0, types_names=["A"], step::Int=0, w
     # Forces: default is false for both Brownian and Langevin; enable only if user asks
     if write_forces
         GSDFiles.write_particles_force!(h, T.(frcM))
+    end
+
+    if write_unwrapped
+        dtype = T === Float32 ? :float32 : :float64
+        data = dtype == :float32 ? GSDFiles.rowmajor(Float32.(posM_unwrap)) :
+                                   GSDFiles.rowmajor(Float64.(posM_unwrap))
+        GSDFiles.write_chunk!(h.user, "particles/position_unwrapped"; dtype, N=N, M=3, data)
     end
 
     # Optional: bonded interactions (HOOMD bonds group)

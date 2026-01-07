@@ -220,6 +220,34 @@ function _vv_pos2!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
     return
 end
 
+function _vv_pos2_unwrap!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
+                          rxu::CuDeviceVector{T}, ryu::CuDeviceVector{T},
+                          vx::CuDeviceVector{T}, vy::CuDeviceVector{T},
+                          fx::CuDeviceVector{T}, fy::CuDeviceVector{T},
+                          beta_x::CuDeviceVector{T}, beta_y::CuDeviceVector{T},
+                          gamma::CuDeviceVector{T}, mass::T, dt::T,
+                          Lx::T, Ly::T) where {T<:AbstractFloat}
+    half = T(0.5); two = T(2)
+    i = (blockIdx().x-1)*blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    g = gamma[i]
+    q = g * dt / (two * mass)
+    b = one(T) / (one(T) + q)
+    coef = b * dt / (two * mass)
+    @inbounds begin
+        dpx = b*dt*vx[i] + coef*(dt*fx[i] + beta_x[i])
+        dpy = b*dt*vy[i] + coef*(dt*fy[i] + beta_y[i])
+        rxu[i] += dpx
+        ryu[i] += dpy
+        x = rx[i] + dpx
+        y = ry[i] + dpy
+        x = (x + Lx*half); x -= floor(x/Lx)*Lx; x -= Lx*half
+        y = (y + Ly*half); y -= floor(y/Ly)*Ly; y -= Ly*half
+        rx[i] = x; ry[i] = y
+    end
+    return
+end
+
 function _vv_pos3!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
                    vx::CuDeviceVector{T}, vy::CuDeviceVector{T}, vz::CuDeviceVector{T},
                    fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, fz::CuDeviceVector{T},
@@ -248,6 +276,38 @@ function _vv_pos3!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVec
     return
 end
 
+function _vv_pos3_unwrap!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
+                          rxu::CuDeviceVector{T}, ryu::CuDeviceVector{T}, rzu::CuDeviceVector{T},
+                          vx::CuDeviceVector{T}, vy::CuDeviceVector{T}, vz::CuDeviceVector{T},
+                          fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, fz::CuDeviceVector{T},
+                          beta_x::CuDeviceVector{T}, beta_y::CuDeviceVector{T}, beta_z::CuDeviceVector{T},
+                          gamma::CuDeviceVector{T}, mass::T, dt::T,
+                          Lx::T, Ly::T, Lz::T) where {T<:AbstractFloat}
+    half = T(0.5); two = T(2)
+    i = (blockIdx().x-1)*blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    g = gamma[i]
+    q = g * dt / (two * mass)
+    b = one(T) / (one(T) + q)
+    coef = b * dt / (two * mass)
+    @inbounds begin
+        dpx = b*dt*vx[i] + coef*(dt*fx[i] + beta_x[i])
+        dpy = b*dt*vy[i] + coef*(dt*fy[i] + beta_y[i])
+        dpz = b*dt*vz[i] + coef*(dt*fz[i] + beta_z[i])
+        rxu[i] += dpx
+        ryu[i] += dpy
+        rzu[i] += dpz
+        x = rx[i] + dpx
+        y = ry[i] + dpy
+        z = rz[i] + dpz
+        x = (x + Lx*half); x -= floor(x/Lx)*Lx; x -= Lx*half
+        y = (y + Ly*half); y -= floor(y/Ly)*Ly; y -= Ly*half
+        z = (z + Lz*half); z -= floor(z/Lz)*Lz; z -= Lz*half
+        rx[i] = x; ry[i] = y; rz[i] = z
+    end
+    return
+end
+
 """
     vv_positions_soa!(rx, ry[, rz], vx, vy[, vz], fx, fy[, fz], βx, βy[, βz], params, dt, box)
 
@@ -259,13 +319,25 @@ function vv_positions_soa!(rx::CuArray{T,1}, ry::CuArray{T,1},
                            vx::CuArray{T,1}, vy::CuArray{T,1},
                            fx::CuArray{T,1}, fy::CuArray{T,1},
                            beta_x::CuArray{T,1}, beta_y::CuArray{T,1},
-                           params::VVParams{T}, dt::T, box::Definitions.Box2{T}) where {T<:AbstractFloat}
+                           params::VVParams{T}, dt::T, box::Definitions.Box2{T};
+                           unwrapped_x::Union{Nothing,CuArray{T,1}}=nothing,
+                           unwrapped_y::Union{Nothing,CuArray{T,1}}=nothing) where {T<:AbstractFloat}
     N = length(rx); threads = min(256, N); blocks = cld(N, threads)
-    k = CUDA.@cuda launch=false _vv_pos2!(rx, ry, vx, vy, fx, fy, beta_x, beta_y,
-                                          params.gamma, params.mass, dt,
-                                          box[1], box[2])
-    k(rx, ry, vx, vy, fx, fy, beta_x, beta_y,
-      params.gamma, params.mass, dt, box[1], box[2]; threads, blocks)
+    if unwrapped_x === nothing || unwrapped_y === nothing
+        k = CUDA.@cuda launch=false _vv_pos2!(rx, ry, vx, vy, fx, fy, beta_x, beta_y,
+                                              params.gamma, params.mass, dt,
+                                              box[1], box[2])
+        k(rx, ry, vx, vy, fx, fy, beta_x, beta_y,
+          params.gamma, params.mass, dt, box[1], box[2]; threads, blocks)
+    else
+        k = CUDA.@cuda launch=false _vv_pos2_unwrap!(rx, ry, unwrapped_x, unwrapped_y,
+                                                     vx, vy, fx, fy, beta_x, beta_y,
+                                                     params.gamma, params.mass, dt,
+                                                     box[1], box[2])
+        k(rx, ry, unwrapped_x, unwrapped_y,
+          vx, vy, fx, fy, beta_x, beta_y,
+          params.gamma, params.mass, dt, box[1], box[2]; threads, blocks)
+    end
     return nothing
 end
 
@@ -273,16 +345,32 @@ function vv_positions_soa!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
                            vx::CuArray{T,1}, vy::CuArray{T,1}, vz::CuArray{T,1},
                            fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1},
                            beta_x::CuArray{T,1}, beta_y::CuArray{T,1}, beta_z::CuArray{T,1},
-                           params::VVParams{T}, dt::T, box::Definitions.Box3{T}) where {T<:AbstractFloat}
+                           params::VVParams{T}, dt::T, box::Definitions.Box3{T};
+                           unwrapped_x::Union{Nothing,CuArray{T,1}}=nothing,
+                           unwrapped_y::Union{Nothing,CuArray{T,1}}=nothing,
+                           unwrapped_z::Union{Nothing,CuArray{T,1}}=nothing) where {T<:AbstractFloat}
     N = length(rx); threads = min(256, N); blocks = cld(N, threads)
-    k = CUDA.@cuda launch=false _vv_pos3!(rx, ry, rz, vx, vy, vz, fx, fy, fz,
-                                          beta_x, beta_y, beta_z,
-                                          params.gamma, params.mass, dt,
-                                          box[1], box[2], box[3])
-    k(rx, ry, rz, vx, vy, vz, fx, fy, fz,
-      beta_x, beta_y, beta_z,
-      params.gamma, params.mass, dt,
-      box[1], box[2], box[3]; threads, blocks)
+    if unwrapped_x === nothing || unwrapped_y === nothing || unwrapped_z === nothing
+        k = CUDA.@cuda launch=false _vv_pos3!(rx, ry, rz, vx, vy, vz, fx, fy, fz,
+                                              beta_x, beta_y, beta_z,
+                                              params.gamma, params.mass, dt,
+                                              box[1], box[2], box[3])
+        k(rx, ry, rz, vx, vy, vz, fx, fy, fz,
+          beta_x, beta_y, beta_z,
+          params.gamma, params.mass, dt,
+          box[1], box[2], box[3]; threads, blocks)
+    else
+        k = CUDA.@cuda launch=false _vv_pos3_unwrap!(rx, ry, rz, unwrapped_x, unwrapped_y, unwrapped_z,
+                                                     vx, vy, vz, fx, fy, fz,
+                                                     beta_x, beta_y, beta_z,
+                                                     params.gamma, params.mass, dt,
+                                                     box[1], box[2], box[3])
+        k(rx, ry, rz, unwrapped_x, unwrapped_y, unwrapped_z,
+          vx, vy, vz, fx, fy, fz,
+          beta_x, beta_y, beta_z,
+          params.gamma, params.mass, dt,
+          box[1], box[2], box[3]; threads, blocks)
+    end
     return nothing
 end
 
@@ -444,6 +532,32 @@ function _baoab_BA2!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
     return
 end
 
+function _baoab_BA2_unwrap!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
+                            rxu::CuDeviceVector{T}, ryu::CuDeviceVector{T},
+                            vx::CuDeviceVector{T}, vy::CuDeviceVector{T},
+                            f0x::CuDeviceVector{T}, f0y::CuDeviceVector{T},
+                            mass::T, dt::T,
+                            Lx::T, Ly::T) where {T<:AbstractFloat}
+    half = T(0.5)
+    i = (blockIdx().x-1)*blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    @inbounds begin
+        vxi = vx[i] + (dt/(T(2)*mass)) * f0x[i]
+        vyi = vy[i] + (dt/(T(2)*mass)) * f0y[i]
+        dpx = half*dt*vxi
+        dpy = half*dt*vyi
+        rxu[i] += dpx
+        ryu[i] += dpy
+        xi = rx[i] + dpx
+        yi = ry[i] + dpy
+        xi = (xi + Lx*half); xi -= floor(xi/Lx)*Lx; xi -= Lx*half
+        yi = (yi + Ly*half); yi -= floor(yi/Ly)*Ly; yi -= Ly*half
+        vx[i] = vxi; vy[i] = vyi
+        rx[i] = xi;  ry[i] = yi
+    end
+    return
+end
+
 function _baoab_BA3!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
                      vx::CuDeviceVector{T}, vy::CuDeviceVector{T}, vz::CuDeviceVector{T},
                      f0x::CuDeviceVector{T}, f0y::CuDeviceVector{T}, f0z::CuDeviceVector{T},
@@ -459,6 +573,37 @@ function _baoab_BA3!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceV
         xi = rx[i] + half*dt*vxi
         yi = ry[i] + half*dt*vyi
         zi = rz[i] + half*dt*vzi
+        xi = (xi + Lx*half); xi -= floor(xi/Lx)*Lx; xi -= Lx*half
+        yi = (yi + Ly*half); yi -= floor(yi/Ly)*Ly; yi -= Ly*half
+        zi = (zi + Lz*half); zi -= floor(zi/Lz)*Lz; zi -= Lz*half
+        vx[i] = vxi; vy[i] = vyi; vz[i] = vzi
+        rx[i] = xi;  ry[i] = yi; rz[i] = zi
+    end
+    return
+end
+
+function _baoab_BA3_unwrap!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
+                            rxu::CuDeviceVector{T}, ryu::CuDeviceVector{T}, rzu::CuDeviceVector{T},
+                            vx::CuDeviceVector{T}, vy::CuDeviceVector{T}, vz::CuDeviceVector{T},
+                            f0x::CuDeviceVector{T}, f0y::CuDeviceVector{T}, f0z::CuDeviceVector{T},
+                            mass::T, dt::T,
+                            Lx::T, Ly::T, Lz::T) where {T<:AbstractFloat}
+    half = T(0.5)
+    i = (blockIdx().x-1)*blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    @inbounds begin
+        vxi = vx[i] + (dt/(T(2)*mass)) * f0x[i]
+        vyi = vy[i] + (dt/(T(2)*mass)) * f0y[i]
+        vzi = vz[i] + (dt/(T(2)*mass)) * f0z[i]
+        dpx = half*dt*vxi
+        dpy = half*dt*vyi
+        dpz = half*dt*vzi
+        rxu[i] += dpx
+        ryu[i] += dpy
+        rzu[i] += dpz
+        xi = rx[i] + dpx
+        yi = ry[i] + dpy
+        zi = rz[i] + dpz
         xi = (xi + Lx*half); xi -= floor(xi/Lx)*Lx; xi -= Lx*half
         yi = (yi + Ly*half); yi -= floor(yi/Ly)*Ly; yi -= Ly*half
         zi = (zi + Lz*half); zi -= floor(zi/Lz)*Lz; zi -= Lz*half
@@ -540,6 +685,27 @@ function _baoab_A2!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
     return
 end
 
+function _baoab_A2_unwrap!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
+                           rxu::CuDeviceVector{T}, ryu::CuDeviceVector{T},
+                           vx::CuDeviceVector{T}, vy::CuDeviceVector{T},
+                           dt::T, Lx::T, Ly::T) where {T<:AbstractFloat}
+    half = T(0.5)
+    i = (blockIdx().x-1)*blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    @inbounds begin
+        dpx = half*dt*vx[i]
+        dpy = half*dt*vy[i]
+        rxu[i] += dpx
+        ryu[i] += dpy
+        xi = rx[i] + dpx
+        yi = ry[i] + dpy
+        xi = (xi + Lx*half); xi -= floor(xi/Lx)*Lx; xi -= Lx*half
+        yi = (yi + Ly*half); yi -= floor(yi/Ly)*Ly; yi -= Ly*half
+        rx[i] = xi; ry[i] = yi
+    end
+    return
+end
+
 function _baoab_A3!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
                     vx::CuDeviceVector{T}, vy::CuDeviceVector{T}, vz::CuDeviceVector{T},
                     dt::T, Lx::T, Ly::T, Lz::T) where {T<:AbstractFloat}
@@ -550,6 +716,31 @@ function _baoab_A3!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVe
         xi = rx[i] + half*dt*vx[i]
         yi = ry[i] + half*dt*vy[i]
         zi = rz[i] + half*dt*vz[i]
+        xi = (xi + Lx*half); xi -= floor(xi/Lx)*Lx; xi -= Lx*half
+        yi = (yi + Ly*half); yi -= floor(yi/Ly)*Ly; yi -= Ly*half
+        zi = (zi + Lz*half); zi -= floor(zi/Lz)*Lz; zi -= Lz*half
+        rx[i] = xi; ry[i] = yi; rz[i] = zi
+    end
+    return
+end
+
+function _baoab_A3_unwrap!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
+                           rxu::CuDeviceVector{T}, ryu::CuDeviceVector{T}, rzu::CuDeviceVector{T},
+                           vx::CuDeviceVector{T}, vy::CuDeviceVector{T}, vz::CuDeviceVector{T},
+                           dt::T, Lx::T, Ly::T, Lz::T) where {T<:AbstractFloat}
+    half = T(0.5)
+    i = (blockIdx().x-1)*blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    @inbounds begin
+        dpx = half*dt*vx[i]
+        dpy = half*dt*vy[i]
+        dpz = half*dt*vz[i]
+        rxu[i] += dpx
+        ryu[i] += dpy
+        rzu[i] += dpz
+        xi = rx[i] + dpx
+        yi = ry[i] + dpy
+        zi = rz[i] + dpz
         xi = (xi + Lx*half); xi -= floor(xi/Lx)*Lx; xi -= Lx*half
         yi = (yi + Ly*half); yi -= floor(yi/Ly)*Ly; yi -= Ly*half
         zi = (zi + Lz*half); zi -= floor(zi/Lz)*Lz; zi -= Lz*half
@@ -619,10 +810,19 @@ Combined B/A half-step for BAOAB in 2D: kick velocities by half a force step
 and drift positions by `½ Δt`. Mirrors the integrator sequencing in
 `examples/TwoT_2D_LD_BAOAB.jl`.
 """
-function baoab_BA_2d!(rx, ry, vx, vy, f0x, f0y, params::BAOABParams{T}, dt::T, box::Definitions.Box2{T}) where {T<:AbstractFloat}
+function baoab_BA_2d!(rx, ry, vx, vy, f0x, f0y, params::BAOABParams{T}, dt::T, box::Definitions.Box2{T};
+                      unwrapped_x::Union{Nothing,CuArray{T,1}}=nothing,
+                      unwrapped_y::Union{Nothing,CuArray{T,1}}=nothing) where {T<:AbstractFloat}
     N = length(rx); threads = min(256, N); blocks = cld(N, threads)
-    k = CUDA.@cuda launch=false _baoab_BA2!(rx, ry, vx, vy, f0x, f0y, params.mass, dt, box[1], box[2])
-    k(rx, ry, vx, vy, f0x, f0y, params.mass, dt, box[1], box[2]; threads, blocks)
+    if unwrapped_x === nothing || unwrapped_y === nothing
+        k = CUDA.@cuda launch=false _baoab_BA2!(rx, ry, vx, vy, f0x, f0y, params.mass, dt, box[1], box[2])
+        k(rx, ry, vx, vy, f0x, f0y, params.mass, dt, box[1], box[2]; threads, blocks)
+    else
+        k = CUDA.@cuda launch=false _baoab_BA2_unwrap!(rx, ry, unwrapped_x, unwrapped_y,
+                                                      vx, vy, f0x, f0y, params.mass, dt, box[1], box[2])
+        k(rx, ry, unwrapped_x, unwrapped_y,
+          vx, vy, f0x, f0y, params.mass, dt, box[1], box[2]; threads, blocks)
+    end
     return nothing
 end
 
@@ -666,10 +866,20 @@ end
 """
 3D variant of [`baoab_BA_2d!`](@ref).
 """
-function baoab_BA_3d!(rx, ry, rz, vx, vy, vz, f0x, f0y, f0z, params::BAOABParams{T}, dt::T, box::Definitions.Box3{T}) where {T<:AbstractFloat}
+function baoab_BA_3d!(rx, ry, rz, vx, vy, vz, f0x, f0y, f0z, params::BAOABParams{T}, dt::T, box::Definitions.Box3{T};
+                      unwrapped_x::Union{Nothing,CuArray{T,1}}=nothing,
+                      unwrapped_y::Union{Nothing,CuArray{T,1}}=nothing,
+                      unwrapped_z::Union{Nothing,CuArray{T,1}}=nothing) where {T<:AbstractFloat}
     N = length(rx); threads = min(256, N); blocks = cld(N, threads)
-    k = CUDA.@cuda launch=false _baoab_BA3!(rx, ry, rz, vx, vy, vz, f0x, f0y, f0z, params.mass, dt, box[1], box[2], box[3])
-    k(rx, ry, rz, vx, vy, vz, f0x, f0y, f0z, params.mass, dt, box[1], box[2], box[3]; threads, blocks)
+    if unwrapped_x === nothing || unwrapped_y === nothing || unwrapped_z === nothing
+        k = CUDA.@cuda launch=false _baoab_BA3!(rx, ry, rz, vx, vy, vz, f0x, f0y, f0z, params.mass, dt, box[1], box[2], box[3])
+        k(rx, ry, rz, vx, vy, vz, f0x, f0y, f0z, params.mass, dt, box[1], box[2], box[3]; threads, blocks)
+    else
+        k = CUDA.@cuda launch=false _baoab_BA3_unwrap!(rx, ry, rz, unwrapped_x, unwrapped_y, unwrapped_z,
+                                                      vx, vy, vz, f0x, f0y, f0z, params.mass, dt, box[1], box[2], box[3])
+        k(rx, ry, rz, unwrapped_x, unwrapped_y, unwrapped_z,
+          vx, vy, vz, f0x, f0y, f0z, params.mass, dt, box[1], box[2], box[3]; threads, blocks)
+    end
     return nothing
 end
 
@@ -702,20 +912,37 @@ end
 Pure drift (A step) that advances coordinates by `½ Δt` using the already
 updated velocities.
 """
-function baoab_A_2d!(rx, ry, vx, vy, dt::T, box::Definitions.Box2{T}) where {T<:AbstractFloat}
+function baoab_A_2d!(rx, ry, vx, vy, dt::T, box::Definitions.Box2{T};
+                     unwrapped_x::Union{Nothing,CuArray{T,1}}=nothing,
+                     unwrapped_y::Union{Nothing,CuArray{T,1}}=nothing) where {T<:AbstractFloat}
     N = length(rx); threads = min(256, N); blocks = cld(N, threads)
-    k = CUDA.@cuda launch=false _baoab_A2!(rx, ry, vx, vy, dt, box[1], box[2])
-    k(rx, ry, vx, vy, dt, box[1], box[2]; threads, blocks)
+    if unwrapped_x === nothing || unwrapped_y === nothing
+        k = CUDA.@cuda launch=false _baoab_A2!(rx, ry, vx, vy, dt, box[1], box[2])
+        k(rx, ry, vx, vy, dt, box[1], box[2]; threads, blocks)
+    else
+        k = CUDA.@cuda launch=false _baoab_A2_unwrap!(rx, ry, unwrapped_x, unwrapped_y, vx, vy, dt, box[1], box[2])
+        k(rx, ry, unwrapped_x, unwrapped_y, vx, vy, dt, box[1], box[2]; threads, blocks)
+    end
     return nothing
 end
 
 """
 3D drift step (see [`baoab_A_2d!`](@ref)).
 """
-function baoab_A_3d!(rx, ry, rz, vx, vy, vz, dt::T, box::Definitions.Box3{T}) where {T<:AbstractFloat}
+function baoab_A_3d!(rx, ry, rz, vx, vy, vz, dt::T, box::Definitions.Box3{T};
+                     unwrapped_x::Union{Nothing,CuArray{T,1}}=nothing,
+                     unwrapped_y::Union{Nothing,CuArray{T,1}}=nothing,
+                     unwrapped_z::Union{Nothing,CuArray{T,1}}=nothing) where {T<:AbstractFloat}
     N = length(rx); threads = min(256, N); blocks = cld(N, threads)
-    k = CUDA.@cuda launch=false _baoab_A3!(rx, ry, rz, vx, vy, vz, dt, box[1], box[2], box[3])
-    k(rx, ry, rz, vx, vy, vz, dt, box[1], box[2], box[3]; threads, blocks)
+    if unwrapped_x === nothing || unwrapped_y === nothing || unwrapped_z === nothing
+        k = CUDA.@cuda launch=false _baoab_A3!(rx, ry, rz, vx, vy, vz, dt, box[1], box[2], box[3])
+        k(rx, ry, rz, vx, vy, vz, dt, box[1], box[2], box[3]; threads, blocks)
+    else
+        k = CUDA.@cuda launch=false _baoab_A3_unwrap!(rx, ry, rz, unwrapped_x, unwrapped_y, unwrapped_z,
+                                                     vx, vy, vz, dt, box[1], box[2], box[3])
+        k(rx, ry, rz, unwrapped_x, unwrapped_y, unwrapped_z,
+          vx, vy, vz, dt, box[1], box[2], box[3]; threads, blocks)
+    end
     return nothing
 end
 

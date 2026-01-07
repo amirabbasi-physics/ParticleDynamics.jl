@@ -24,7 +24,7 @@ const FREEZE_NONE   = UInt8(0)
 const FREEZE_HOLD   = UInt8(1)
 const FREEZE_SPRING = UInt8(2)
 
-export SimulationState, build_simulation, step!, step_graph!, step_fused!, zero_forces!
+export SimulationState, build_simulation, step!, step_graph!, step_fused!, zero_forces!, sync_unwrapped!, accumulate_virial!
 export IntegratorSpec, VVSpec, BAOABSpec, BAOASpec, GSMSpec, BrownianSpec, EMSpec, velocityverlet, baoab, baoa, gsm, eulerheun, eulermaruyama
 
 # =========================
@@ -42,12 +42,14 @@ Key fields that user code may read or mutate:
 - `rx, ry[, rz]`, `vx, vy[, vz]`, `fx, fy[, fz]`: positions, velocities, and
   force accumulators in GPU memory. Arrays are sized `N` and remain allocated
   for the entire simulation so that stepping is allocation-free.
+- `rx_unwrap, ry_unwrap[, rz_unwrap]`: optional unwrapped positions that track
+  continuous motion across periodic boundaries (enabled via `unwrapped_positions`).
 - `nbh`: neighbor matrix (either dense cell list or sentinel all-pairs) built
   with [`NeighborLists.build_neighbors_*`](@ref) using the requested cutoff,
   skin, and capacity.
 - `vv`: Langevin integrator parameters (`γ`, noise scale, per-particle OU state).
-- `Epot`, `Ekin`, `dq`, `dU` plus the corresponding `*_accum` buffers: energy
-  and heat observables that can be sampled directly on the GPU.
+- `Epot`, `Ekin`, `virial`, `dq`, `dU` plus the corresponding `*_accum` buffers:
+  energy, virial, and heat observables that can be sampled directly on the GPU.
 - `typeid`: per-particle type ids used by `Filters` and mixed-size LJ kernels.
 - `freeze_*`: optional buffers used by the freeze/tether helpers in `Filters`.
 - `coll_*`: optional buffers that appear when collision counting is enabled via
@@ -60,6 +62,9 @@ mutable struct SimulationState{T<:AbstractFloat}
     # SoA arrays
     rx::CuArray{T,1}; ry::CuArray{T,1}
     rz::Union{Nothing,CuArray{T,1}}
+    rx_unwrap::Union{Nothing,CuArray{T,1}}
+    ry_unwrap::Union{Nothing,CuArray{T,1}}
+    rz_unwrap::Union{Nothing,CuArray{T,1}}
     vx::CuArray{T,1}; vy::CuArray{T,1}
     vz::Union{Nothing,CuArray{T,1}}
     fx::CuArray{T,1}; fy::CuArray{T,1}
@@ -110,9 +115,11 @@ mutable struct SimulationState{T<:AbstractFloat}
     dq::CuArray{T,1}
     dU::CuArray{T,1}
     Ekin::CuArray{T,1}
+    virial::CuArray{T,1}
     # interval accumulators (GPU) to avoid host reductions each step
     Epot_accum::CuArray{T,1}
     Ekin_accum::CuArray{T,1}
+    virial_accum::CuArray{T,1}
 
     # misc
     step::Int
@@ -246,6 +253,22 @@ function zero_forces!(st::SimulationState{T}) where {T<:AbstractFloat}
     fill!(st.fx, zero(T)); fill!(st.fy, zero(T))
     st.fz === nothing || fill!(st.fz, zero(T))
     return nothing
+end
+
+"""
+    sync_unwrapped!(st)
+
+Copy the wrapped positions into the unwrapped buffers. Call this after manually
+overwriting `st.rx`/`st.ry`/`st.rz` when `unwrapped_positions=true`.
+"""
+function sync_unwrapped!(st::SimulationState{T}) where {T<:AbstractFloat}
+    st.rx_unwrap === nothing && return st
+    copyto!(st.rx_unwrap, st.rx)
+    copyto!(st.ry_unwrap, st.ry)
+    if st.rz !== nothing && st.rz_unwrap !== nothing
+        copyto!(st.rz_unwrap, st.rz)
+    end
+    return st
 end
 
 # Ensure OU state buffers exist when correlated noise is requested.
@@ -524,6 +547,36 @@ function _apply_freeze_hold!(st::SimulationState{T}, rx::CuArray{T,1}, ry::CuArr
     return _freeze_hold3!(rx, ry, rz, mask, ax, ay, az)
 end
 
+function _apply_freeze_hold_unwrap!(st::SimulationState{T}) where {T<:AbstractFloat}
+    rxu = st.rx_unwrap
+    ryu = st.ry_unwrap
+    if rxu === nothing || ryu === nothing
+        return nothing
+    end
+    mask = st.freeze_mask
+    ax = st.freeze_rx
+    ay = st.freeze_ry
+    if mask === nothing || ax === nothing || ay === nothing
+        return nothing
+    end
+    if st.rz_unwrap === nothing
+        return _freeze_hold2!(rxu, ryu, mask, ax, ay)
+    end
+    az = st.freeze_rz
+    az === nothing && return nothing
+    return _freeze_hold3!(rxu, ryu, st.rz_unwrap, mask, ax, ay, az)
+end
+
+function _apply_freeze_hold_positions!(st::SimulationState{T}) where {T<:AbstractFloat}
+    if st.rz === nothing
+        _apply_freeze_hold!(st, st.rx, st.ry)
+    else
+        _apply_freeze_hold!(st, st.rx, st.ry, st.rz)
+    end
+    _apply_freeze_hold_unwrap!(st)
+    return nothing
+end
+
 function _apply_freeze_spring!(st::SimulationState{T},
                                rx::CuArray{T,1}, ry::CuArray{T,1},
                                fx::CuArray{T,1}, fy::CuArray{T,1},
@@ -619,7 +672,7 @@ end
                       noise_corr_time=nothing, dt=0.001,
                       mass=1, bonds=nothing, bonding=nothing,
                       nonbonded=:lj, softrep_params=nothing,
-                      precision=:f32)
+                      precision=:f32, unwrapped_positions::Bool=false)
 
 Construct a [`SimulationState`](@ref) with GPU-resident SoA arrays and a
 neighbor list configured for the requested potential. All inputs are keyword
@@ -637,6 +690,8 @@ Key behaviors:
   floating-point precision (`:f32` or `:f64`).
 - Initial velocities are drawn from a Maxwell–Boltzmann distribution at
   `temperature` and then centered to remove center-of-mass drift.
+- When `unwrapped_positions=true`, additional `rx_unwrap`/`ry_unwrap`/`rz_unwrap`
+  buffers track continuous positions across periodic boundaries.
 
 Example (mirrors `examples/2D_example.jl`, scaled down to N=4096 for testing):
 
@@ -671,7 +726,8 @@ function build_simulation(;N::Int,
                            bonding::Union{Nothing,Definitions.BondPotential}=nothing,
                            nonbonded::Symbol = :lj,
                            softrep_params::Union{Nothing,Definitions.SoftRepulsiveParams{Real}}=nothing,
-                           precision::Symbol = :f32)
+                           precision::Symbol = :f32,
+                           unwrapped_positions::Bool = false)
 
     # Dimension from box
     D = length(box)
@@ -695,6 +751,9 @@ function build_simulation(;N::Int,
     vx = CUDA.CuArray{T}(undef, N); vy = CUDA.CuArray{T}(undef, N)
     fx = CUDA.CuArray{T}(undef, N); fy = CUDA.CuArray{T}(undef, N)
     rz = nothing; vz = nothing; fz = nothing
+    rx_unwrap = unwrapped_positions ? CUDA.CuArray{T}(undef, N) : nothing
+    ry_unwrap = unwrapped_positions ? CUDA.CuArray{T}(undef, N) : nothing
+    rz_unwrap = nothing
 
     # previous forces
     f0x = CUDA.CuArray{T}(undef, N)
@@ -727,6 +786,9 @@ function build_simulation(;N::Int,
         f0z = CUDA.CuArray{T}(undef, N)
         rf_z = CUDA.CuArray{T}(undef, N)
         ou_z = corr_time_vec === nothing ? nothing : CUDA.CuArray{T}(undef, N)
+        if unwrapped_positions
+            rz_unwrap = CUDA.CuArray{T}(undef, N)
+        end
     end
     if corr_time_vec !== nothing
         ou_x = CUDA.CuArray{T}(undef, N)
@@ -735,6 +797,9 @@ function build_simulation(;N::Int,
 
     fill!(rx, zero(T)); fill!(ry, zero(T))
     rz === nothing || fill!(rz, zero(T))
+    rx_unwrap === nothing || fill!(rx_unwrap, zero(T))
+    ry_unwrap === nothing || fill!(ry_unwrap, zero(T))
+    rz_unwrap === nothing || fill!(rz_unwrap, zero(T))
 
     fill!(fx, zero(T)); fill!(fy, zero(T)); fz === nothing || fill!(fz, zero(T))
     fill!(f0x, zero(T)); fill!(f0y, zero(T)); f0z === nothing || fill!(f0z, zero(T))
@@ -799,9 +864,11 @@ function build_simulation(;N::Int,
     dq   = CUDA.CuArray{T}(undef, N); fill!(dq, zero(T))
     dU   = CUDA.CuArray{T}(undef, N); fill!(dU, zero(T))
     Ekin = CUDA.CuArray{T}(undef, N); fill!(Ekin, zero(T))
+    virial = CUDA.CuArray{T}(undef, N); fill!(virial, zero(T))
     # interval accumulators (GPU)
     Epot_accum = CUDA.CuArray{T}(undef, N); fill!(Epot_accum, zero(T))
     Ekin_accum = CUDA.CuArray{T}(undef, N); fill!(Ekin_accum, zero(T))
+    virial_accum = CUDA.CuArray{T}(undef, N); fill!(virial_accum, zero(T))
 
     # Build bonds (if provided)
     local bondlist
@@ -845,7 +912,7 @@ function build_simulation(;N::Int,
     end
 
     # Construct with boxes set to nothing; assign after
-    st = SimulationState(rx, ry, rz, vx, vy, vz, fx, fy, fz,
+    st = SimulationState(rx, ry, rz, rx_unwrap, ry_unwrap, rz_unwrap, vx, vy, vz, fx, fy, fz,
                          f0x, f0y, f0z,
                          rf_x, rf_y, rf_z,
                          ou_x, ou_y, ou_z,
@@ -857,7 +924,8 @@ function build_simulation(;N::Int,
                          nothing, nothing, nothing,
                          bondlist, bond_spec,
                          vv,
-                         Epot, dq, dU, Ekin, Epot_accum, Ekin_accum, 0, UInt8(0), nb_tag, srp,
+                         Epot, dq, dU, Ekin, virial, Epot_accum, Ekin_accum, virial_accum,
+                         0, UInt8(0), nb_tag, srp,
                          FREEZE_NONE, -1, true, nothing, zero(T), nothing, nothing, nothing,
                          false, nothing, nothing, nothing) 
 
@@ -871,6 +939,51 @@ function build_simulation(;N::Int,
     end
 
     return st
+end
+
+# =========================
+#   Virial (GPU)
+# =========================
+function _virial2_kernel!(rxu::CuDeviceVector{T}, ryu::CuDeviceVector{T},
+                          fx::CuDeviceVector{T}, fy::CuDeviceVector{T},
+                          virial::CuDeviceVector{T}) where {T<:AbstractFloat}
+    i = (blockIdx().x-1)*blockDim().x + threadIdx().x
+    N = length(rxu); if i > N; return; end
+    @inbounds begin
+        virial[i] = rxu[i] * fx[i] + ryu[i] * fy[i]
+    end
+    return
+end
+
+function _virial3_kernel!(rxu::CuDeviceVector{T}, ryu::CuDeviceVector{T}, rzu::CuDeviceVector{T},
+                          fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, fz::CuDeviceVector{T},
+                          virial::CuDeviceVector{T}) where {T<:AbstractFloat}
+    i = (blockIdx().x-1)*blockDim().x + threadIdx().x
+    N = length(rxu); if i > N; return; end
+    @inbounds begin
+        virial[i] = rxu[i] * fx[i] + ryu[i] * fy[i] + rzu[i] * fz[i]
+    end
+    return
+end
+
+function _compute_virial!(st::SimulationState{T}, fx::CuArray{T,1}, fy::CuArray{T,1},
+                          fz::Union{Nothing,CuArray{T,1}}) where {T<:AbstractFloat}
+    use_unwrap = st.rx_unwrap !== nothing && st.ry_unwrap !== nothing &&
+        (fz === nothing || st.rz_unwrap !== nothing)
+    rxu = use_unwrap ? st.rx_unwrap : st.rx
+    ryu = use_unwrap ? st.ry_unwrap : st.ry
+    N = length(rxu)
+    threads = min(256, N)
+    blocks = cld(N, threads)
+    if fz === nothing || (!use_unwrap && st.rz === nothing)
+        k = CUDA.@cuda launch=false _virial2_kernel!(rxu, ryu, fx, fy, st.virial)
+        k(rxu, ryu, fx, fy, st.virial; threads, blocks)
+    else
+        rzu = use_unwrap ? st.rz_unwrap : st.rz
+        k = CUDA.@cuda launch=false _virial3_kernel!(rxu, ryu, rzu, fx, fy, fz, st.virial)
+        k(rxu, ryu, rzu, fx, fy, fz, st.virial; threads, blocks)
+    end
+    return nothing
 end
 
 # =========================
@@ -899,6 +1012,29 @@ function accumulate_energies!(st::SimulationState{T}) where {T<:AbstractFloat}
     blocks  = cld(N, threads)
     k = CUDA.@cuda launch=false _accumulate_energies!(st.Ekin_accum, st.Epot_accum, st.Ekin, st.Epot)
     k(st.Ekin_accum, st.Epot_accum, st.Ekin, st.Epot; threads, blocks)
+    return nothing
+end
+
+function _accumulate_virial!(virial_accum, virial)
+    i = (blockIdx().x-1)*blockDim().x + threadIdx().x
+    N = length(virial); if i > N; return; end
+    @inbounds begin
+        virial_accum[i] += virial[i]
+    end
+    return
+end
+
+"""
+    accumulate_virial!(st)
+
+Add the instantaneous `virial` buffer into the per-interval accumulator.
+"""
+function accumulate_virial!(st::SimulationState{T}) where {T<:AbstractFloat}
+    N = length(st.virial)
+    threads = min(256, N)
+    blocks  = cld(N, threads)
+    k = CUDA.@cuda launch=false _accumulate_virial!(st.virial_accum, st.virial)
+    k(st.virial_accum, st.virial; threads, blocks)
     return nothing
 end
 
@@ -1155,9 +1291,10 @@ function step!(st::SimulationState{T}, dt::Real; compute_energy::Bool=true) wher
                                               state_x=st.ou_x, state_y=st.ou_y, state_z=nothing,
                                               dt=dtT)
         LangevinIntegrators.vv_positions_soa!(st.rx, st.ry, st.vx, st.vy, st.f0x, st.f0y,
-                                              st.rf_x, st.rf_y, st.vv, dtT, st.box2::Definitions.Box2)
+                                              st.rf_x, st.rf_y, st.vv, dtT, st.box2::Definitions.Box2;
+                                              unwrapped_x=st.rx_unwrap, unwrapped_y=st.ry_unwrap)
         if freeze_hold
-            _apply_freeze_hold!(st, st.rx, st.ry)
+            _apply_freeze_hold_positions!(st)
         end
         _collisions_update_after_positions!(st)
     else
@@ -1168,9 +1305,10 @@ function step!(st::SimulationState{T}, dt::Real; compute_energy::Bool=true) wher
                                               dt=dtT)
         LangevinIntegrators.vv_positions_soa!(st.rx, st.ry, st.rz, st.vx, st.vy, st.vz,
                                               st.f0x, st.f0y, st.f0z,
-                                              st.rf_x, st.rf_y, st.rf_z, st.vv, dtT, st.box3::Definitions.Box3)
+                                              st.rf_x, st.rf_y, st.rf_z, st.vv, dtT, st.box3::Definitions.Box3;
+                                              unwrapped_x=st.rx_unwrap, unwrapped_y=st.ry_unwrap, unwrapped_z=st.rz_unwrap)
         if freeze_hold
-            _apply_freeze_hold!(st, st.rx, st.ry, st.rz)
+            _apply_freeze_hold_positions!(st)
         end
         _collisions_update_after_positions!(st)
     end
@@ -1261,6 +1399,9 @@ function step!(st::SimulationState{T}, dt::Real; compute_energy::Bool=true) wher
             _apply_freeze_spring!(st, st.rx, st.ry, st.fx, st.fy,
                                   compute_energy ? st.Epot : nothing, compute_energy)
         end
+        if compute_energy
+            _compute_virial!(st, st.fx, st.fy, nothing)
+        end
         LangevinIntegrators.vv_velocities_soa!(st.vx, st.vy, st.f0x, st.f0y, st.fx, st.fy,
                                                st.rf_x, st.rf_y, st.dq, st.dU, st.Ekin, st.vv, dtT)
     else
@@ -1348,10 +1489,21 @@ function step!(st::SimulationState{T}, dt::Real; compute_energy::Bool=true) wher
             _apply_freeze_spring!(st, st.rx, st.ry, st.rz, st.fx, st.fy, st.fz,
                                   compute_energy ? st.Epot : nothing, compute_energy)
         end
+        if compute_energy
+            _compute_virial!(st, st.fx, st.fy, st.fz)
+        end
         LangevinIntegrators.vv_velocities_soa!(st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z,
                                                st.fx, st.fy, st.fz,
                                                st.rf_x, st.rf_y, st.rf_z,
                                                st.dq, st.dU, st.Ekin, st.vv, dtT)
+    end
+
+    if compute_energy
+        if D == 2
+            _compute_virial!(st, st.fx, st.fy, nothing)
+        else
+            _compute_virial!(st, st.fx, st.fy, st.fz)
+        end
     end
 
     st.step += 1
@@ -1474,7 +1626,8 @@ function step_graph!(st::SimulationState{T}, dt::Real; compute_energy::Bool=true
                                                   state_x=st.ou_x, state_y=st.ou_y, state_z=nothing,
                                                   dt=dtT)
         LangevinIntegrators.vv_positions_soa!(st.rx, st.ry, st.vx, st.vy, st.f0x, st.f0y,
-                                              st.rf_x, st.rf_y, st.vv, dtT, st.box2::Definitions.Box2)
+                                              st.rf_x, st.rf_y, st.vv, dtT, st.box2::Definitions.Box2;
+                                              unwrapped_x=st.rx_unwrap, unwrapped_y=st.ry_unwrap)
         _collisions_update_after_positions!(st)
             if st.nb_kind == NB_KIND_LJ
                 if compute_energy
@@ -1502,6 +1655,9 @@ function step_graph!(st::SimulationState{T}, dt::Real; compute_energy::Bool=true
                                                                   st.nbh, st.box2::Definitions.Box2, st.softrep)
                 end
             end
+            if compute_energy
+                _compute_virial!(st, st.fx, st.fy, nothing)
+            end
             LangevinIntegrators.vv_velocities_soa!(st.vx, st.vy, st.f0x, st.f0y, st.fx, st.fy,
                                                    st.rf_x, st.rf_y, st.dq, st.dU, st.Ekin, st.vv, dtT)
         end
@@ -1514,7 +1670,8 @@ function step_graph!(st::SimulationState{T}, dt::Real; compute_energy::Bool=true
                                                   dt=dtT)
         LangevinIntegrators.vv_positions_soa!(st.rx, st.ry, st.rz, st.vx, st.vy, st.vz,
                                               st.f0x, st.f0y, st.f0z,
-                                              st.rf_x, st.rf_y, st.rf_z, st.vv, dtT, st.box3::Definitions.Box3)
+                                              st.rf_x, st.rf_y, st.rf_z, st.vv, dtT, st.box3::Definitions.Box3;
+                                              unwrapped_x=st.rx_unwrap, unwrapped_y=st.ry_unwrap, unwrapped_z=st.rz_unwrap)
         _collisions_update_after_positions!(st)
             if st.nb_kind == NB_KIND_LJ
                 if compute_energy
@@ -1541,6 +1698,9 @@ function step_graph!(st::SimulationState{T}, dt::Real; compute_energy::Bool=true
                     NonBondedForces.harmonic_rep_forces_soa_noE!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz,
                                                                   st.nbh, st.box3::Definitions.Box3, st.softrep)
                 end
+            end
+            if compute_energy
+                _compute_virial!(st, st.fx, st.fy, st.fz)
             end
             LangevinIntegrators.vv_velocities_soa!(st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z,
                                                    st.fx, st.fy, st.fz,
@@ -1777,9 +1937,10 @@ function step!(st::SimulationState{T}, spec::BAOASpec{T}, dt::Real; compute_ener
         # B(1): full kick using f(t)
         LangevinIntegrators.baoab_B_2d!(st.vx, st.vy, st.f0x, st.f0y, spec.params, T(2)*dtT, st.Ekin, st.dU)
         # A(1/2)
-        LangevinIntegrators.baoab_A_2d!(st.rx, st.ry, st.vx, st.vy, dtT, st.box2::Definitions.Box2)
+        LangevinIntegrators.baoab_A_2d!(st.rx, st.ry, st.vx, st.vy, dtT, st.box2::Definitions.Box2;
+                                        unwrapped_x=st.rx_unwrap, unwrapped_y=st.ry_unwrap)
         if freeze_hold
-            _apply_freeze_hold!(st, st.rx, st.ry)
+            _apply_freeze_hold_positions!(st)
         end
         _collisions_update_after_positions!(st)
         # O(1): OU using pre-generated noise (reuse VV noise draw)
@@ -1789,9 +1950,10 @@ function step!(st::SimulationState{T}, spec::BAOASpec{T}, dt::Real; compute_ener
                                               dt=dtT)
         LangevinIntegrators.baoab_OU_2d!(st.vx, st.vy, st.rf_x, st.rf_y, spec.params, dtT, st.dq)
         # A(1/2)
-        LangevinIntegrators.baoab_A_2d!(st.rx, st.ry, st.vx, st.vy, dtT, st.box2::Definitions.Box2)
+        LangevinIntegrators.baoab_A_2d!(st.rx, st.ry, st.vx, st.vy, dtT, st.box2::Definitions.Box2;
+                                        unwrapped_x=st.rx_unwrap, unwrapped_y=st.ry_unwrap)
         if freeze_hold
-            _apply_freeze_hold!(st, st.rx, st.ry)
+            _apply_freeze_hold_positions!(st)
         end
         _collisions_update_after_positions!(st)
 
@@ -1860,6 +2022,10 @@ function step!(st::SimulationState{T}, spec::BAOASpec{T}, dt::Real; compute_ener
             end
         end
 
+        if compute_energy
+            _compute_virial!(st, st.fx, st.fy, nothing)
+        end
+
         # Conservative power like VV at end of step (BAOA has no final B)
         LangevinIntegrators.cons_power_2d!(st.vx, st.vy, st.fx, st.fy, st.dU)
 
@@ -1868,9 +2034,10 @@ function step!(st::SimulationState{T}, spec::BAOASpec{T}, dt::Real; compute_ener
     else
         # 3D variant
         LangevinIntegrators.baoab_B_3d!(st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z, spec.params, T(2)*dtT, st.Ekin, st.dU)
-        LangevinIntegrators.baoab_A_3d!(st.rx, st.ry, st.rz, st.vx, st.vy, st.vz, dtT, st.box3::Definitions.Box3)
+        LangevinIntegrators.baoab_A_3d!(st.rx, st.ry, st.rz, st.vx, st.vy, st.vz, dtT, st.box3::Definitions.Box3;
+                                        unwrapped_x=st.rx_unwrap, unwrapped_y=st.ry_unwrap, unwrapped_z=st.rz_unwrap)
         if freeze_hold
-            _apply_freeze_hold!(st, st.rx, st.ry, st.rz)
+            _apply_freeze_hold_positions!(st)
         end
         _collisions_update_after_positions!(st)
         LangevinIntegrators.vv_prepare_noise!(st.rf_x, st.rf_y, spec.params.noise_scale;
@@ -1879,9 +2046,10 @@ function step!(st::SimulationState{T}, spec::BAOASpec{T}, dt::Real; compute_ener
                                               state_x=st.ou_x, state_y=st.ou_y, state_z=st.ou_z,
                                               dt=dtT)
         LangevinIntegrators.baoab_OU_3d!(st.vx, st.vy, st.vz, st.rf_x, st.rf_y, st.rf_z, spec.params, dtT, st.dq)
-        LangevinIntegrators.baoab_A_3d!(st.rx, st.ry, st.rz, st.vx, st.vy, st.vz, dtT, st.box3::Definitions.Box3)
+        LangevinIntegrators.baoab_A_3d!(st.rx, st.ry, st.rz, st.vx, st.vy, st.vz, dtT, st.box3::Definitions.Box3;
+                                        unwrapped_x=st.rx_unwrap, unwrapped_y=st.ry_unwrap, unwrapped_z=st.rz_unwrap)
         if freeze_hold
-            _apply_freeze_hold!(st, st.rx, st.ry, st.rz)
+            _apply_freeze_hold_positions!(st)
         end
         _collisions_update_after_positions!(st)
 
@@ -1962,6 +2130,10 @@ function step!(st::SimulationState{T}, spec::BAOASpec{T}, dt::Real; compute_ener
                 _apply_freeze_spring!(st, st.rx, st.ry, st.rz, st.fx, st.fy, st.fz,
                                       compute_energy ? st.Epot : nothing, compute_energy)
             end
+        end
+
+        if compute_energy
+            _compute_virial!(st, st.fx, st.fy, st.fz)
         end
 
         # Conservative power like VV at end of step (BAOA has no final B)
@@ -2142,9 +2314,10 @@ function step!(st::SimulationState{T}, bao::LangevinIntegrators.BAOABParams{T}, 
     # BAOAB sequence
     _ensure_ou_state!(st, bao.corr_time)
     if D == 2
-        LangevinIntegrators.baoab_BA_2d!(st.rx, st.ry, st.vx, st.vy, st.f0x, st.f0y, bao, dtT, st.box2::Definitions.Box2)
+        LangevinIntegrators.baoab_BA_2d!(st.rx, st.ry, st.vx, st.vy, st.f0x, st.f0y, bao, dtT, st.box2::Definitions.Box2;
+                                         unwrapped_x=st.rx_unwrap, unwrapped_y=st.ry_unwrap)
         if freeze_hold
-            _apply_freeze_hold!(st, st.rx, st.ry)
+            _apply_freeze_hold_positions!(st)
         end
         # Prepare OU noise using the same generator as VV (β = s * N(0,1))
         LangevinIntegrators.vv_prepare_noise!(st.rf_x, st.rf_y, bao.noise_scale;
@@ -2152,9 +2325,10 @@ function step!(st::SimulationState{T}, bao::LangevinIntegrators.BAOABParams{T}, 
                                               state_x=st.ou_x, state_y=st.ou_y, state_z=nothing,
                                               dt=dtT)
         LangevinIntegrators.baoab_OU_2d!(st.vx, st.vy, st.rf_x, st.rf_y, bao, dtT, st.dq)
-        LangevinIntegrators.baoab_A_2d!(st.rx, st.ry, st.vx, st.vy, dtT, st.box2::Definitions.Box2)
+        LangevinIntegrators.baoab_A_2d!(st.rx, st.ry, st.vx, st.vy, dtT, st.box2::Definitions.Box2;
+                                        unwrapped_x=st.rx_unwrap, unwrapped_y=st.ry_unwrap)
         if freeze_hold
-            _apply_freeze_hold!(st, st.rx, st.ry)
+            _apply_freeze_hold_positions!(st)
         end
 
         # forces at t+dt (write to fx,fy)
@@ -2231,11 +2405,15 @@ function step!(st::SimulationState{T}, bao::LangevinIntegrators.BAOABParams{T}, 
             _apply_freeze_spring!(st, st.rx, st.ry, st.fx, st.fy,
                                   compute_energy ? st.Epot : nothing, compute_energy)
         end
+        if compute_energy
+            _compute_virial!(st, st.fx, st.fy, nothing)
+        end
         LangevinIntegrators.baoab_B_2d!(st.vx, st.vy, st.fx, st.fy, bao, dtT, st.Ekin, st.dU)
     else
-        LangevinIntegrators.baoab_BA_3d!(st.rx, st.ry, st.rz, st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z, bao, dtT, st.box3::Definitions.Box3)
+        LangevinIntegrators.baoab_BA_3d!(st.rx, st.ry, st.rz, st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z, bao, dtT, st.box3::Definitions.Box3;
+                                         unwrapped_x=st.rx_unwrap, unwrapped_y=st.ry_unwrap, unwrapped_z=st.rz_unwrap)
         if freeze_hold
-            _apply_freeze_hold!(st, st.rx, st.ry, st.rz)
+            _apply_freeze_hold_positions!(st)
         end
         LangevinIntegrators.vv_prepare_noise!(st.rf_x, st.rf_y, bao.noise_scale;
                                               beta_z=st.rf_z,
@@ -2243,9 +2421,10 @@ function step!(st::SimulationState{T}, bao::LangevinIntegrators.BAOABParams{T}, 
                                               state_x=st.ou_x, state_y=st.ou_y, state_z=st.ou_z,
                                               dt=dtT)
         LangevinIntegrators.baoab_OU_3d!(st.vx, st.vy, st.vz, st.rf_x, st.rf_y, st.rf_z, bao, dtT, st.dq)
-        LangevinIntegrators.baoab_A_3d!(st.rx, st.ry, st.rz, st.vx, st.vy, st.vz, dtT, st.box3::Definitions.Box3)
+        LangevinIntegrators.baoab_A_3d!(st.rx, st.ry, st.rz, st.vx, st.vy, st.vz, dtT, st.box3::Definitions.Box3;
+                                        unwrapped_x=st.rx_unwrap, unwrapped_y=st.ry_unwrap, unwrapped_z=st.rz_unwrap)
         if freeze_hold
-            _apply_freeze_hold!(st, st.rx, st.ry, st.rz)
+            _apply_freeze_hold_positions!(st)
         end
 
         # forces at t+dt (3D)
@@ -2322,6 +2501,9 @@ function step!(st::SimulationState{T}, bao::LangevinIntegrators.BAOABParams{T}, 
         if freeze_spring
             _apply_freeze_spring!(st, st.rx, st.ry, st.rz, st.fx, st.fy, st.fz,
                                   compute_energy ? st.Epot : nothing, compute_energy)
+        end
+        if compute_energy
+            _compute_virial!(st, st.fx, st.fy, st.fz)
         end
         LangevinIntegrators.baoab_B_3d!(st.vx, st.vy, st.vz, st.fx, st.fy, st.fz, bao, dtT, st.Ekin, st.dU)
     end
@@ -2467,9 +2649,10 @@ function step!(st::SimulationState{T}, bp::BrownianIntegrators.BrownianParams{T}
             st.rx, st.ry, st.f0x, st.f0y,
             st.rf_x, st.rf_y,
             bp.gamma, bp.noise_scale,
-            dtT, st.dq, st.dU, st.box2::Definitions.Box2)
+            dtT, st.dq, st.dU, st.box2::Definitions.Box2;
+            unwrapped_x=st.rx_unwrap, unwrapped_y=st.ry_unwrap)
         if freeze_hold
-            _apply_freeze_hold!(st, st.rx, st.ry)
+            _apply_freeze_hold_positions!(st)
         end
         _collisions_update_after_positions!(st)
         if st.nb_kind == NB_KIND_LJ
@@ -2589,9 +2772,10 @@ function step!(st::SimulationState{T}, bp::BrownianIntegrators.BrownianParams{T}
             st.f0x, st.f0y, st.f0z,
             st.rf_x, st.rf_y, st.rf_z,
             bp.gamma, bp.noise_scale,
-            dtT, st.dq, st.dU, st.box3::Definitions.Box3)
+            dtT, st.dq, st.dU, st.box3::Definitions.Box3;
+            unwrapped_x=st.rx_unwrap, unwrapped_y=st.ry_unwrap, unwrapped_z=st.rz_unwrap)
         if freeze_hold
-            _apply_freeze_hold!(st, st.rx, st.ry, st.rz)
+            _apply_freeze_hold_positions!(st)
         end
         _collisions_update_after_positions!(st)
         if st.nb_kind == NB_KIND_LJ
@@ -2657,6 +2841,10 @@ function step!(st::SimulationState{T}, bp::BrownianIntegrators.BrownianParams{T}
             _apply_freeze_spring!(st, st.rx, st.ry, st.rz, st.fx, st.fy, st.fz,
                                   compute_energy ? st.Epot : nothing, compute_energy)
         end
+    end
+
+    if compute_energy
+        _compute_virial!(st, st.fx, st.fy, st.fz)
     end
 
     st.step += 1
@@ -2838,9 +3026,10 @@ function step!(st::SimulationState{T}, em::BrownianIntegrators.EMParams{T}, dt::
             st.rx, st.ry, st.f0x, st.f0y,
             st.rf_x, st.rf_y,
             em.gamma, em.noise_scale,
-            dtT, st.dq, st.dU, st.box2::Definitions.Box2)
+            dtT, st.dq, st.dU, st.box2::Definitions.Box2;
+            unwrapped_x=st.rx_unwrap, unwrapped_y=st.ry_unwrap)
         if freeze_hold
-            _apply_freeze_hold!(st, st.rx, st.ry)
+            _apply_freeze_hold_positions!(st)
         end
         _collisions_update_after_positions!(st)
         # New forces
@@ -2936,9 +3125,10 @@ function step!(st::SimulationState{T}, em::BrownianIntegrators.EMParams{T}, dt::
             st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
             st.rf_x, st.rf_y, st.rf_z,
             em.gamma, em.noise_scale,
-            dtT, st.dq, st.dU, st.box3::Definitions.Box3)
+            dtT, st.dq, st.dU, st.box3::Definitions.Box3;
+            unwrapped_x=st.rx_unwrap, unwrapped_y=st.ry_unwrap, unwrapped_z=st.rz_unwrap)
         if freeze_hold
-            _apply_freeze_hold!(st, st.rx, st.ry, st.rz)
+            _apply_freeze_hold_positions!(st)
         end
         _collisions_update_after_positions!(st)
         if compute_energy
