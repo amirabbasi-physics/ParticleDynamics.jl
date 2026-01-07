@@ -297,6 +297,42 @@ function _fin2!(
     return nothing
 end
 
+function _fin2_unwrap!(
+        rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
+        rxu::CuDeviceVector{T}, ryu::CuDeviceVector{T},
+        fxm::CuDeviceVector{T}, fym::CuDeviceVector{T},
+        ξx::CuDeviceVector{T}, ξy::CuDeviceVector{T},
+        gamma::CuDeviceVector{T}, noise_scale::CuDeviceVector{T},
+        dt::T,
+        dq::CuDeviceVector{T}, dU::CuDeviceVector{T},
+        Lx::T, Ly::T
+        ) where {T<:AbstractFloat}
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    @inbounds begin
+        g = gamma[i]
+        μ = 1 / g
+        sqrt2Ddt = μ * noise_scale[i]
+        local x0 = rx[i]; local y0 = ry[i]
+        local Δx = μ * fxm[i] * dt + sqrt2Ddt * ξx[i]
+        local Δy = μ * fym[i] * dt + sqrt2Ddt * ξy[i]
+        rxu[i] += Δx
+        ryu[i] += Δy
+        local x = x0 + Δx
+        local y = y0 + Δy
+        local xw = _wrap_centered(x, Lx)
+        local yw = _wrap_centered(y, Ly)
+        rx[i] = xw
+        ry[i] = yw
+        local dx_mic = _wrap_centered(xw - x0, Lx)
+        local dy_mic = _wrap_centered(yw - y0, Ly)
+        local w = fxm[i] * dx_mic + fym[i] * dy_mic
+        dq[i] = dq[i] + w
+        dU[i] = dU[i] + w
+    end
+    return nothing
+end
+
 function _fin3!(
         rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
         fxm::CuDeviceVector{T}, fym::CuDeviceVector{T}, fzm::CuDeviceVector{T},
@@ -316,6 +352,48 @@ function _fin3!(
         local Δx = μ * fxm[i] * dt + sqrt2Ddt * ξx[i]
         local Δy = μ * fym[i] * dt + sqrt2Ddt * ξy[i]
         local Δz = μ * fzm[i] * dt + sqrt2Ddt * ξz[i]
+        local x = x0 + Δx
+        local y = y0 + Δy
+        local z = z0 + Δz
+        local xw = _wrap_centered(x, Lx)
+        local yw = _wrap_centered(y, Ly)
+        local zw = _wrap_centered(z, Lz)
+        rx[i] = xw
+        ry[i] = yw
+        rz[i] = zw
+        local dx_mic = _wrap_centered(xw - x0, Lx)
+        local dy_mic = _wrap_centered(yw - y0, Ly)
+        local dz_mic = _wrap_centered(zw - z0, Lz)
+        local w = fxm[i] * dx_mic + fym[i] * dy_mic + fzm[i] * dz_mic
+        dq[i] = dq[i] + w
+        dU[i] = dU[i] + w
+    end
+    return nothing
+end
+
+function _fin3_unwrap!(
+        rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
+        rxu::CuDeviceVector{T}, ryu::CuDeviceVector{T}, rzu::CuDeviceVector{T},
+        fxm::CuDeviceVector{T}, fym::CuDeviceVector{T}, fzm::CuDeviceVector{T},
+        ξx::CuDeviceVector{T}, ξy::CuDeviceVector{T}, ξz::CuDeviceVector{T},
+        gamma::CuDeviceVector{T}, noise_scale::CuDeviceVector{T},
+        dt::T,
+        dq::CuDeviceVector{T}, dU::CuDeviceVector{T},
+        Lx::T, Ly::T, Lz::T
+        ) where {T<:AbstractFloat}
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    @inbounds begin
+        g = gamma[i]
+        μ = 1 / g
+        sqrt2Ddt = μ * noise_scale[i]
+        local x0 = rx[i]; local y0 = ry[i]; local z0 = rz[i]
+        local Δx = μ * fxm[i] * dt + sqrt2Ddt * ξx[i]
+        local Δy = μ * fym[i] * dt + sqrt2Ddt * ξy[i]
+        local Δz = μ * fzm[i] * dt + sqrt2Ddt * ξz[i]
+        rxu[i] += Δx
+        ryu[i] += Δy
+        rzu[i] += Δz
         local x = x0 + Δx
         local y = y0 + Δy
         local z = z0 + Δz
@@ -389,7 +467,9 @@ with noise to update positions and the heat/energy buffers.
 """
 function bd_finish_step_2d!(rx, ry, fxm, fym, ξx, ξy,
                             gamma::CuArray{T,1}, noise_scale::CuArray{T,1},
-                            dt::Real, dq::CuArray{T,1}, dU::CuArray{T,1}, box::Definitions.Box2{T}) where {T<:AbstractFloat}
+                            dt::Real, dq::CuArray{T,1}, dU::CuArray{T,1}, box::Definitions.Box2{T};
+                            unwrapped_x::Union{Nothing,CuArray{T,1}}=nothing,
+                            unwrapped_y::Union{Nothing,CuArray{T,1}}=nothing) where {T<:AbstractFloat}
     N = length(rx)
     @assert length(gamma) == N == length(noise_scale)
     threads = min(256, N)
@@ -397,8 +477,13 @@ function bd_finish_step_2d!(rx, ry, fxm, fym, ξx, ξy,
     dtT = convert(T, dt)
     Lx = convert(T, box[1])
     Ly = convert(T, box[2])
-    k = CUDA.@cuda launch=false _fin2!(rx, ry, fxm, fym, ξx, ξy, gamma, noise_scale, dtT, dq, dU, Lx, Ly)
-    k(rx, ry, fxm, fym, ξx, ξy, gamma, noise_scale, dtT, dq, dU, Lx, Ly; threads, blocks)
+    if unwrapped_x === nothing || unwrapped_y === nothing
+        k = CUDA.@cuda launch=false _fin2!(rx, ry, fxm, fym, ξx, ξy, gamma, noise_scale, dtT, dq, dU, Lx, Ly)
+        k(rx, ry, fxm, fym, ξx, ξy, gamma, noise_scale, dtT, dq, dU, Lx, Ly; threads, blocks)
+    else
+        k = CUDA.@cuda launch=false _fin2_unwrap!(rx, ry, unwrapped_x, unwrapped_y, fxm, fym, ξx, ξy, gamma, noise_scale, dtT, dq, dU, Lx, Ly)
+        k(rx, ry, unwrapped_x, unwrapped_y, fxm, fym, ξx, ξy, gamma, noise_scale, dtT, dq, dU, Lx, Ly; threads, blocks)
+    end
     return nothing
 end
 
@@ -407,7 +492,10 @@ end
 """
 function bd_finish_step_3d!(rx, ry, rz, fxm, fym, fzm, ξx, ξy, ξz,
                             gamma::CuArray{T,1}, noise_scale::CuArray{T,1},
-                            dt::Real, dq::CuArray{T,1}, dU::CuArray{T,1}, box::Definitions.Box3{T}) where {T<:AbstractFloat}
+                            dt::Real, dq::CuArray{T,1}, dU::CuArray{T,1}, box::Definitions.Box3{T};
+                            unwrapped_x::Union{Nothing,CuArray{T,1}}=nothing,
+                            unwrapped_y::Union{Nothing,CuArray{T,1}}=nothing,
+                            unwrapped_z::Union{Nothing,CuArray{T,1}}=nothing) where {T<:AbstractFloat}
     N = length(rx)
     @assert length(gamma) == N == length(noise_scale)
     threads = min(256, N)
@@ -416,8 +504,15 @@ function bd_finish_step_3d!(rx, ry, rz, fxm, fym, fzm, ξx, ξy, ξz,
     Lx = convert(T, box[1])
     Ly = convert(T, box[2])
     Lz = convert(T, box[3])
-    k = CUDA.@cuda launch=false _fin3!(rx, ry, rz, fxm, fym, fzm, ξx, ξy, ξz, gamma, noise_scale, dtT, dq, dU, Lx, Ly, Lz)
-    k(rx, ry, rz, fxm, fym, fzm, ξx, ξy, ξz, gamma, noise_scale, dtT, dq, dU, Lx, Ly, Lz; threads, blocks)
+    if unwrapped_x === nothing || unwrapped_y === nothing || unwrapped_z === nothing
+        k = CUDA.@cuda launch=false _fin3!(rx, ry, rz, fxm, fym, fzm, ξx, ξy, ξz, gamma, noise_scale, dtT, dq, dU, Lx, Ly, Lz)
+        k(rx, ry, rz, fxm, fym, fzm, ξx, ξy, ξz, gamma, noise_scale, dtT, dq, dU, Lx, Ly, Lz; threads, blocks)
+    else
+        k = CUDA.@cuda launch=false _fin3_unwrap!(rx, ry, rz, unwrapped_x, unwrapped_y, unwrapped_z,
+                                                  fxm, fym, fzm, ξx, ξy, ξz, gamma, noise_scale, dtT, dq, dU, Lx, Ly, Lz)
+        k(rx, ry, rz, unwrapped_x, unwrapped_y, unwrapped_z,
+          fxm, fym, fzm, ξx, ξy, ξz, gamma, noise_scale, dtT, dq, dU, Lx, Ly, Lz; threads, blocks)
+    end
     return nothing
 end
 
@@ -442,6 +537,40 @@ function _em2!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
         local x0 = rx[i]; local y0 = ry[i]
         local Δx = μ * fx[i] * dt + sqrt2Ddt * ξx
         local Δy = μ * fy[i] * dt + sqrt2Ddt * ξy
+        local x = x0 + Δx
+        local y = y0 + Δy
+        local xw = _wrap_centered(x, Lx)
+        local yw = _wrap_centered(y, Ly)
+        rx[i] = xw
+        ry[i] = yw
+        local dx_mic = _wrap_centered(xw - x0, Lx)
+        local dy_mic = _wrap_centered(yw - y0, Ly)
+        local w = fx[i] * dx_mic + fy[i] * dy_mic
+        dq[i] = dq[i] + w
+        dU[i] = dU[i] + w
+    end
+    return nothing
+end
+
+function _em2_unwrap!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
+                      rxu::CuDeviceVector{T}, ryu::CuDeviceVector{T},
+                      fx::CuDeviceVector{T}, fy::CuDeviceVector{T},
+                      gamma::CuDeviceVector{T}, noise_scale::CuDeviceVector{T},
+                      dt::T,
+                      dq::CuDeviceVector{T}, dU::CuDeviceVector{T},
+                      Lx::T, Ly::T) where {T<:AbstractFloat}
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    @inbounds begin
+        g = gamma[i]
+        μ = 1 / g
+        sqrt2Ddt = μ * noise_scale[i]
+        ξx = randn(T); ξy = randn(T)
+        local x0 = rx[i]; local y0 = ry[i]
+        local Δx = μ * fx[i] * dt + sqrt2Ddt * ξx
+        local Δy = μ * fy[i] * dt + sqrt2Ddt * ξy
+        rxu[i] += Δx
+        ryu[i] += Δy
         local x = x0 + Δx
         local y = y0 + Δy
         local xw = _wrap_centered(x, Lx)
@@ -493,6 +622,46 @@ function _em3!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{
     return nothing
 end
 
+function _em3_unwrap!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
+                      rxu::CuDeviceVector{T}, ryu::CuDeviceVector{T}, rzu::CuDeviceVector{T},
+                      fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, fz::CuDeviceVector{T},
+                      gamma::CuDeviceVector{T}, noise_scale::CuDeviceVector{T},
+                      dt::T,
+                      dq::CuDeviceVector{T}, dU::CuDeviceVector{T},
+                      Lx::T, Ly::T, Lz::T) where {T<:AbstractFloat}
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    @inbounds begin
+        g = gamma[i]
+        μ = 1 / g
+        sqrt2Ddt = μ * noise_scale[i]
+        ξx = randn(T); ξy = randn(T); ξz = randn(T)
+        local x0 = rx[i]; local y0 = ry[i]; local z0 = rz[i]
+        local Δx = μ * fx[i] * dt + sqrt2Ddt * ξx
+        local Δy = μ * fy[i] * dt + sqrt2Ddt * ξy
+        local Δz = μ * fz[i] * dt + sqrt2Ddt * ξz
+        rxu[i] += Δx
+        ryu[i] += Δy
+        rzu[i] += Δz
+        local x = x0 + Δx
+        local y = y0 + Δy
+        local z = z0 + Δz
+        local xw = _wrap_centered(x, Lx)
+        local yw = _wrap_centered(y, Ly)
+        local zw = _wrap_centered(z, Lz)
+        rx[i] = xw
+        ry[i] = yw
+        rz[i] = zw
+        local dx_mic = _wrap_centered(xw - x0, Lx)
+        local dy_mic = _wrap_centered(yw - y0, Ly)
+        local dz_mic = _wrap_centered(zw - z0, Lz)
+        local w = fx[i] * dx_mic + fy[i] * dy_mic + fz[i] * dz_mic
+        dq[i] = dq[i] + w
+        dU[i] = dU[i] + w
+    end
+    return nothing
+end
+
 """
     em_step_2d!(rx, ry, fx, fy, params, dt, dq, dU, box)
 
@@ -504,14 +673,23 @@ function em_step_2d!(rx::CuArray{T,1}, ry::CuArray{T,1},
                      fx::CuArray{T,1}, fy::CuArray{T,1},
                      params::EMParams{T}, dt::Real,
                      dq::CuArray{T,1}, dU::CuArray{T,1},
-                     box::Definitions.Box2{T}) where {T<:AbstractFloat}
+                     box::Definitions.Box2{T};
+                     unwrapped_x::Union{Nothing,CuArray{T,1}}=nothing,
+                     unwrapped_y::Union{Nothing,CuArray{T,1}}=nothing) where {T<:AbstractFloat}
     N = length(rx)
     threads = min(256, N)
     blocks = cld(N, threads)
     dtT = convert(T, dt)
     Lx = convert(T, box[1]); Ly = convert(T, box[2])
-    k = CUDA.@cuda launch=false _em2!(rx, ry, fx, fy, params.gamma, params.noise_scale, dtT, dq, dU, Lx, Ly)
-    k(rx, ry, fx, fy, params.gamma, params.noise_scale, dtT, dq, dU, Lx, Ly; threads, blocks)
+    if unwrapped_x === nothing || unwrapped_y === nothing
+        k = CUDA.@cuda launch=false _em2!(rx, ry, fx, fy, params.gamma, params.noise_scale, dtT, dq, dU, Lx, Ly)
+        k(rx, ry, fx, fy, params.gamma, params.noise_scale, dtT, dq, dU, Lx, Ly; threads, blocks)
+    else
+        k = CUDA.@cuda launch=false _em2_unwrap!(rx, ry, unwrapped_x, unwrapped_y,
+                                                 fx, fy, params.gamma, params.noise_scale, dtT, dq, dU, Lx, Ly)
+        k(rx, ry, unwrapped_x, unwrapped_y,
+          fx, fy, params.gamma, params.noise_scale, dtT, dq, dU, Lx, Ly; threads, blocks)
+    end
     return nothing
 end
 
@@ -522,14 +700,24 @@ function em_step_3d!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
                      fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1},
                      params::EMParams{T}, dt::Real,
                      dq::CuArray{T,1}, dU::CuArray{T,1},
-                     box::Definitions.Box3{T}) where {T<:AbstractFloat}
+                     box::Definitions.Box3{T};
+                     unwrapped_x::Union{Nothing,CuArray{T,1}}=nothing,
+                     unwrapped_y::Union{Nothing,CuArray{T,1}}=nothing,
+                     unwrapped_z::Union{Nothing,CuArray{T,1}}=nothing) where {T<:AbstractFloat}
     N = length(rx)
     threads = min(256, N)
     blocks = cld(N, threads)
     dtT = convert(T, dt)
     Lx = convert(T, box[1]); Ly = convert(T, box[2]); Lz = convert(T, box[3])
-    k = CUDA.@cuda launch=false _em3!(rx, ry, rz, fx, fy, fz, params.gamma, params.noise_scale, dtT, dq, dU, Lx, Ly, Lz)
-    k(rx, ry, rz, fx, fy, fz, params.gamma, params.noise_scale, dtT, dq, dU, Lx, Ly, Lz; threads, blocks)
+    if unwrapped_x === nothing || unwrapped_y === nothing || unwrapped_z === nothing
+        k = CUDA.@cuda launch=false _em3!(rx, ry, rz, fx, fy, fz, params.gamma, params.noise_scale, dtT, dq, dU, Lx, Ly, Lz)
+        k(rx, ry, rz, fx, fy, fz, params.gamma, params.noise_scale, dtT, dq, dU, Lx, Ly, Lz; threads, blocks)
+    else
+        k = CUDA.@cuda launch=false _em3_unwrap!(rx, ry, rz, unwrapped_x, unwrapped_y, unwrapped_z,
+                                                 fx, fy, fz, params.gamma, params.noise_scale, dtT, dq, dU, Lx, Ly, Lz)
+        k(rx, ry, rz, unwrapped_x, unwrapped_y, unwrapped_z,
+          fx, fy, fz, params.gamma, params.noise_scale, dtT, dq, dU, Lx, Ly, Lz; threads, blocks)
+    end
     return nothing
 end
 end # module BrownianIntegrators
