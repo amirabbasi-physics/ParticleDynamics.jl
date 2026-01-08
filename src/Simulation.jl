@@ -1161,21 +1161,43 @@ function step!(st::SimulationState{T}, dt::Real; compute_energy::Bool=true) wher
                     end
                 end
             elseif st.nb_kind == NB_KIND_WCA
-                if compute_energy
-                    if st.bonds === nothing
-                        NonBondedForces.wca_forces_soa!(st.rx, st.ry, st.f0x, st.f0y, st.Epot,
-                                                        st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+                if st.sigma_pair !== nothing
+                    if compute_energy
+                        NonBondedForces.wca_forces_soa_pairs!(st.rx, st.ry, st.f0x, st.f0y, st.Epot,
+                                                             st.nbh, st.box2::Definitions.Box2,
+                                                             st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
                     else
-                        NonBondedForces.wca_forces_soa_excl!(st.rx, st.ry, st.f0x, st.f0y, st.Epot,
-                                                             st.nbh, st.bonds, st.box2::Definitions.Box2, st.pair_lj)
+                        NonBondedForces.wca_forces_soa_noE_pairs!(st.rx, st.ry, st.f0x, st.f0y,
+                                                                 st.nbh, st.box2::Definitions.Box2,
+                                                                 st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
+                    end
+                elseif st.sigma_particle !== nothing
+                    if compute_energy
+                        NonBondedForces.wca_forces_soa_mixed!(st.rx, st.ry, st.f0x, st.f0y, st.Epot,
+                                                             st.nbh, st.box2::Definitions.Box2,
+                                                             st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
+                    else
+                        NonBondedForces.wca_forces_soa_noE_mixed!(st.rx, st.ry, st.f0x, st.f0y,
+                                                                 st.nbh, st.box2::Definitions.Box2,
+                                                                 st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
                     end
                 else
-                    if st.bonds === nothing
-                        NonBondedForces.wca_forces_soa_noE!(st.rx, st.ry, st.f0x, st.f0y,
+                    if compute_energy
+                        if st.bonds === nothing
+                            NonBondedForces.wca_forces_soa!(st.rx, st.ry, st.f0x, st.f0y, st.Epot,
                                                             st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+                        else
+                            NonBondedForces.wca_forces_soa_excl!(st.rx, st.ry, st.f0x, st.f0y, st.Epot,
+                                                                 st.nbh, st.bonds, st.box2::Definitions.Box2, st.pair_lj)
+                        end
                     else
-                        NonBondedForces.wca_forces_soa_noE_excl!(st.rx, st.ry, st.f0x, st.f0y,
-                                                                  st.nbh, st.bonds, st.box2::Definitions.Box2, st.pair_lj)
+                        if st.bonds === nothing
+                            NonBondedForces.wca_forces_soa_noE!(st.rx, st.ry, st.f0x, st.f0y,
+                                                                st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+                        else
+                            NonBondedForces.wca_forces_soa_noE_excl!(st.rx, st.ry, st.f0x, st.f0y,
+                                                                      st.nbh, st.bonds, st.box2::Definitions.Box2, st.pair_lj)
+                        end
                     end
                 end
             else # NB_KIND_SOFTREP
@@ -1236,21 +1258,43 @@ function step!(st::SimulationState{T}, dt::Real; compute_energy::Bool=true) wher
                     end
                 end
             elseif st.nb_kind == NB_KIND_WCA
-                if compute_energy
-                    if st.bonds === nothing
-                        NonBondedForces.wca_forces_soa!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.Epot,
-                                                        st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+                if st.sigma_pair !== nothing
+                    if compute_energy
+                        NonBondedForces.wca_forces_soa_pairs!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.Epot,
+                                                             st.nbh, st.box3::Definitions.Box3,
+                                                             st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
                     else
-                        NonBondedForces.wca_forces_soa_excl!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.Epot,
-                                                             st.nbh, st.bonds, st.box3::Definitions.Box3, st.pair_lj)
+                        NonBondedForces.wca_forces_soa_noE_pairs!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
+                                                                 st.nbh, st.box3::Definitions.Box3,
+                                                                 st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
+                    end
+                elseif st.sigma_particle !== nothing
+                    if compute_energy
+                        NonBondedForces.wca_forces_soa_mixed!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.Epot,
+                                                             st.nbh, st.box3::Definitions.Box3,
+                                                             st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
+                    else
+                        NonBondedForces.wca_forces_soa_noE_mixed!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
+                                                                 st.nbh, st.box3::Definitions.Box3,
+                                                                 st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
                     end
                 else
-                    if st.bonds === nothing
-                        NonBondedForces.wca_forces_soa_noE!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
+                    if compute_energy
+                        if st.bonds === nothing
+                            NonBondedForces.wca_forces_soa!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.Epot,
                                                             st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+                        else
+                            NonBondedForces.wca_forces_soa_excl!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.Epot,
+                                                                 st.nbh, st.bonds, st.box3::Definitions.Box3, st.pair_lj)
+                        end
                     else
-                        NonBondedForces.wca_forces_soa_noE_excl!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
-                                                                  st.nbh, st.bonds, st.box3::Definitions.Box3, st.pair_lj)
+                        if st.bonds === nothing
+                            NonBondedForces.wca_forces_soa_noE!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
+                                                                st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+                        else
+                            NonBondedForces.wca_forces_soa_noE_excl!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
+                                                                      st.nbh, st.bonds, st.box3::Definitions.Box3, st.pair_lj)
+                        end
                     end
                 end
             else
@@ -1334,6 +1378,26 @@ function step!(st::SimulationState{T}, dt::Real; compute_energy::Bool=true) wher
                 NonBondedForces.lj_forces_soa_noE_mixed!(st.rx, st.ry, st.fx, st.fy,
                                                            st.nbh, st.box2::Definitions.Box2,
                                                            st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
+            end
+        elseif st.nb_kind == NB_KIND_WCA && st.sigma_pair !== nothing
+            if compute_energy
+                NonBondedForces.wca_forces_soa_pairs!(st.rx, st.ry, st.fx, st.fy, st.Epot,
+                                                     st.nbh, st.box2::Definitions.Box2,
+                                                     st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
+            else
+                NonBondedForces.wca_forces_soa_noE_pairs!(st.rx, st.ry, st.fx, st.fy,
+                                                         st.nbh, st.box2::Definitions.Box2,
+                                                         st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
+            end
+        elseif st.nb_kind == NB_KIND_WCA && st.sigma_particle !== nothing
+            if compute_energy
+                NonBondedForces.wca_forces_soa_mixed!(st.rx, st.ry, st.fx, st.fy, st.Epot,
+                                                     st.nbh, st.box2::Definitions.Box2,
+                                                     st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
+            else
+                NonBondedForces.wca_forces_soa_noE_mixed!(st.rx, st.ry, st.fx, st.fy,
+                                                         st.nbh, st.box2::Definitions.Box2,
+                                                         st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
             end
         else
             if st.nb_kind == NB_KIND_LJ
@@ -1424,6 +1488,26 @@ function step!(st::SimulationState{T}, dt::Real; compute_energy::Bool=true) wher
                 NonBondedForces.lj_forces_soa_noE_mixed!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz,
                                                            st.nbh, st.box3::Definitions.Box3,
                                                            st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
+            end
+        elseif st.nb_kind == NB_KIND_WCA && st.sigma_pair !== nothing
+            if compute_energy
+                NonBondedForces.wca_forces_soa_pairs!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot,
+                                                     st.nbh, st.box3::Definitions.Box3,
+                                                     st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
+            else
+                NonBondedForces.wca_forces_soa_noE_pairs!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz,
+                                                         st.nbh, st.box3::Definitions.Box3,
+                                                         st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
+            end
+        elseif st.nb_kind == NB_KIND_WCA && st.sigma_particle !== nothing
+            if compute_energy
+                NonBondedForces.wca_forces_soa_mixed!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot,
+                                                     st.nbh, st.box3::Definitions.Box3,
+                                                     st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
+            else
+                NonBondedForces.wca_forces_soa_noE_mixed!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz,
+                                                         st.nbh, st.box3::Definitions.Box3,
+                                                         st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
             end
         else
             if st.nb_kind == NB_KIND_LJ
@@ -1566,12 +1650,34 @@ function step_graph!(st::SimulationState{T}, dt::Real; compute_energy::Bool=true
                                                        st.nbh, st.box2::Definitions.Box2, st.pair_lj)
                 end
             elseif st.nb_kind == NB_KIND_WCA
-                if compute_energy
-                    NonBondedForces.wca_forces_soa!(st.rx, st.ry, st.f0x, st.f0y, st.Epot,
-                                                    st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+                if st.sigma_pair !== nothing
+                    if compute_energy
+                        NonBondedForces.wca_forces_soa_pairs!(st.rx, st.ry, st.f0x, st.f0y, st.Epot,
+                                                             st.nbh, st.box2::Definitions.Box2,
+                                                             st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
+                    else
+                        NonBondedForces.wca_forces_soa_noE_pairs!(st.rx, st.ry, st.f0x, st.f0y,
+                                                                 st.nbh, st.box2::Definitions.Box2,
+                                                                 st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
+                    end
+                elseif st.sigma_particle !== nothing
+                    if compute_energy
+                        NonBondedForces.wca_forces_soa_mixed!(st.rx, st.ry, st.f0x, st.f0y, st.Epot,
+                                                             st.nbh, st.box2::Definitions.Box2,
+                                                             st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
+                    else
+                        NonBondedForces.wca_forces_soa_noE_mixed!(st.rx, st.ry, st.f0x, st.f0y,
+                                                                 st.nbh, st.box2::Definitions.Box2,
+                                                                 st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
+                    end
                 else
-                    NonBondedForces.wca_forces_soa_noE!(st.rx, st.ry, st.f0x, st.f0y,
-                                                         st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+                    if compute_energy
+                        NonBondedForces.wca_forces_soa!(st.rx, st.ry, st.f0x, st.f0y, st.Epot,
+                                                        st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+                    else
+                        NonBondedForces.wca_forces_soa_noE!(st.rx, st.ry, st.f0x, st.f0y,
+                                                             st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+                    end
                 end
             else
                 @assert st.softrep !== nothing "softrep params missing"
@@ -1593,12 +1699,34 @@ function step_graph!(st::SimulationState{T}, dt::Real; compute_energy::Bool=true
                                                        st.nbh, st.box3::Definitions.Box3, st.pair_lj)
                 end
             elseif st.nb_kind == NB_KIND_WCA
-                if compute_energy
-                    NonBondedForces.wca_forces_soa!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.Epot,
-                                                    st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+                if st.sigma_pair !== nothing
+                    if compute_energy
+                        NonBondedForces.wca_forces_soa_pairs!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.Epot,
+                                                             st.nbh, st.box3::Definitions.Box3,
+                                                             st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
+                    else
+                        NonBondedForces.wca_forces_soa_noE_pairs!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
+                                                                 st.nbh, st.box3::Definitions.Box3,
+                                                                 st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
+                    end
+                elseif st.sigma_particle !== nothing
+                    if compute_energy
+                        NonBondedForces.wca_forces_soa_mixed!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.Epot,
+                                                             st.nbh, st.box3::Definitions.Box3,
+                                                             st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
+                    else
+                        NonBondedForces.wca_forces_soa_noE_mixed!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
+                                                                 st.nbh, st.box3::Definitions.Box3,
+                                                                 st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
+                    end
                 else
-                    NonBondedForces.wca_forces_soa_noE!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
-                                                         st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+                    if compute_energy
+                        NonBondedForces.wca_forces_soa!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.Epot,
+                                                        st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+                    else
+                        NonBondedForces.wca_forces_soa_noE!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
+                                                             st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+                    end
                 end
             else
                 @assert st.softrep !== nothing "softrep params missing"
@@ -1638,12 +1766,34 @@ function step_graph!(st::SimulationState{T}, dt::Real; compute_energy::Bool=true
                                                        st.nbh, st.box2::Definitions.Box2, st.pair_lj)
                 end
             elseif st.nb_kind == NB_KIND_WCA
-                if compute_energy
-                    NonBondedForces.wca_forces_soa!(st.rx, st.ry, st.fx, st.fy, st.Epot,
-                                                    st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+                if st.sigma_pair !== nothing
+                    if compute_energy
+                        NonBondedForces.wca_forces_soa_pairs!(st.rx, st.ry, st.fx, st.fy, st.Epot,
+                                                             st.nbh, st.box2::Definitions.Box2,
+                                                             st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
+                    else
+                        NonBondedForces.wca_forces_soa_noE_pairs!(st.rx, st.ry, st.fx, st.fy,
+                                                                 st.nbh, st.box2::Definitions.Box2,
+                                                                 st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
+                    end
+                elseif st.sigma_particle !== nothing
+                    if compute_energy
+                        NonBondedForces.wca_forces_soa_mixed!(st.rx, st.ry, st.fx, st.fy, st.Epot,
+                                                             st.nbh, st.box2::Definitions.Box2,
+                                                             st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
+                    else
+                        NonBondedForces.wca_forces_soa_noE_mixed!(st.rx, st.ry, st.fx, st.fy,
+                                                                 st.nbh, st.box2::Definitions.Box2,
+                                                                 st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
+                    end
                 else
-                    NonBondedForces.wca_forces_soa_noE!(st.rx, st.ry, st.fx, st.fy,
-                                                         st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+                    if compute_energy
+                        NonBondedForces.wca_forces_soa!(st.rx, st.ry, st.fx, st.fy, st.Epot,
+                                                        st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+                    else
+                        NonBondedForces.wca_forces_soa_noE!(st.rx, st.ry, st.fx, st.fy,
+                                                             st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+                    end
                 end
             else
                 @assert st.softrep !== nothing "softrep params missing"
@@ -1682,12 +1832,34 @@ function step_graph!(st::SimulationState{T}, dt::Real; compute_energy::Bool=true
                                                        st.nbh, st.box3::Definitions.Box3, st.pair_lj)
                 end
             elseif st.nb_kind == NB_KIND_WCA
-                if compute_energy
-                    NonBondedForces.wca_forces_soa!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot,
-                                                    st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+                if st.sigma_pair !== nothing
+                    if compute_energy
+                        NonBondedForces.wca_forces_soa_pairs!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot,
+                                                             st.nbh, st.box3::Definitions.Box3,
+                                                             st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
+                    else
+                        NonBondedForces.wca_forces_soa_noE_pairs!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz,
+                                                                 st.nbh, st.box3::Definitions.Box3,
+                                                                 st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
+                    end
+                elseif st.sigma_particle !== nothing
+                    if compute_energy
+                        NonBondedForces.wca_forces_soa_mixed!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot,
+                                                             st.nbh, st.box3::Definitions.Box3,
+                                                             st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
+                    else
+                        NonBondedForces.wca_forces_soa_noE_mixed!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz,
+                                                                 st.nbh, st.box3::Definitions.Box3,
+                                                                 st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
+                    end
                 else
-                    NonBondedForces.wca_forces_soa_noE!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz,
-                                                         st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+                    if compute_energy
+                        NonBondedForces.wca_forces_soa!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot,
+                                                        st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+                    else
+                        NonBondedForces.wca_forces_soa_noE!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz,
+                                                             st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+                    end
                 end
             else
                 @assert st.softrep !== nothing "softrep params missing"
@@ -1812,21 +1984,43 @@ function step!(st::SimulationState{T}, spec::BAOASpec{T}, dt::Real; compute_ener
                     end
                 end
             elseif st.nb_kind == NB_KIND_WCA
-                if compute_energy
-                    if st.bonds === nothing
-                        NonBondedForces.wca_forces_soa!(st.rx, st.ry, st.f0x, st.f0y, st.Epot,
-                                                        st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+                if st.sigma_pair !== nothing
+                    if compute_energy
+                        NonBondedForces.wca_forces_soa_pairs!(st.rx, st.ry, st.f0x, st.f0y, st.Epot,
+                                                             st.nbh, st.box2::Definitions.Box2,
+                                                             st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
                     else
-                        NonBondedForces.wca_forces_soa_excl!(st.rx, st.ry, st.f0x, st.f0y, st.Epot,
-                                                             st.nbh, st.bonds, st.box2::Definitions.Box2, st.pair_lj)
+                        NonBondedForces.wca_forces_soa_noE_pairs!(st.rx, st.ry, st.f0x, st.f0y,
+                                                                 st.nbh, st.box2::Definitions.Box2,
+                                                                 st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
+                    end
+                elseif st.sigma_particle !== nothing
+                    if compute_energy
+                        NonBondedForces.wca_forces_soa_mixed!(st.rx, st.ry, st.f0x, st.f0y, st.Epot,
+                                                             st.nbh, st.box2::Definitions.Box2,
+                                                             st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
+                    else
+                        NonBondedForces.wca_forces_soa_noE_mixed!(st.rx, st.ry, st.f0x, st.f0y,
+                                                                 st.nbh, st.box2::Definitions.Box2,
+                                                                 st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
                     end
                 else
-                    if st.bonds === nothing
-                        NonBondedForces.wca_forces_soa_noE!(st.rx, st.ry, st.f0x, st.f0y,
+                    if compute_energy
+                        if st.bonds === nothing
+                            NonBondedForces.wca_forces_soa!(st.rx, st.ry, st.f0x, st.f0y, st.Epot,
                                                             st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+                        else
+                            NonBondedForces.wca_forces_soa_excl!(st.rx, st.ry, st.f0x, st.f0y, st.Epot,
+                                                                 st.nbh, st.bonds, st.box2::Definitions.Box2, st.pair_lj)
+                        end
                     else
-                        NonBondedForces.wca_forces_soa_noE_excl!(st.rx, st.ry, st.f0x, st.f0y,
-                                                                  st.nbh, st.bonds, st.box2::Definitions.Box2, st.pair_lj)
+                        if st.bonds === nothing
+                            NonBondedForces.wca_forces_soa_noE!(st.rx, st.ry, st.f0x, st.f0y,
+                                                                st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+                        else
+                            NonBondedForces.wca_forces_soa_noE_excl!(st.rx, st.ry, st.f0x, st.f0y,
+                                                                      st.nbh, st.bonds, st.box2::Definitions.Box2, st.pair_lj)
+                        end
                     end
                 end
             else # NB_KIND_SOFTREP
@@ -1887,21 +2081,43 @@ function step!(st::SimulationState{T}, spec::BAOASpec{T}, dt::Real; compute_ener
                     end
                 end
             elseif st.nb_kind == NB_KIND_WCA
-                if compute_energy
-                    if st.bonds === nothing
-                        NonBondedForces.wca_forces_soa!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.Epot,
-                                                        st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+                if st.sigma_pair !== nothing
+                    if compute_energy
+                        NonBondedForces.wca_forces_soa_pairs!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.Epot,
+                                                             st.nbh, st.box3::Definitions.Box3,
+                                                             st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
                     else
-                        NonBondedForces.wca_forces_soa_excl!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.Epot,
-                                                             st.nbh, st.bonds, st.box3::Definitions.Box3, st.pair_lj)
+                        NonBondedForces.wca_forces_soa_noE_pairs!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
+                                                                 st.nbh, st.box3::Definitions.Box3,
+                                                                 st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
+                    end
+                elseif st.sigma_particle !== nothing
+                    if compute_energy
+                        NonBondedForces.wca_forces_soa_mixed!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.Epot,
+                                                             st.nbh, st.box3::Definitions.Box3,
+                                                             st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
+                    else
+                        NonBondedForces.wca_forces_soa_noE_mixed!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
+                                                                 st.nbh, st.box3::Definitions.Box3,
+                                                                 st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
                     end
                 else
-                    if st.bonds === nothing
-                        NonBondedForces.wca_forces_soa_noE!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
+                    if compute_energy
+                        if st.bonds === nothing
+                            NonBondedForces.wca_forces_soa!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.Epot,
                                                             st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+                        else
+                            NonBondedForces.wca_forces_soa_excl!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.Epot,
+                                                                 st.nbh, st.bonds, st.box3::Definitions.Box3, st.pair_lj)
+                        end
                     else
-                        NonBondedForces.wca_forces_soa_noE_excl!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
-                                                                  st.nbh, st.bonds, st.box3::Definitions.Box3, st.pair_lj)
+                        if st.bonds === nothing
+                            NonBondedForces.wca_forces_soa_noE!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
+                                                                st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+                        else
+                            NonBondedForces.wca_forces_soa_noE_excl!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
+                                                                      st.nbh, st.bonds, st.box3::Definitions.Box3, st.pair_lj)
+                        end
                     end
                 end
             else
@@ -1967,6 +2183,26 @@ function step!(st::SimulationState{T}, spec::BAOASpec{T}, dt::Real; compute_ener
                 NonBondedForces.lj_forces_soa_noE_pairs!(st.rx, st.ry, st.fx, st.fy,
                                                           st.nbh, st.box2::Definitions.Box2,
                                                           st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
+            end
+        elseif st.nb_kind == NB_KIND_WCA && st.sigma_pair !== nothing
+            if compute_energy
+                NonBondedForces.wca_forces_soa_pairs!(st.rx, st.ry, st.fx, st.fy, st.Epot,
+                                                     st.nbh, st.box2::Definitions.Box2,
+                                                     st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
+            else
+                NonBondedForces.wca_forces_soa_noE_pairs!(st.rx, st.ry, st.fx, st.fy,
+                                                         st.nbh, st.box2::Definitions.Box2,
+                                                         st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
+            end
+        elseif st.nb_kind == NB_KIND_WCA && st.sigma_particle !== nothing
+            if compute_energy
+                NonBondedForces.wca_forces_soa_mixed!(st.rx, st.ry, st.fx, st.fy, st.Epot,
+                                                     st.nbh, st.box2::Definitions.Box2,
+                                                     st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
+            else
+                NonBondedForces.wca_forces_soa_noE_mixed!(st.rx, st.ry, st.fx, st.fy,
+                                                         st.nbh, st.box2::Definitions.Box2,
+                                                         st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
             end
         else
             if st.nb_kind == NB_KIND_LJ
@@ -2073,6 +2309,26 @@ function step!(st::SimulationState{T}, spec::BAOASpec{T}, dt::Real; compute_ener
                 NonBondedForces.lj_forces_soa_noE_mixed!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz,
                                                            st.nbh, st.box3::Definitions.Box3,
                                                            st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
+            end
+        elseif st.nb_kind == NB_KIND_WCA && st.sigma_pair !== nothing
+            if compute_energy
+                NonBondedForces.wca_forces_soa_pairs!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot,
+                                                     st.nbh, st.box3::Definitions.Box3,
+                                                     st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
+            else
+                NonBondedForces.wca_forces_soa_noE_pairs!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz,
+                                                         st.nbh, st.box3::Definitions.Box3,
+                                                         st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
+            end
+        elseif st.nb_kind == NB_KIND_WCA && st.sigma_particle !== nothing
+            if compute_energy
+                NonBondedForces.wca_forces_soa_mixed!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot,
+                                                     st.nbh, st.box3::Definitions.Box3,
+                                                     st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
+            else
+                NonBondedForces.wca_forces_soa_noE_mixed!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz,
+                                                         st.nbh, st.box3::Definitions.Box3,
+                                                         st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
             end
         else
             if st.nb_kind == NB_KIND_LJ
@@ -2235,21 +2491,43 @@ function step!(st::SimulationState{T}, bao::LangevinIntegrators.BAOABParams{T}, 
                     end
                 end
             elseif st.nb_kind == NB_KIND_WCA
-                if compute_energy
-                    if st.bonds === nothing
-                        NonBondedForces.wca_forces_soa!(st.rx, st.ry, st.f0x, st.f0y, st.Epot,
-                                                        st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+                if st.sigma_pair !== nothing
+                    if compute_energy
+                        NonBondedForces.wca_forces_soa_pairs!(st.rx, st.ry, st.f0x, st.f0y, st.Epot,
+                                                             st.nbh, st.box2::Definitions.Box2,
+                                                             st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
                     else
-                        NonBondedForces.wca_forces_soa_excl!(st.rx, st.ry, st.f0x, st.f0y, st.Epot,
-                                                             st.nbh, st.bonds, st.box2::Definitions.Box2, st.pair_lj)
+                        NonBondedForces.wca_forces_soa_noE_pairs!(st.rx, st.ry, st.f0x, st.f0y,
+                                                                 st.nbh, st.box2::Definitions.Box2,
+                                                                 st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
+                    end
+                elseif st.sigma_particle !== nothing
+                    if compute_energy
+                        NonBondedForces.wca_forces_soa_mixed!(st.rx, st.ry, st.f0x, st.f0y, st.Epot,
+                                                             st.nbh, st.box2::Definitions.Box2,
+                                                             st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
+                    else
+                        NonBondedForces.wca_forces_soa_noE_mixed!(st.rx, st.ry, st.f0x, st.f0y,
+                                                                 st.nbh, st.box2::Definitions.Box2,
+                                                                 st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
                     end
                 else
-                    if st.bonds === nothing
-                        NonBondedForces.wca_forces_soa_noE!(st.rx, st.ry, st.f0x, st.f0y,
+                    if compute_energy
+                        if st.bonds === nothing
+                            NonBondedForces.wca_forces_soa!(st.rx, st.ry, st.f0x, st.f0y, st.Epot,
                                                             st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+                        else
+                            NonBondedForces.wca_forces_soa_excl!(st.rx, st.ry, st.f0x, st.f0y, st.Epot,
+                                                                 st.nbh, st.bonds, st.box2::Definitions.Box2, st.pair_lj)
+                        end
                     else
-                        NonBondedForces.wca_forces_soa_noE_excl!(st.rx, st.ry, st.f0x, st.f0y,
-                                                                  st.nbh, st.bonds, st.box2::Definitions.Box2, st.pair_lj)
+                        if st.bonds === nothing
+                            NonBondedForces.wca_forces_soa_noE!(st.rx, st.ry, st.f0x, st.f0y,
+                                                                st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+                        else
+                            NonBondedForces.wca_forces_soa_noE_excl!(st.rx, st.ry, st.f0x, st.f0y,
+                                                                      st.nbh, st.bonds, st.box2::Definitions.Box2, st.pair_lj)
+                        end
                     end
                 end
             else
@@ -2291,12 +2569,34 @@ function step!(st::SimulationState{T}, bao::LangevinIntegrators.BAOABParams{T}, 
                     end
                 end
             elseif st.nb_kind == NB_KIND_WCA
-                if compute_energy
-                    NonBondedForces.wca_forces_soa!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.Epot,
-                                                    st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+                if st.sigma_pair !== nothing
+                    if compute_energy
+                        NonBondedForces.wca_forces_soa_pairs!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.Epot,
+                                                             st.nbh, st.box3::Definitions.Box3,
+                                                             st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
+                    else
+                        NonBondedForces.wca_forces_soa_noE_pairs!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
+                                                                 st.nbh, st.box3::Definitions.Box3,
+                                                                 st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
+                    end
+                elseif st.sigma_particle !== nothing
+                    if compute_energy
+                        NonBondedForces.wca_forces_soa_mixed!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.Epot,
+                                                             st.nbh, st.box3::Definitions.Box3,
+                                                             st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
+                    else
+                        NonBondedForces.wca_forces_soa_noE_mixed!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
+                                                                 st.nbh, st.box3::Definitions.Box3,
+                                                                 st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
+                    end
                 else
-                    NonBondedForces.wca_forces_soa_noE!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
-                                                         st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+                    if compute_energy
+                        NonBondedForces.wca_forces_soa!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.Epot,
+                                                        st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+                    else
+                        NonBondedForces.wca_forces_soa_noE!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
+                                                             st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+                    end
                 end
             else
                 @assert st.softrep !== nothing "softrep params missing"
@@ -2351,6 +2651,26 @@ function step!(st::SimulationState{T}, bao::LangevinIntegrators.BAOABParams{T}, 
                 NonBondedForces.lj_forces_soa_noE_mixed!(st.rx, st.ry, st.fx, st.fy,
                                                            st.nbh, st.box2::Definitions.Box2,
                                                            st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
+            end
+        elseif st.nb_kind == NB_KIND_WCA && st.sigma_pair !== nothing
+            if compute_energy
+                NonBondedForces.wca_forces_soa_pairs!(st.rx, st.ry, st.fx, st.fy, st.Epot,
+                                                     st.nbh, st.box2::Definitions.Box2,
+                                                     st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
+            else
+                NonBondedForces.wca_forces_soa_noE_pairs!(st.rx, st.ry, st.fx, st.fy,
+                                                         st.nbh, st.box2::Definitions.Box2,
+                                                         st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
+            end
+        elseif st.nb_kind == NB_KIND_WCA && st.sigma_particle !== nothing
+            if compute_energy
+                NonBondedForces.wca_forces_soa_mixed!(st.rx, st.ry, st.fx, st.fy, st.Epot,
+                                                     st.nbh, st.box2::Definitions.Box2,
+                                                     st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
+            else
+                NonBondedForces.wca_forces_soa_noE_mixed!(st.rx, st.ry, st.fx, st.fy,
+                                                         st.nbh, st.box2::Definitions.Box2,
+                                                         st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
             end
         else
             if st.nb_kind == NB_KIND_LJ
@@ -2447,6 +2767,26 @@ function step!(st::SimulationState{T}, bao::LangevinIntegrators.BAOABParams{T}, 
                 NonBondedForces.lj_forces_soa_noE_mixed!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz,
                                                            st.nbh, st.box3::Definitions.Box3,
                                                            st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
+            end
+        elseif st.nb_kind == NB_KIND_WCA && st.sigma_pair !== nothing
+            if compute_energy
+                NonBondedForces.wca_forces_soa_pairs!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot,
+                                                     st.nbh, st.box3::Definitions.Box3,
+                                                     st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
+            else
+                NonBondedForces.wca_forces_soa_noE_pairs!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz,
+                                                         st.nbh, st.box3::Definitions.Box3,
+                                                         st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
+            end
+        elseif st.nb_kind == NB_KIND_WCA && st.sigma_particle !== nothing
+            if compute_energy
+                NonBondedForces.wca_forces_soa_mixed!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot,
+                                                     st.nbh, st.box3::Definitions.Box3,
+                                                     st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
+            else
+                NonBondedForces.wca_forces_soa_noE_mixed!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz,
+                                                         st.nbh, st.box3::Definitions.Box3,
+                                                         st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
             end
         else
             if st.nb_kind == NB_KIND_LJ
@@ -2563,7 +2903,17 @@ function step!(st::SimulationState{T}, bp::BrownianIntegrators.BrownianParams{T}
                                                           st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
                 end
             elseif st.nb_kind == NB_KIND_WCA
-                NonBondedForces.wca_forces_soa!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+                if st.sigma_pair !== nothing
+                    NonBondedForces.wca_forces_soa_pairs!(st.rx, st.ry, st.fx, st.fy, st.Epot,
+                                                         st.nbh, st.box2::Definitions.Box2,
+                                                         st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
+                elseif st.sigma_particle !== nothing
+                    NonBondedForces.wca_forces_soa_mixed!(st.rx, st.ry, st.fx, st.fy, st.Epot,
+                                                         st.nbh, st.box2::Definitions.Box2,
+                                                         st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
+                else
+                    NonBondedForces.wca_forces_soa!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+                end
             else
                 @assert st.softrep !== nothing "softrep params missing"
                 NonBondedForces.harmonic_rep_forces_soa!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.nbh, st.box2::Definitions.Box2, st.softrep)
@@ -2582,7 +2932,17 @@ function step!(st::SimulationState{T}, bp::BrownianIntegrators.BrownianParams{T}
                                                           st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
                 end
             elseif st.nb_kind == NB_KIND_WCA
-                NonBondedForces.wca_forces_soa!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+                if st.sigma_pair !== nothing
+                    NonBondedForces.wca_forces_soa_pairs!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot,
+                                                         st.nbh, st.box3::Definitions.Box3,
+                                                         st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
+                elseif st.sigma_particle !== nothing
+                    NonBondedForces.wca_forces_soa_mixed!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot,
+                                                         st.nbh, st.box3::Definitions.Box3,
+                                                         st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
+                else
+                    NonBondedForces.wca_forces_soa!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+                end
             else
                 @assert st.softrep !== nothing "softrep params missing"
                 NonBondedForces.harmonic_rep_forces_soa!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.nbh, st.box3::Definitions.Box3, st.softrep)
@@ -2623,10 +2983,20 @@ function step!(st::SimulationState{T}, bp::BrownianIntegrators.BrownianParams{T}
                                                          st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
             end
         elseif st.nb_kind == NB_KIND_WCA
-            if st.bonds === nothing
-                NonBondedForces.wca_forces_soa_noE!(st.vx, st.vy, st.f0x, st.f0y, st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+            if st.sigma_pair !== nothing
+                NonBondedForces.wca_forces_soa_noE_pairs!(st.vx, st.vy, st.f0x, st.f0y,
+                                                         st.nbh, st.box2::Definitions.Box2,
+                                                         st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
+            elseif st.sigma_particle !== nothing
+                NonBondedForces.wca_forces_soa_noE_mixed!(st.vx, st.vy, st.f0x, st.f0y,
+                                                         st.nbh, st.box2::Definitions.Box2,
+                                                         st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
             else
-                NonBondedForces.wca_forces_soa_noE_excl!(st.vx, st.vy, st.f0x, st.f0y, st.nbh, st.bonds, st.box2::Definitions.Box2, st.pair_lj)
+                if st.bonds === nothing
+                    NonBondedForces.wca_forces_soa_noE!(st.vx, st.vy, st.f0x, st.f0y, st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+                else
+                    NonBondedForces.wca_forces_soa_noE_excl!(st.vx, st.vy, st.f0x, st.f0y, st.nbh, st.bonds, st.box2::Definitions.Box2, st.pair_lj)
+                end
             end
         else
             @assert st.softrep !== nothing "softrep params missing"
@@ -2682,17 +3052,39 @@ function step!(st::SimulationState{T}, bp::BrownianIntegrators.BrownianParams{T}
                 end
             end
         elseif st.nb_kind == NB_KIND_WCA
-            if compute_energy
-                if st.bonds === nothing
-                    NonBondedForces.wca_forces_soa!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+            if st.sigma_pair !== nothing
+                if compute_energy
+                    NonBondedForces.wca_forces_soa_pairs!(st.rx, st.ry, st.fx, st.fy, st.Epot,
+                                                         st.nbh, st.box2::Definitions.Box2,
+                                                         st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
                 else
-                    NonBondedForces.wca_forces_soa_excl!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.nbh, st.bonds, st.box2::Definitions.Box2, st.pair_lj)
+                    NonBondedForces.wca_forces_soa_noE_pairs!(st.rx, st.ry, st.fx, st.fy,
+                                                             st.nbh, st.box2::Definitions.Box2,
+                                                             st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
+                end
+            elseif st.sigma_particle !== nothing
+                if compute_energy
+                    NonBondedForces.wca_forces_soa_mixed!(st.rx, st.ry, st.fx, st.fy, st.Epot,
+                                                         st.nbh, st.box2::Definitions.Box2,
+                                                         st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
+                else
+                    NonBondedForces.wca_forces_soa_noE_mixed!(st.rx, st.ry, st.fx, st.fy,
+                                                             st.nbh, st.box2::Definitions.Box2,
+                                                             st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
                 end
             else
-                if st.bonds === nothing
-                    NonBondedForces.wca_forces_soa_noE!(st.rx, st.ry, st.fx, st.fy, st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+                if compute_energy
+                    if st.bonds === nothing
+                        NonBondedForces.wca_forces_soa!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+                    else
+                        NonBondedForces.wca_forces_soa_excl!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.nbh, st.bonds, st.box2::Definitions.Box2, st.pair_lj)
+                    end
                 else
-                    NonBondedForces.wca_forces_soa_noE_excl!(st.rx, st.ry, st.fx, st.fy, st.nbh, st.bonds, st.box2::Definitions.Box2, st.pair_lj)
+                    if st.bonds === nothing
+                        NonBondedForces.wca_forces_soa_noE!(st.rx, st.ry, st.fx, st.fy, st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+                    else
+                        NonBondedForces.wca_forces_soa_noE_excl!(st.rx, st.ry, st.fx, st.fy, st.nbh, st.bonds, st.box2::Definitions.Box2, st.pair_lj)
+                    end
                 end
             end
         else
@@ -2746,10 +3138,20 @@ function step!(st::SimulationState{T}, bp::BrownianIntegrators.BrownianParams{T}
                                                          st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
             end
         elseif st.nb_kind == NB_KIND_WCA
-            if st.bonds === nothing
-                NonBondedForces.wca_forces_soa_noE!(st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z, st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+            if st.sigma_pair !== nothing
+                NonBondedForces.wca_forces_soa_noE_pairs!(st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z,
+                                                         st.nbh, st.box3::Definitions.Box3,
+                                                         st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
+            elseif st.sigma_particle !== nothing
+                NonBondedForces.wca_forces_soa_noE_mixed!(st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z,
+                                                         st.nbh, st.box3::Definitions.Box3,
+                                                         st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
             else
-                NonBondedForces.wca_forces_soa_noE_excl!(st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z, st.nbh, st.bonds, st.box3::Definitions.Box3, st.pair_lj)
+                if st.bonds === nothing
+                    NonBondedForces.wca_forces_soa_noE!(st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z, st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+                else
+                    NonBondedForces.wca_forces_soa_noE_excl!(st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z, st.nbh, st.bonds, st.box3::Definitions.Box3, st.pair_lj)
+                end
             end
         else
             @assert st.softrep !== nothing "softrep params missing"
@@ -2805,17 +3207,39 @@ function step!(st::SimulationState{T}, bp::BrownianIntegrators.BrownianParams{T}
                 end
             end
         elseif st.nb_kind == NB_KIND_WCA
-            if compute_energy
-                if st.bonds === nothing
-                    NonBondedForces.wca_forces_soa!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+            if st.sigma_pair !== nothing
+                if compute_energy
+                    NonBondedForces.wca_forces_soa_pairs!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot,
+                                                         st.nbh, st.box3::Definitions.Box3,
+                                                         st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
                 else
-                    NonBondedForces.wca_forces_soa_excl!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.nbh, st.bonds, st.box3::Definitions.Box3, st.pair_lj)
+                    NonBondedForces.wca_forces_soa_noE_pairs!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz,
+                                                             st.nbh, st.box3::Definitions.Box3,
+                                                             st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
+                end
+            elseif st.sigma_particle !== nothing
+                if compute_energy
+                    NonBondedForces.wca_forces_soa_mixed!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot,
+                                                         st.nbh, st.box3::Definitions.Box3,
+                                                         st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
+                else
+                    NonBondedForces.wca_forces_soa_noE_mixed!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz,
+                                                             st.nbh, st.box3::Definitions.Box3,
+                                                             st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
                 end
             else
-                if st.bonds === nothing
-                    NonBondedForces.wca_forces_soa_noE!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+                if compute_energy
+                    if st.bonds === nothing
+                        NonBondedForces.wca_forces_soa!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+                    else
+                        NonBondedForces.wca_forces_soa_excl!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.nbh, st.bonds, st.box3::Definitions.Box3, st.pair_lj)
+                    end
                 else
-                    NonBondedForces.wca_forces_soa_noE_excl!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.nbh, st.bonds, st.box3::Definitions.Box3, st.pair_lj)
+                    if st.bonds === nothing
+                        NonBondedForces.wca_forces_soa_noE!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+                    else
+                        NonBondedForces.wca_forces_soa_noE_excl!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.nbh, st.bonds, st.box3::Definitions.Box3, st.pair_lj)
+                    end
                 end
             end
         else
@@ -2911,10 +3335,20 @@ function step!(st::SimulationState{T}, em::BrownianIntegrators.EMParams{T}, dt::
                     NonBondedForces.lj_forces_soa_mixed!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.nbh, st.box2::Definitions.Box2, st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
                 end
             elseif st.nb_kind == NB_KIND_WCA
-                if st.bonds === nothing
-                    NonBondedForces.wca_forces_soa!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+                if st.sigma_pair !== nothing
+                    NonBondedForces.wca_forces_soa_pairs!(st.rx, st.ry, st.fx, st.fy, st.Epot,
+                                                         st.nbh, st.box2::Definitions.Box2,
+                                                         st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
+                elseif st.sigma_particle !== nothing
+                    NonBondedForces.wca_forces_soa_mixed!(st.rx, st.ry, st.fx, st.fy, st.Epot,
+                                                         st.nbh, st.box2::Definitions.Box2,
+                                                         st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
                 else
-                    NonBondedForces.wca_forces_soa_excl!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.nbh, st.bonds, st.box2::Definitions.Box2, st.pair_lj)
+                    if st.bonds === nothing
+                        NonBondedForces.wca_forces_soa!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+                    else
+                        NonBondedForces.wca_forces_soa_excl!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.nbh, st.bonds, st.box2::Definitions.Box2, st.pair_lj)
+                    end
                 end
             else
                 @assert st.softrep !== nothing
@@ -2936,10 +3370,20 @@ function step!(st::SimulationState{T}, em::BrownianIntegrators.EMParams{T}, dt::
                     NonBondedForces.lj_forces_soa_mixed!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.nbh, st.box3::Definitions.Box3, st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
                 end
             elseif st.nb_kind == NB_KIND_WCA
-                if st.bonds === nothing
-                    NonBondedForces.wca_forces_soa!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+                if st.sigma_pair !== nothing
+                    NonBondedForces.wca_forces_soa_pairs!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot,
+                                                         st.nbh, st.box3::Definitions.Box3,
+                                                         st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
+                elseif st.sigma_particle !== nothing
+                    NonBondedForces.wca_forces_soa_mixed!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot,
+                                                         st.nbh, st.box3::Definitions.Box3,
+                                                         st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
                 else
-                    NonBondedForces.wca_forces_soa_excl!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.nbh, st.bonds, st.box3::Definitions.Box3, st.pair_lj)
+                    if st.bonds === nothing
+                        NonBondedForces.wca_forces_soa!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+                    else
+                        NonBondedForces.wca_forces_soa_excl!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.nbh, st.bonds, st.box3::Definitions.Box3, st.pair_lj)
+                    end
                 end
             else
                 @assert st.softrep !== nothing
@@ -3000,10 +3444,20 @@ function step!(st::SimulationState{T}, em::BrownianIntegrators.EMParams{T}, dt::
                                                          st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
             end
         elseif st.nb_kind == NB_KIND_WCA
-            if st.bonds === nothing
-                NonBondedForces.wca_forces_soa_noE!(st.vx, st.vy, st.f0x, st.f0y, st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+            if st.sigma_pair !== nothing
+                NonBondedForces.wca_forces_soa_noE_pairs!(st.vx, st.vy, st.f0x, st.f0y,
+                                                         st.nbh, st.box2::Definitions.Box2,
+                                                         st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
+            elseif st.sigma_particle !== nothing
+                NonBondedForces.wca_forces_soa_noE_mixed!(st.vx, st.vy, st.f0x, st.f0y,
+                                                         st.nbh, st.box2::Definitions.Box2,
+                                                         st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
             else
-                NonBondedForces.wca_forces_soa_noE_excl!(st.vx, st.vy, st.f0x, st.f0y, st.nbh, st.bonds, st.box2::Definitions.Box2, st.pair_lj)
+                if st.bonds === nothing
+                    NonBondedForces.wca_forces_soa_noE!(st.vx, st.vy, st.f0x, st.f0y, st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+                else
+                    NonBondedForces.wca_forces_soa_noE_excl!(st.vx, st.vy, st.f0x, st.f0y, st.nbh, st.bonds, st.box2::Definitions.Box2, st.pair_lj)
+                end
             end
         else
             @assert st.softrep !== nothing
@@ -3041,7 +3495,17 @@ function step!(st::SimulationState{T}, em::BrownianIntegrators.EMParams{T}, dt::
                     NonBondedForces.lj_forces_soa_mixed!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.nbh, st.box2::Definitions.Box2, st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
                 end
             elseif st.nb_kind == NB_KIND_WCA
-                NonBondedForces.wca_forces_soa!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+                if st.sigma_pair !== nothing
+                    NonBondedForces.wca_forces_soa_pairs!(st.rx, st.ry, st.fx, st.fy, st.Epot,
+                                                         st.nbh, st.box2::Definitions.Box2,
+                                                         st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
+                elseif st.sigma_particle !== nothing
+                    NonBondedForces.wca_forces_soa_mixed!(st.rx, st.ry, st.fx, st.fy, st.Epot,
+                                                         st.nbh, st.box2::Definitions.Box2,
+                                                         st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
+                else
+                    NonBondedForces.wca_forces_soa!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+                end
             else
                 @assert st.softrep !== nothing
                 NonBondedForces.harmonic_rep_forces_soa!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.nbh, st.box2::Definitions.Box2, st.softrep)
@@ -3058,7 +3522,17 @@ function step!(st::SimulationState{T}, em::BrownianIntegrators.EMParams{T}, dt::
                     NonBondedForces.lj_forces_soa_noE_mixed!(st.rx, st.ry, st.fx, st.fy, st.nbh, st.box2::Definitions.Box2, st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
                 end
             elseif st.nb_kind == NB_KIND_WCA
-                NonBondedForces.wca_forces_soa_noE!(st.rx, st.ry, st.fx, st.fy, st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+                if st.sigma_pair !== nothing
+                    NonBondedForces.wca_forces_soa_noE_pairs!(st.rx, st.ry, st.fx, st.fy,
+                                                             st.nbh, st.box2::Definitions.Box2,
+                                                             st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
+                elseif st.sigma_particle !== nothing
+                    NonBondedForces.wca_forces_soa_noE_mixed!(st.rx, st.ry, st.fx, st.fy,
+                                                             st.nbh, st.box2::Definitions.Box2,
+                                                             st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
+                else
+                    NonBondedForces.wca_forces_soa_noE!(st.rx, st.ry, st.fx, st.fy, st.nbh, st.box2::Definitions.Box2, st.pair_lj)
+                end
             else
                 @assert st.softrep !== nothing
                 NonBondedForces.harmonic_rep_forces_soa_noE!(st.rx, st.ry, st.fx, st.fy, st.nbh, st.box2::Definitions.Box2, st.softrep)
@@ -3101,10 +3575,20 @@ function step!(st::SimulationState{T}, em::BrownianIntegrators.EMParams{T}, dt::
                                                          st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
             end
         elseif st.nb_kind == NB_KIND_WCA
-            if st.bonds === nothing
-                NonBondedForces.wca_forces_soa_noE!(st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z, st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+            if st.sigma_pair !== nothing
+                NonBondedForces.wca_forces_soa_noE_pairs!(st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z,
+                                                         st.nbh, st.box3::Definitions.Box3,
+                                                         st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
+            elseif st.sigma_particle !== nothing
+                NonBondedForces.wca_forces_soa_noE_mixed!(st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z,
+                                                         st.nbh, st.box3::Definitions.Box3,
+                                                         st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
             else
-                NonBondedForces.wca_forces_soa_noE_excl!(st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z, st.nbh, st.bonds, st.box3::Definitions.Box3, st.pair_lj)
+                if st.bonds === nothing
+                    NonBondedForces.wca_forces_soa_noE!(st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z, st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+                else
+                    NonBondedForces.wca_forces_soa_noE_excl!(st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z, st.nbh, st.bonds, st.box3::Definitions.Box3, st.pair_lj)
+                end
             end
         else
             @assert st.softrep !== nothing
@@ -3139,7 +3623,17 @@ function step!(st::SimulationState{T}, em::BrownianIntegrators.EMParams{T}, dt::
                     NonBondedForces.lj_forces_soa_mixed!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.nbh, st.box3::Definitions.Box3, st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
                 end
             elseif st.nb_kind == NB_KIND_WCA
-                NonBondedForces.wca_forces_soa!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+                if st.sigma_pair !== nothing
+                    NonBondedForces.wca_forces_soa_pairs!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot,
+                                                         st.nbh, st.box3::Definitions.Box3,
+                                                         st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
+                elseif st.sigma_particle !== nothing
+                    NonBondedForces.wca_forces_soa_mixed!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot,
+                                                         st.nbh, st.box3::Definitions.Box3,
+                                                         st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
+                else
+                    NonBondedForces.wca_forces_soa!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+                end
             else
                 @assert st.softrep !== nothing
                 NonBondedForces.harmonic_rep_forces_soa!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.nbh, st.box3::Definitions.Box3, st.softrep)
@@ -3155,7 +3649,17 @@ function step!(st::SimulationState{T}, em::BrownianIntegrators.EMParams{T}, dt::
                     NonBondedForces.lj_forces_soa_noE_mixed!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.nbh, st.box3::Definitions.Box3, st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
                 end
             elseif st.nb_kind == NB_KIND_WCA
-                NonBondedForces.wca_forces_soa_noE!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+                if st.sigma_pair !== nothing
+                    NonBondedForces.wca_forces_soa_noE_pairs!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz,
+                                                             st.nbh, st.box3::Definitions.Box3,
+                                                             st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
+                elseif st.sigma_particle !== nothing
+                    NonBondedForces.wca_forces_soa_noE_mixed!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz,
+                                                             st.nbh, st.box3::Definitions.Box3,
+                                                             st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
+                else
+                    NonBondedForces.wca_forces_soa_noE!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.nbh, st.box3::Definitions.Box3, st.pair_lj)
+                end
             else
                 @assert st.softrep !== nothing
                 NonBondedForces.harmonic_rep_forces_soa_noE!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.nbh, st.box3::Definitions.Box3, st.softrep)
