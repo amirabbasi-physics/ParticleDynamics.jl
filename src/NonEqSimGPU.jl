@@ -68,7 +68,9 @@ using .Simulation: IntegratorSpec, VVSpec, BAOABSpec, BAOASpec, GSMSpec, Brownia
 using .Writers: InMemoryLogger, CSVWriter, XYZWriter,
     write_xyz!, write_observables_csv!, gsd_open, gsd_close, write_gsd_frame!, read_gsd_frame!
 using .BondedForces: BondList, build_bondlist
-using .InitGenerators: box_from_phi_2d, hex_random_2d, hex_circle_2d, hex_circle_plus_random_2d, hex_sites_in_box_2d, hex_circle_in_box_2d
+using .InitGenerators: box_from_phi_2d, box_from_phi_3d,
+    hex_random_2d, hex_circle_2d, hex_circle_plus_random_2d, hex_sites_in_box_2d, hex_circle_in_box_2d,
+    hex_slab_coexistence_2d, fcc_sites_in_box_3d, fcc_random_3d, fcc_slab_coexistence_3d
 using .Collisions: enable_collision_counting!, disable_collision_counting!,
     collisions_reset_counts!, collisions_read_counts!, set_collision_pair_cutoffs!
 
@@ -88,7 +90,9 @@ export Filters, BondedForces,
        # Bond list helper
        BondList, build_bondlist,
        # Initial configuration generators (2D)
-       box_from_phi_2d, hex_random_2d, hex_circle_2d, hex_circle_plus_random_2d, hex_sites_in_box_2d, hex_circle_in_box_2d,
+       box_from_phi_2d, box_from_phi_3d,
+       hex_random_2d, hex_circle_2d, hex_circle_plus_random_2d, hex_sites_in_box_2d, hex_circle_in_box_2d,
+       hex_slab_coexistence_2d, fcc_sites_in_box_3d, fcc_random_3d, fcc_slab_coexistence_3d,
        # Collisions API
        enable_collision_counting!, disable_collision_counting!,
        collisions_reset_counts!, collisions_read_counts!, set_collision_pair_cutoffs!
