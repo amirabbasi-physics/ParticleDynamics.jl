@@ -1,5 +1,5 @@
 using NonEqSimGPU
-using NonEqSimGPU: Simulation, step!, eulerheun
+using NonEqSimGPU: Simulation, step!, eulermaruyama
 
 # Active Ornstein–Uhlenbeck particles in 2D (overdamped limit, Fodor et al. PRL 117, 038103)
 # Parameters follow the paper: N=10000, box 250×250, D=100, τ=20, μ=1 (γ=1).
@@ -57,7 +57,7 @@ st = Simulation.build_simulation(
 
 initialize_square_lattice!(st, (L, L))
 
-spec = eulerheun(st)
+spec = eulermaruyama(st)
 
 gsd_path = joinpath(@__DIR__, "traj2d_active_OU_bd.gsd")
 gsdh = NonEqSimGPU.Writers.gsd_open(gsd_path)

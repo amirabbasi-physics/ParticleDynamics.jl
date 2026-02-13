@@ -1,5 +1,5 @@
 using NonEqSimGPU
-using NonEqSimGPU: Filters, eulerheun
+using NonEqSimGPU: Filters, eulermaruyama
 using CUDA
 
 function initialize_simple_cubic_lattice!(st, box::NTuple{3,Float32})
@@ -58,7 +58,7 @@ Filters.set_friction!(st, gamma; filter=Filters.All())
 Filters.set_temperature!(st, dt, temperature; filter=Filters.All())
 
 # ---- Brownian parameters ----
-eh = eulerheun(st)
+eh = eulermaruyama(st)
 
 # ---- GSD writer ----
 gsd_path = joinpath(@__DIR__, "traj3d_bd.gsd")
