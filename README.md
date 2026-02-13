@@ -1,89 +1,122 @@
-# NonEqSimGPU
+# NonEqSimGPU.jl
 
-[![Build Status](https://travis-ci.com/abbaa90/NonEqSimGPU.jl.svg?branch=master)](https://travis-ci.com/abbaa90/NonEqSimGPU.jl)
-[![Build Status](https://ci.appveyor.com/api/projects/status/github/abbaa90/NonEqSimGPU.jl?svg=true)](https://ci.appveyor.com/project/abbaa90/NonEqSimGPU-jl)
-[![Coverage](https://codecov.io/gh/abbaa90/NonEqSimGPU.jl/branch/master/graph/badge.svg)](https://codecov.io/gh/abbaa90/NonEqSimGPU.jl)
-[![Coverage](https://coveralls.io/repos/github/abbaa90/NonEqSimGPU.jl/badge.svg?branch=master)](https://coveralls.io/github/abbaa90/NonEqSimGPU.jl?branch=master)
+`NonEqSimGPU.jl` is a GPU-only Julia package for non-equilibrium particle simulations
+using `CUDA.jl`. It provides Langevin and Brownian dynamics integrators,
+neighbor-list backends, nonbonded/bonded force models, collision counting, and
+XYZ/CSV/GSD writers.
 
-## Overview
+The package is designed for production GPU workflows and verification-oriented
+testing. Core simulation behavior is validated with deterministic force checks,
+backend parity checks, and stochastic moment-based physics tests.
 
-NonEqSimGPU is a CUDA-accelerated toolkit for non-equilibrium particle
-simulations. It provides:
+## GPU requirement
 
-- Structure-of-arrays state storage (`SimulationState`);
-- GPU neighbor lists (dense and stencil);
-- Nonbonded pair kernels (LJ, WCA, soft repulsive) and bonded chains
-  (harmonic/FENE);
-- Langevin (VV, BAOAB, BAOA, GSM) and Brownian (midpoint, Euler–Maruyama)
-  integrators;
-- Collision counting, filters for per-type parameters, and writers for XYZ/CSV/GSD.
+This package requires a functional CUDA environment.
 
-Every API is exercised in the `examples/` folder; docstrings reference the
-scripts they were derived from so you can copy parameter sets verbatim.
+```julia
+using CUDA
+CUDA.functional() || error("NonEqSimGPU requires CUDA.functional() == true")
+```
+
+No CPU fallback simulation path is provided.
 
 ## Installation
 
-The package is currently developed from source. In the Julia package manager:
+### Add from GitHub
 
 ```julia
-pkg> dev https://github.com/abbaa90/NonEqSimGPU.jl
-pkg> activate NonEqSimGPU
-pkg> instantiate
+using Pkg
+Pkg.add(url="https://github.com/ORG_OR_USER/NonEqSimGPU.jl")
 ```
 
-Make sure a recent CUDA toolkit is available. Legacy Pascal GPUs can pin the
-runtime to CUDA 12.4.1 by setting `NEQSIMGPU_CUDA_COMPAT=force`.
+### Develop locally
 
-## Quick Start
+```julia
+using Pkg
+Pkg.develop(path="/path/to/NonEqSimGPU")
+Pkg.instantiate()
+```
 
-The snippet below mirrors `examples/2D_allpairs_quicktest.jl` (reduced to 256
-particles) and demonstrates a short WCA run:
+## Minimal quickstart (GPU)
 
 ```julia
 using NonEqSimGPU
+using CUDA
 
-N = 256
-box = (80.0f0, 80.0f0)
+N = 64
 dt = 2.0f-4
-rcut = Float32(2^(1/6))
+sigma = 1.0f0
+rcut = Float32(2^(1/6)) * sigma
 
-st = build_simulation(N=N, box=box, dt=dt,
-                      cutoff=rcut, skin=0.4f0, cap=Int32(64),
-                      neigh_interval=10, use_neighborlist=false,
-                      epsilon=10f0, sigma=1f0,
-                      gamma=50f0, temperature=1f0,
-                      nonbonded=:wca, precision=:f32)
+st = build_simulation(
+    N=N,
+    box=(40.0f0, 40.0f0),
+    cutoff=rcut,
+    skin=0.4f0,
+    cap=Int32(32),
+    neigh_interval=10,
+    epsilon=10.0f0,
+    sigma=sigma,
+    gamma=50.0f0,
+    temperature=1.0f0,
+    nonbonded=:wca,
+    precision=:f32,
+)
 
-for _ in 1:50
-    step!(st, dt; compute_energy=true)
+for _ in 1:200
+    step!(st, dt; compute_energy=false)
 end
 
-write_observables_csv!("obs.csv", st.step; Epot=st.Epot, Ekin=st.Ekin, dq=st.dq)
+@show st.step
 ```
 
-See `examples/TwoT_2D_LD_VV.jl`, `examples/3D_filters.jl`, and the Brownian
-demos for richer setups (filters, collision counting, GSD output).
+## Running tests (GPU machine)
+
+```bash
+julia --project -e 'using Pkg; Pkg.instantiate(); Pkg.test()'
+```
 
 ## Documentation
 
-- Collision event rate (GPU) design and usage: `docs/CollisionRate.md`
+Build docs locally:
 
-## Testing and Examples
-
-Run the unit tests from the package root:
-
-```julia
-julia --project -e 'using Pkg; Pkg.test()'
+```bash
+julia --project=docs -e 'using Pkg; Pkg.instantiate(); include("docs/make.jl")'
 ```
 
-The examples are ready-to-run scripts; use `julia --project examples/2D_allpairs_quicktest.jl`.
+Docs site placeholder: `https://ORG_OR_USER.github.io/NonEqSimGPU.jl/`
 
-## Legacy CUDA GPUs
+## Example smoke run
 
-Pascal-generation GPUs (e.g. GTX 1080 Ti, cc 6.1) are blocked by CUDA 13+/driver 580+. To keep them working without downgrading the driver, the package will try to pin CUDA to a legacy runtime (default `12.4.1`) when it detects cc < 7.5 and a 13.x runtime. You can control this via:
+```bash
+julia --project scripts/examples_smoke.jl
+```
 
-- `NEQSIMGPU_CUDA_COMPAT=off` to skip the downgrade logic.
-- `NEQSIMGPU_CUDA_COMPAT=force` to force pinning even if detection does not trigger.
-- `NEQSIMGPU_CUDA_LEGACY_VERSION=12.3.0` (or similar) to choose a specific runtime version.
+Optional heavier smoke case:
 
-If you still see capability errors on a legacy GPU, set `NEQSIMGPU_CUDA_COMPAT=force` and retry so the runtime is pinned before compilation.
+```bash
+NEQSIM_SMOKE_HEAVY=1 julia --project scripts/examples_smoke.jl
+```
+
+For full local GPU CI bundle:
+
+```bash
+bash scripts/ci_gpu_local.sh
+```
+
+## Known limitations
+
+- GPU-only package; simulation requires CUDA.
+- Bitwise-identical trajectories are not guaranteed across GPUs/toolchains.
+- Statistical reproducibility should be evaluated via moments/summary statistics.
+- `gamma > 0` is required for stochastic integrator paths that divide by friction
+  (BAOAB, Brownian midpoint, Euler-Maruyama).
+- Supported simulation dimensions are 2D and 3D.
+
+## Citation
+
+Please cite this software using metadata in [`CITATION.cff`](CITATION.cff).
+
+## License
+
+This project is distributed under the MIT License. See [`LICENSE`](LICENSE).
