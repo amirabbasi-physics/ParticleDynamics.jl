@@ -1,5 +1,5 @@
 using NonEqSimGPU
-using NonEqSimGPU: Simulation, step!, eulermaruyama
+using NonEqSimGPU: step!, eulermaruyama
 
 # Active Ornstein–Uhlenbeck particles in 2D (overdamped limit, Fodor et al. PRL 117, 038103)
 # Parameters follow the paper: N=10000, box 250×250, D=100, τ=20, μ=1 (γ=1).
@@ -38,7 +38,7 @@ corr_time = 100.0           # persistence time τ
 epsilon = 1.0e6
 sigma = 1.0
 
-st = Simulation.build_simulation(
+st = build_simulation(
     N = N,
     box = (L, L),
     cutoff = sigma,
