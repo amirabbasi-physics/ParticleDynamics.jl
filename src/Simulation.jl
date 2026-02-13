@@ -24,7 +24,7 @@ const FREEZE_NONE   = UInt8(0)
 const FREEZE_HOLD   = UInt8(1)
 const FREEZE_SPRING = UInt8(2)
 
-export SimulationState, build_simulation, step!, step_graph!, step_fused!, zero_forces!, sync_unwrapped!, accumulate_virial!
+export SimulationState, build_simulation, step!, step_graph!, zero_forces!, sync_unwrapped!, accumulate_virial!
 export IntegratorSpec, VVSpec, BAOABSpec, BAOASpec, GSMSpec, BrownianSpec, EMSpec, velocityverlet, baoab, baoa, gsm, eulerheun, eulermaruyama
 
 # =========================

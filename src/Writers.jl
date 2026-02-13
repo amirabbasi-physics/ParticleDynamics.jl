@@ -6,7 +6,7 @@ using StaticArrays
 using GSDFiles
 using DelimitedFiles
 
-export InMemoryLogger, CSVWriter, XYZWriter, ObservableCSVWriter
+export InMemoryLogger, CSVWriter, XYZWriter
 export write_xyz!, write_observables_csv!
 export gsd_open, gsd_close, write_gsd_frame!, read_gsd_frame!, GSDFrameData, GSDTopology
 
