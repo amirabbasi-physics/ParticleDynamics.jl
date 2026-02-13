@@ -1,0 +1,41 @@
+name: CI (GPU self-hosted)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["main"]
+  pull_request:
+
+jobs:
+  gpu-tests:
+    runs-on: [self-hosted, linux, x64, gpu]
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Julia
+        uses: julia-actions/setup-julia@v2
+        with:
+          version: '1.12'
+
+      - name: Cache Julia artifacts
+        uses: julia-actions/cache@v2
+
+      - name: Instantiate package env
+        run: julia --project -e 'using Pkg; Pkg.instantiate()'
+
+      - name: Assert CUDA availability
+        run: julia --project -e 'using CUDA; @assert CUDA.functional() "CUDA.functional() must be true on GPU runner"; CUDA.versioninfo()'
+
+      - name: Run full GPU test suite
+        run: julia --project -e 'using Pkg; Pkg.test()'
+
+      - name: Build docs
+        run: julia --project=docs -e 'using Pkg; Pkg.instantiate(); include("docs/make.jl")'
+
+      - name: Run example smoke subset
+        env:
+          NEQSIM_SMOKE_FAST: "1"
+        run: julia --project scripts/examples_smoke.jl

@@ -1,0 +1,35 @@
+name: CI (CPU checks)
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+jobs:
+  cpu-checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Julia
+        uses: julia-actions/setup-julia@v2
+        with:
+          version: '1.12'
+
+      - name: Cache Julia artifacts
+        uses: julia-actions/cache@v2
+
+      - name: Instantiate package env
+        run: julia --project -e 'using Pkg; Pkg.instantiate()'
+
+      - name: Report CUDA availability (expected false on hosted runners)
+        run: julia --project -e 'using CUDA; println("CUDA.functional() = ", CUDA.functional())'
+
+      - name: Run tests (GPU suite skips cleanly without CUDA)
+        run: julia --project -e 'using Pkg; Pkg.test()'
+
+      - name: Build docs (non-executing pages)
+        run: julia --project=docs -e 'using Pkg; Pkg.instantiate(); include("docs/make.jl")'
