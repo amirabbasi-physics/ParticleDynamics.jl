@@ -725,7 +725,7 @@ function build_simulation(;N::Int,
                            bonds::Union{Nothing,Vector{Tuple{Int32,Int32}}}=nothing,
                            bonding::Union{Nothing,Definitions.BondPotential}=nothing,
                            nonbonded::Symbol = :lj,
-                           softrep_params::Union{Nothing,Definitions.SoftRepulsiveParams{Real}}=nothing,
+                           softrep_params::Union{Nothing,Definitions.SoftRepulsiveParams{<:Real}}=nothing,
                            precision::Symbol = :f32,
                            unwrapped_positions::Bool = false)
 
