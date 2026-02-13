@@ -1,0 +1,22 @@
+cff-version: 1.2.0
+title: "NonEqSimGPU.jl"
+message: "If you use this software, please cite it using the metadata from this file."
+type: software
+authors:
+  - family-names: "AUTHOR_SURNAME"
+    given-names: "AUTHOR_GIVEN_NAME"
+    orcid: "https://orcid.org/0000-0000-0000-0000"
+repository-code: "https://github.com/ORG_OR_USER/NonEqSimGPU.jl"
+url: "https://github.com/ORG_OR_USER/NonEqSimGPU.jl"
+abstract: >
+  GPU-only particle simulation toolkit for non-equilibrium Langevin and Brownian
+  dynamics in Julia using CUDA.jl.
+version: "0.4.0"
+date-released: "2026-02-13"
+license: "MIT"
+keywords:
+  - Julia
+  - CUDA
+  - GPU
+  - Langevin dynamics
+  - Brownian dynamics

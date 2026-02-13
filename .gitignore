@@ -1,11 +1,32 @@
+# Julia coverage/memory
 *.jl.*.cov
 *.jl.cov
 *.jl.mem
+
+# Generated simulation outputs
 *.csv
 *.gsd
 *.json
 *.log
 *.png
 *.pdf
+*.xyz
+
+# CUDA / profiling artifacts
+*.ptx
+*.cubin
+*.nvvp
+*.nsys-rep
+*.qdrep
+cuda-memcheck.log
+
+# Julia env/runtime artifacts
 /Manifest.toml
+/LocalPreferences.toml
+
+# Docs build artifacts
+/docs/build/
+/docs/Manifest.toml
+
+# Local scratch/output trees
 /Documents/*
