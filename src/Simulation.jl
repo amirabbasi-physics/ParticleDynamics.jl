@@ -3317,8 +3317,10 @@ function step!(st::SimulationState{T}, em::BrownianIntegrators.EMParams{T}, dt::
         if rebuild_needed
             if D == 2
                 NeighborLists.update_neighbors_inplace!(st.nbh, st.rx, st.ry; box = st.box2, step=st.step)
+                _collisions_reinit_on_rebuild!(st)
             else
                 NeighborLists.update_neighbors_inplace!(st.nbh, st.rx, st.ry, st.rz; box = st.box3, step=st.step)
+                _collisions_reinit_on_rebuild!(st)
             end
         end
     end
