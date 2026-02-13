@@ -2878,6 +2878,7 @@ state are reused as temporary storage for midpoint positions.
 function step!(st::SimulationState{T}, bp::BrownianIntegrators.BrownianParams{T}, dt::Real; compute_energy::Bool=true
     ) where {T<:AbstractFloat}
     dtT = T(dt)
+    _require_positive_gamma!(bp.gamma, "Brownian midpoint")
     freeze_active = _freeze_active!(st)
     freeze_hold = freeze_active && st.freeze_mode == FREEZE_HOLD
     freeze_spring = freeze_active && st.freeze_mode == FREEZE_SPRING
@@ -3302,6 +3303,7 @@ Accumulates conservative work w = f · Δr into dq (heat) and dU (conservative p
 """
 function step!(st::SimulationState{T}, em::BrownianIntegrators.EMParams{T}, dt::Real; compute_energy::Bool=true) where {T<:AbstractFloat}
     dtT = T(dt)
+    _require_positive_gamma!(em.gamma, "Euler-Maruyama")
     freeze_active = _freeze_active!(st)
     freeze_hold = freeze_active && st.freeze_mode == FREEZE_HOLD
     freeze_spring = freeze_active && st.freeze_mode == FREEZE_SPRING
