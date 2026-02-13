@@ -292,6 +292,14 @@ function _ensure_ou_state!(st::SimulationState{T},
     return
 end
 
+@inline function _require_positive_gamma!(gamma::CuArray{T,1}, integrator::AbstractString) where {T<:AbstractFloat}
+    gmin = minimum(gamma)
+    if !(gmin > zero(T))
+        throw(ArgumentError("$(integrator) integrator requires gamma > 0 for all particles."))
+    end
+    return nothing
+end
+
 # -------------------------
 # Bond helpers (2D / 3D)
 # -------------------------
@@ -2426,6 +2434,7 @@ Uses forces at t for the first half-kick, then forces at t+dt for the final half
 """
 function step!(st::SimulationState{T}, bao::LangevinIntegrators.BAOABParams{T}, dt::Real; compute_energy::Bool=true) where {T<:AbstractFloat}
     dtT = T(dt)
+    _require_positive_gamma!(bao.gamma, "BAOAB")
     freeze_active = _freeze_active!(st)
     freeze_hold = freeze_active && st.freeze_mode == FREEZE_HOLD
     freeze_spring = freeze_active && st.freeze_mode == FREEZE_SPRING
