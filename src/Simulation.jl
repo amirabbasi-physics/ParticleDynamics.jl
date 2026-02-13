@@ -1603,9 +1603,11 @@ are executed outside the graph when needed. The executable graph is cached and r
 across calls.
 """
 function step_graph!(st::SimulationState{T}, dt::Real; compute_energy::Bool=true) where {T<:AbstractFloat}
-    if _freeze_active!(st)
+    freeze_active = _freeze_active!(st)
+    if freeze_active
         return step!(st, dt; compute_energy)
     end
+    freeze_spring = freeze_active && st.freeze_mode == FREEZE_SPRING
     dtT = T(dt)
     D = st.rz === nothing ? 2 : 3
 
