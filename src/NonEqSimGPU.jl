@@ -83,10 +83,10 @@ export Filters, BondedForces,
        StokesFrictionCoefficient, SphereMass, InertialTime, DiffusiveTime,
        # Simulation helpers
        SimulationState, build_simulation, step!, step_graph!, zero_forces!, sync_unwrapped!, accumulate_energies!, accumulate_virial!,
-       IntegratorSpec, VVSpec, BAOABSpec, BAOASpec, GSMSpec, BrownianSpec, EMSpec, velocityverlet, baoab, baoa, gsm, eulermaruyama,
+       IntegratorSpec, VVSpec, BAOABSpec, BAOASpec, GSMSpec, BrownianSpec, velocityverlet, baoab, baoa, gsm, eulermaruyama,
        # Writers
        InMemoryLogger, CSVWriter, XYZWriter,
-       write_xyz!, write_observables_csv!, gsd_open, gsd_close, write_gsd_frame!, read_last_gsd,
+       write_xyz!, write_observables_csv!, gsd_open, gsd_close, write_gsd_frame!,
        # Bond list helper
        BondList, build_bondlist,
        # Initial configuration generators (2D)

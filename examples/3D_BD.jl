@@ -1,5 +1,5 @@
 using NonEqSimGPU
-using NonEqSimGPU: Filters
+using NonEqSimGPU: Filters, eulerheun
 using CUDA
 
 function initialize_simple_cubic_lattice!(st, box::NTuple{3,Float32})
