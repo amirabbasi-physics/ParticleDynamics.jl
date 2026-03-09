@@ -1602,9 +1602,64 @@ end
                             bindex::CuDeviceVector{Int32}, bflat::CuDeviceVector{Int32}, bcounts::CuDeviceVector{Int32})
     base = bindex[i]
     nb = bcounts[i]
-    @inbounds for t in 0:Int(nb-1)
-        if bflat[base + t + 1] == j
-            return true
+    @inbounds begin
+        if nb == 0
+            return false
+        elseif nb == 1
+            return bflat[base + 1] == j
+        elseif nb == 2
+            b1 = bflat[base + 1]
+            b2 = bflat[base + 2]
+            return (b1 == j) | (b2 == j)
+        elseif nb == 3
+            b1 = bflat[base + 1]
+            b2 = bflat[base + 2]
+            b3 = bflat[base + 3]
+            return (b1 == j) | (b2 == j) | (b3 == j)
+        end
+        for t in 0:Int(nb-1)
+            if bflat[base + t + 1] == j
+                return true
+            end
+        end
+    end
+    return false
+end
+
+@inline function _bond_cache(i::Int32,
+                             bindex::CuDeviceVector{Int32},
+                             bflat::CuDeviceVector{Int32},
+                             bcounts::CuDeviceVector{Int32})
+    base = bindex[i]
+    nb = bcounts[i]
+    b1 = Int32(0)
+    b2 = Int32(0)
+    @inbounds begin
+        if nb >= 1
+            b1 = bflat[base + 1]
+        end
+        if nb >= 2
+            b2 = bflat[base + 2]
+        end
+    end
+    return base, nb, b1, b2
+end
+
+@inline function _is_bonded_cached(j::Int32,
+                                   base::Int32, nb::Int32, b1::Int32, b2::Int32,
+                                   bflat::CuDeviceVector{Int32})
+    @inbounds begin
+        if nb == 0
+            return false
+        elseif nb == 1
+            return b1 == j
+        elseif nb == 2
+            return (b1 == j) | (b2 == j)
+        end
+        for t in 0:Int(nb-1)
+            if bflat[base + t + 1] == j
+                return true
+            end
         end
     end
     return false
@@ -3601,9 +3656,10 @@ function _harmrep2_csr_kernel_excl!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}
     base  = neighbors_index[i]
     nlist = counts[i]
     σ2 = σ*σ
+    bbase, bnb, b1, b2 = _bond_cache(Int32(i), bindex, bflat, bcounts)
     @inbounds for t in 0:Int(nlist-1)
         j = neighbors_flat[base + t + 1]
-        if _is_bonded(Int32(i), j, bindex, bflat, bcounts); continue; end
+        if _is_bonded_cached(j, bbase, bnb, b1, b2, bflat); continue; end
         dx = mic_fast(xi - rx[j], halfLx, Lx)
         dy = mic_fast(yi - ry[j], halfLy, Ly)
         r2 = muladd(dx, dx, dy*dy)
@@ -3631,9 +3687,10 @@ function _harmrep3_csr_kernel_excl!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}
     base  = neighbors_index[i]
     nlist = counts[i]
     σ2 = σ*σ
+    bbase, bnb, b1, b2 = _bond_cache(Int32(i), bindex, bflat, bcounts)
     @inbounds for t in 0:Int(nlist-1)
         j = neighbors_flat[base + t + 1]
-        if _is_bonded(Int32(i), j, bindex, bflat, bcounts); continue; end
+        if _is_bonded_cached(j, bbase, bnb, b1, b2, bflat); continue; end
         dx = mic_fast(xi - rx[j], halfLx, Lx)
         dy = mic_fast(yi - ry[j], halfLy, Ly)
         dz = mic_fast(zi - rz[j], halfLz, Lz)
@@ -3663,9 +3720,10 @@ function _harmrep2_csr_noE_kernel_excl!(rx::CuDeviceVector{T}, ry::CuDeviceVecto
     base  = neighbors_index[i]
     nlist = counts[i]
     σ2 = σ*σ
+    bbase, bnb, b1, b2 = _bond_cache(Int32(i), bindex, bflat, bcounts)
     @inbounds for t in 0:Int(nlist-1)
         j = neighbors_flat[base + t + 1]
-        if _is_bonded(Int32(i), j, bindex, bflat, bcounts); continue; end
+        if _is_bonded_cached(j, bbase, bnb, b1, b2, bflat); continue; end
         dx = mic_fast(xi - rx[j], halfLx, Lx)
         dy = mic_fast(yi - ry[j], halfLy, Ly)
         r2 = muladd(dx, dx, dy*dy)
@@ -3693,9 +3751,10 @@ function _harmrep3_csr_noE_kernel_excl!(rx::CuDeviceVector{T}, ry::CuDeviceVecto
     base  = neighbors_index[i]
     nlist = counts[i]
     σ2 = σ*σ
+    bbase, bnb, b1, b2 = _bond_cache(Int32(i), bindex, bflat, bcounts)
     @inbounds for t in 0:Int(nlist-1)
         j = neighbors_flat[base + t + 1]
-        if _is_bonded(Int32(i), j, bindex, bflat, bcounts); continue; end
+        if _is_bonded_cached(j, bbase, bnb, b1, b2, bflat); continue; end
         dx = mic_fast(xi - rx[j], halfLx, Lx)
         dy = mic_fast(yi - ry[j], halfLy, Ly)
         dz = mic_fast(zi - rz[j], halfLz, Lz)
@@ -3712,13 +3771,15 @@ function _harmrep3_csr_noE_kernel_excl!(rx::CuDeviceVector{T}, ry::CuDeviceVecto
     return
 end
 
+@inline _softrep_threads(N::Int) = (N < 50_000) ? 32 : ((N < 200_000) ? 64 : 128)
+
 function harmonic_rep_forces_soa_excl!(rx::CuArray{T,1}, ry::CuArray{T,1},
                                        fx::CuArray{T,1}, fy::CuArray{T,1}, Epot::CuArray{T,1},
                                        nbh::NeighborLists.NeighborMatrix{T},
                                        bonds::BondedForces.BondList,
                                        box::Definitions.Box2{T}, params::Definitions.SoftRepulsiveParams{T}
                                        ) where {T<:AbstractFloat}
-    N = length(rx); threads = (N < 100_000) ? 128 : 256; blocks = cld(N, threads)
+    N = length(rx); threads = min(_softrep_threads(N), N); blocks = cld(N, threads)
     Lx = T(box[1]); Ly = T(box[2]); halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly
     k = CUDA.@cuda launch=false _harmrep2_csr_kernel_excl!(rx, ry, fx, fy, Epot,
         nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
@@ -3737,7 +3798,7 @@ function harmonic_rep_forces_soa_excl!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::C
                                        bonds::BondedForces.BondList,
                                        box::Definitions.Box3{T}, params::Definitions.SoftRepulsiveParams{T}
                                        ) where {T<:AbstractFloat}
-    N = length(rx); threads = (N < 100_000) ? 128 : 256; blocks = cld(N, threads)
+    N = length(rx); threads = min(_softrep_threads(N), N); blocks = cld(N, threads)
     Lx = T(box[1]); Ly = T(box[2]); Lz = T(box[3])
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly; halfLz = T(0.5)*Lz
     k = CUDA.@cuda launch=false _harmrep3_csr_kernel_excl!(rx, ry, rz, fx, fy, fz, Epot,
@@ -3757,7 +3818,7 @@ function harmonic_rep_forces_soa_noE_excl!(rx::CuArray{T,1}, ry::CuArray{T,1},
                                            bonds::BondedForces.BondList,
                                            box::Definitions.Box2{T}, params::Definitions.SoftRepulsiveParams{T}
                                            ) where {T<:AbstractFloat}
-    N = length(rx); threads = (N < 50_000) ? 64 : ((N < 200_000) ? 128 : 256); blocks = cld(N, threads)
+    N = length(rx); threads = min(_softrep_threads(N), N); blocks = cld(N, threads)
     Lx = T(box[1]); Ly = T(box[2]); halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly
     k = CUDA.@cuda launch=false _harmrep2_csr_noE_kernel_excl!(rx, ry, fx, fy,
         nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
@@ -3776,7 +3837,7 @@ function harmonic_rep_forces_soa_noE_excl!(rx::CuArray{T,1}, ry::CuArray{T,1}, r
                                            bonds::BondedForces.BondList,
                                            box::Definitions.Box3{T}, params::Definitions.SoftRepulsiveParams{T}
                                            ) where {T<:AbstractFloat}
-    N = length(rx); threads = (N < 50_000) ? 64 : ((N < 200_000) ? 128 : 256); blocks = cld(N, threads)
+    N = length(rx); threads = min(_softrep_threads(N), N); blocks = cld(N, threads)
     Lx = T(box[1]); Ly = T(box[2]); Lz = T(box[3])
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly; halfLz = T(0.5)*Lz
     k = CUDA.@cuda launch=false _harmrep3_csr_noE_kernel_excl!(rx, ry, rz, fx, fy, fz,
@@ -3886,7 +3947,7 @@ function harmonic_rep_forces_soa!(rx::CuArray{T,1}, ry::CuArray{T,1},
                                   nbh::NeighborLists.NeighborMatrix{T},
                                   box::Definitions.Box2{T}, params::Definitions.SoftRepulsiveParams{T}
                                   ) where {T<:AbstractFloat}
-    N = length(rx); threads = (N < 100_000) ? 128 : 256; blocks = cld(N, threads)
+    N = length(rx); threads = min(_softrep_threads(N), N); blocks = cld(N, threads)
     Lx = T(box[1]); Ly = T(box[2]); halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly
     k = CUDA.@cuda launch=false _harmrep2_csr_kernel!(rx, ry, fx, fy, Epot,
         nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
@@ -3902,7 +3963,7 @@ function harmonic_rep_forces_soa!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArra
                                   nbh::NeighborLists.NeighborMatrix{T},
                                   box::Definitions.Box3{T}, params::Definitions.SoftRepulsiveParams{T}
                                   ) where {T<:AbstractFloat}
-    N = length(rx); threads = (N < 100_000) ? 128 : 256; blocks = cld(N, threads)
+    N = length(rx); threads = min(_softrep_threads(N), N); blocks = cld(N, threads)
     Lx = T(box[1]); Ly = T(box[2]); Lz = T(box[3])
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly; halfLz = T(0.5)*Lz
     k = CUDA.@cuda launch=false _harmrep3_csr_kernel!(rx, ry, rz, fx, fy, fz, Epot,
@@ -3919,7 +3980,7 @@ function harmonic_rep_forces_soa_noE!(rx::CuArray{T,1}, ry::CuArray{T,1},
                                       nbh::NeighborLists.NeighborMatrix{T},
                                       box::Definitions.Box2{T}, params::Definitions.SoftRepulsiveParams{T}
                                       ) where {T<:AbstractFloat}
-    N = length(rx); threads = (N < 50_000) ? 64 : ((N < 200_000) ? 128 : 256); blocks = cld(N, threads)
+    N = length(rx); threads = min(_softrep_threads(N), N); blocks = cld(N, threads)
     Lx = T(box[1]); Ly = T(box[2]); halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly
     k = CUDA.@cuda launch=false _harmrep2_csr_noE_kernel!(rx, ry, fx, fy,
         nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
@@ -3934,7 +3995,7 @@ function harmonic_rep_forces_soa_noE!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::Cu
                                       fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1},
                                       nbh::NeighborLists.NeighborMatrix{T},
                                       box::Definitions.Box3{T}, params::Definitions.SoftRepulsiveParams{T} ) where {T<:AbstractFloat}
-    N = length(rx); threads = (N < 50_000) ? 64 : ((N < 200_000) ? 128 : 256); blocks = cld(N, threads)
+    N = length(rx); threads = min(_softrep_threads(N), N); blocks = cld(N, threads)
     Lx = T(box[1]); Ly = T(box[2]); Lz = T(box[3])
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly; halfLz = T(0.5)*Lz
     k = CUDA.@cuda launch=false _harmrep3_csr_noE_kernel!(rx, ry, rz, fx, fy, fz,

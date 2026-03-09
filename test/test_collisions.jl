@@ -35,3 +35,50 @@
     @test st.coll_counts === nothing
     @test st.coll_bins === nothing
 end
+
+@testset "Collision Counting excludes directly bonded pairs" begin
+    seed_all!(0xC0112)
+    T = Float32
+
+    function _make_state(; bonds=nothing)
+        st = Simulation.build_simulation(
+            N=2,
+            box=(T(10), T(10)),
+            cutoff=T(1),
+            skin=T(1),
+            cap=Int32(8),
+            neigh_interval=50,
+            use_neighborlist=true,
+            epsilon=T(1),
+            sigma=T(1),
+            gamma=T(0),
+            temperature=T(0),
+            nonbonded=:wca,
+            bonds=bonds,
+            bonding=(bonds === nothing ? nothing : harmonic_bond(k=T(300), r0=T(1))),
+            precision=:f32,
+        )
+        st.typeid .= CuArray(Int32[1, 1])
+
+        # Start as neighbors but outside collision cutoff.
+        copyto!(st.rx, T[0, 1.5])
+        copyto!(st.ry, T[0, 0])
+        NonEqSimGPU.NeighborLists.update_neighbors_inplace!(st.nbh, st.rx, st.ry; box=st.box2, step=st.step)
+        NonEqSimGPU.enable_collision_counting!(st; ntypes=1, bins=:all_pairs)
+        return st
+    end
+
+    st_unbonded = _make_state()
+    st_bonded = _make_state(bonds=Tuple{Int32,Int32}[(Int32(1), Int32(2))])
+
+    # Move into contact without rebuilding NL so this is an entry event.
+    copyto!(st_unbonded.rx, T[0, 0.5])
+    copyto!(st_bonded.rx, T[0, 0.5])
+    NonEqSimGPU.Collisions._collisions_update_after_positions!(st_unbonded)
+    NonEqSimGPU.Collisions._collisions_update_after_positions!(st_bonded)
+
+    cu = NonEqSimGPU.collisions_read_counts!(st_unbonded)
+    cb = NonEqSimGPU.collisions_read_counts!(st_bonded)
+    @test cu == Int64[1]
+    @test cb == Int64[0]
+end
