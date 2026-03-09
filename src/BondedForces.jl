@@ -20,6 +20,8 @@ export BondList, build_bondlist,
     return dx
 end
 
+@inline _bond_threads(N::Int) = (N < 50_000) ? 64 : ((N < 200_000) ? 128 : 256)
+
 """
 CSR-style adjacency list describing bead connectivity.
 """
@@ -331,7 +333,7 @@ function harmonic_forces_soa!(
     fx::CuArray{T,1}, fy::CuArray{T,1}, E::CuArray{T,1},
     bonds::BondList, box::Definitions.Box2{T},
     params::Definitions.HarmonicBondParams{T}) where {T<:AbstractFloat}
-    N = length(rx); threads = min(256, N); blocks = cld(N, threads)
+    N = length(rx); threads = min(_bond_threads(N), N); blocks = cld(N, threads)
     Lx, Ly = box; halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly
     k = CUDA.@cuda launch=false _harmonic2_E!(rx, ry, fx, fy, E,
                                               bonds.index, bonds.flat, bonds.counts,
@@ -355,7 +357,7 @@ function harmonic_forces_soa_noE!(
     fx::CuArray{T,1}, fy::CuArray{T,1},
     bonds::BondList, box::Definitions.Box2{T},
     params::Definitions.HarmonicBondParams{T}) where {T<:AbstractFloat}
-    N = length(rx); threads = min(256, N); blocks = cld(N, threads)
+    N = length(rx); threads = min(_bond_threads(N), N); blocks = cld(N, threads)
     Lx, Ly = box; halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly
     k = CUDA.@cuda launch=false _harmonic2_noE!(rx, ry, fx, fy,
                                                 bonds.index, bonds.flat, bonds.counts,
@@ -373,7 +375,7 @@ function harmonic_forces_soa!(
     fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1}, E::CuArray{T,1},
     bonds::BondList, box::Definitions.Box3{T},
     params::Definitions.HarmonicBondParams{T}) where {T<:AbstractFloat}
-    N = length(rx); threads = min(256, N); blocks = cld(N, threads)
+    N = length(rx); threads = min(_bond_threads(N), N); blocks = cld(N, threads)
     Lx, Ly, Lz = box
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly; halfLz = T(0.5)*Lz
     k = CUDA.@cuda launch=false _harmonic3_E!(rx, ry, rz, fx, fy, fz, E,
@@ -392,7 +394,7 @@ function harmonic_forces_soa_noE!(
     fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1},
     bonds::BondList, box::Definitions.Box3{T},
     params::Definitions.HarmonicBondParams{T}) where {T<:AbstractFloat}
-    N = length(rx); threads = min(256, N); blocks = cld(N, threads)
+    N = length(rx); threads = min(_bond_threads(N), N); blocks = cld(N, threads)
     Lx, Ly, Lz = box
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly; halfLz = T(0.5)*Lz
     k = CUDA.@cuda launch=false _harmonic3_noE!(rx, ry, rz, fx, fy, fz,
@@ -417,7 +419,7 @@ function fene_forces_soa!(
     fx::CuArray{T,1}, fy::CuArray{T,1}, E::CuArray{T,1},
     bonds::BondList, box::Definitions.Box2{T},
     params::Definitions.FENEParams{T}) where {T<:AbstractFloat}
-    N = length(rx); threads = min(256, N); blocks = cld(N, threads)
+    N = length(rx); threads = min(_bond_threads(N), N); blocks = cld(N, threads)
     Lx, Ly = box; halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly
     k = CUDA.@cuda launch=false _fene2_E!(rx, ry, fx, fy, E,
                                           bonds.index, bonds.flat, bonds.counts,
@@ -440,7 +442,7 @@ function fene_forces_soa_noE!(
     fx::CuArray{T,1}, fy::CuArray{T,1},
     bonds::BondList, box::Definitions.Box2{T},
     params::Definitions.FENEParams{T}) where {T<:AbstractFloat}
-    N = length(rx); threads = min(256, N); blocks = cld(N, threads)
+    N = length(rx); threads = min(_bond_threads(N), N); blocks = cld(N, threads)
     Lx, Ly = box; halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly
     k = CUDA.@cuda launch=false _fene2_noE!(rx, ry, fx, fy,
                                             bonds.index, bonds.flat, bonds.counts,
@@ -458,7 +460,7 @@ function fene_forces_soa!(
     fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1}, E::CuArray{T,1},
     bonds::BondList, box::Definitions.Box3{T},
     params::Definitions.FENEParams{T}) where {T<:AbstractFloat}
-    N = length(rx); threads = min(256, N); blocks = cld(N, threads)
+    N = length(rx); threads = min(_bond_threads(N), N); blocks = cld(N, threads)
     Lx, Ly, Lz = box
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly; halfLz = T(0.5)*Lz
     k = CUDA.@cuda launch=false _fene3_E!(rx, ry, rz, fx, fy, fz, E,
@@ -477,7 +479,7 @@ function fene_forces_soa_noE!(
     fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1},
     bonds::BondList, box::Definitions.Box3{T},
     params::Definitions.FENEParams{T}) where {T<:AbstractFloat}
-    N = length(rx); threads = min(256, N); blocks = cld(N, threads)
+    N = length(rx); threads = min(_bond_threads(N), N); blocks = cld(N, threads)
     Lx, Ly, Lz = box
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly; halfLz = T(0.5)*Lz
     k = CUDA.@cuda launch=false _fene3_noE!(rx, ry, rz, fx, fy, fz,

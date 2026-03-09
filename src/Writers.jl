@@ -312,13 +312,72 @@ end
 # =======================================================================
 
 """
-    gsd_open(path; application=\"NonEqSimGPU\", schema=\"hoomd\")
+    gsd_open(path; application=\"NonEqSimGPU\", schema=\"hoomd\", append=false)
 
 Open a GSD trajectory for appending frames. Used extensively in `examples/`.
-Call [`gsd_close`](@ref) when finished or use the do-block form.
+By default this starts a fresh file. Set `append=true` to continue writing
+frames into an existing file without truncating it. Call [`gsd_close`](@ref)
+when finished or use the do-block form.
 """
-function gsd_open(path::AbstractString; application="NonEqSimGPU", schema="hoomd", schema_version=(1,4))
+function _read_full_gsd_header(io::IO)
+    seek(io, 0)
+    magic = read(io, UInt64)
+    magic == GSDFiles.GSD_MAGIC || throw(ArgumentError("Invalid GSD magic in append mode"))
+    index_location = read(io, UInt64)
+    index_allocated_entries = read(io, UInt64)
+    namelist_location = read(io, UInt64)
+    namelist_allocated_entries = read(io, UInt64)
+    schema_version = read(io, UInt32)
+    gsd_version = read(io, UInt32)
+    application = ntuple(_ -> read(io, UInt8), 64)
+    schema = ntuple(_ -> read(io, UInt8), 64)
+    reserved = ntuple(_ -> read(io, UInt8), 80)
+    return GSDFiles.Header(
+        magic,
+        index_location,
+        index_allocated_entries,
+        namelist_location,
+        namelist_allocated_entries,
+        schema_version,
+        gsd_version,
+        application,
+        schema,
+        reserved,
+    )
+end
+
+function _append_handle(path::AbstractString)
+    reader = GSDFiles.open_read(path)
+    try
+        names = copy(reader.names)
+        index = copy(reader.index)
+        nframes = GSDFiles.nframes(reader)
+        name_to_id = Dict{String,UInt16}(name => UInt16(i - 1) for (i, name) in enumerate(names))
+        names_blob = UInt8[]
+        for name in names
+            append!(names_blob, codeunits(name))
+            push!(names_blob, 0x00)
+        end
+
+        io = open(path, "r+")
+        try
+            header = _read_full_gsd_header(io)
+            writer = GSDFiles.GSDWriter(io, header, index, name_to_id, names_blob, UInt64(nframes))
+            return GSDFiles.open_gsd(writer)
+        catch
+            close(io)
+            rethrow()
+        end
+    finally
+        GSDFiles.close(reader)
+    end
+end
+
+function gsd_open(path::AbstractString; application="NonEqSimGPU", schema="hoomd", schema_version=(1,4), append::Bool=false)
     mkpath(dirname(path))
+    if append && isfile(path) && filesize(path) > 0
+        return _append_handle(path)
+    end
     w = GSDFiles.GSDWriter(path; application, schema, schema_version)
     h = GSDFiles.open_gsd(w)              # <- returns GSDFilesHandle
     return h
@@ -337,8 +396,8 @@ even if an exception occurs during writing. Example:
         end
     end
 """
-function gsd_open(f::Function, path::AbstractString; application="NonEqSimGPU", schema="hoomd", schema_version=(1,4))
-    h = gsd_open(path; application, schema, schema_version)
+function gsd_open(f::Function, path::AbstractString; application="NonEqSimGPU", schema="hoomd", schema_version=(1,4), append::Bool=false)
+    h = gsd_open(path; application, schema, schema_version, append)
     try
         return f(h)
     finally

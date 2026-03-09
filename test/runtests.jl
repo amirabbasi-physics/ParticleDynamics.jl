@@ -21,6 +21,7 @@ using .ParamsFromExamples
         include("test_api.jl")
         include("test_build.jl")
         include("test_forces.jl")
+        include("test_bonded_exclusions.jl")
         include("test_phase4a_forces.jl")
         include("test_phase4a_pair_pbc.jl")
         include("test_phase4a_neighbors.jl")

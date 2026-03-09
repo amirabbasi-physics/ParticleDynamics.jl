@@ -20,6 +20,45 @@ end
     return lut[ti, tj]
 end
 
+@inline function _bond_cache(i::Int32,
+                             bindex::CuDeviceVector{Int32},
+                             bflat::CuDeviceVector{Int32},
+                             bcounts::CuDeviceVector{Int32})
+    base = bindex[i]
+    nb = bcounts[i]
+    b1 = Int32(0)
+    b2 = Int32(0)
+    @inbounds begin
+        if nb >= 1
+            b1 = bflat[base + 1]
+        end
+        if nb >= 2
+            b2 = bflat[base + 2]
+        end
+    end
+    return base, nb, b1, b2
+end
+
+@inline function _is_bonded_cached(j::Int32,
+                                   base::Int32, nb::Int32, b1::Int32, b2::Int32,
+                                   bflat::CuDeviceVector{Int32})
+    @inbounds begin
+        if nb == 0
+            return false
+        elseif nb == 1
+            return b1 == j
+        elseif nb == 2
+            return (b1 == j) | (b2 == j)
+        end
+        for t in 0:Int(nb-1)
+            if bflat[base + t + 1] == j
+                return true
+            end
+        end
+    end
+    return false
+end
+
 # Seed the contact state bitset (2D uniform cutoff) so the first counted step
 # does not register already overlapping pairs.
 function _init_prev2!(
@@ -151,6 +190,46 @@ function _events2!(
     return
 end
 
+# 2D contact events excluding directly bonded pairs.
+function _events2_excl!(
+    rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, typeid::CuDeviceVector{Int32},
+    neighbors_index::CuDeviceVector{Int32}, neighbors_flat::CuDeviceVector{Int32}, counts::CuDeviceVector{Int32},
+    contact_prev::CuDeviceVector{UInt8},
+    bindex::CuDeviceVector{Int32}, bflat::CuDeviceVector{Int32}, bcounts::CuDeviceVector{Int32},
+    bin_lut::CuDeviceMatrix{Int32},
+    counts_bins::CuDeviceVector{Int64},
+    cutoff2::T, Lx::T, Ly::T) where {T<:AbstractFloat}
+    i = (blockIdx().x-1)*blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    ti = typeid[i]
+    halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly
+    base  = neighbors_index[i]
+    n     = counts[i]
+    bbase, bnb, b1, b2 = _bond_cache(Int32(i), bindex, bflat, bcounts)
+    @inbounds for t in 0:Int(n-1)
+        j = neighbors_flat[base + t + 1]
+        if i < j
+            if _is_bonded_cached(j, bbase, bnb, b1, b2, bflat)
+                continue
+            end
+            dx = _mic_fast(rx[i] - rx[j], halfLx, Lx)
+            dy = _mic_fast(ry[i] - ry[j], halfLy, Ly)
+            r2 = muladd(dx, dx, dy*dy)
+            cur = (r2 > zero(T)) & (r2 < cutoff2)
+            prev = contact_prev[base + t + 1] != 0
+            if (!prev) & cur
+                tj = typeid[j]
+                b = bin_lut[ti, tj]
+                if b >= 0
+                    CUDA.@atomic counts_bins[Int32(b+1)] += Int64(1)
+                end
+            end
+            contact_prev[base + t + 1] = cur
+        end
+    end
+    return
+end
+
 # 2D contact events with per-type cutoffs.
 function _events2_pair!(
     rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, typeid::CuDeviceVector{Int32},
@@ -168,6 +247,48 @@ function _events2_pair!(
     @inbounds for t in 0:Int(n-1)
         j = neighbors_flat[base + t + 1]
         if i < j
+            tj = typeid[j]
+            rc = rcut2_pair[ti, tj]
+            cutoff2 = rc*rc
+            dx = _mic_fast(rx[i] - rx[j], halfLx, Lx)
+            dy = _mic_fast(ry[i] - ry[j], halfLy, Ly)
+            r2 = muladd(dx, dx, dy*dy)
+            cur = (r2 > zero(T)) & (r2 < cutoff2)
+            prev = contact_prev[base + t + 1] != 0
+            if (!prev) & cur
+                b = bin_lut[ti, tj]
+                if b >= 0
+                    CUDA.@atomic counts_bins[Int32(b+1)] += Int64(1)
+                end
+            end
+            contact_prev[base + t + 1] = cur
+        end
+    end
+    return
+end
+
+# 2D contact events with per-type cutoffs, excluding directly bonded pairs.
+function _events2_pair_excl!(
+    rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, typeid::CuDeviceVector{Int32},
+    neighbors_index::CuDeviceVector{Int32}, neighbors_flat::CuDeviceVector{Int32}, counts::CuDeviceVector{Int32},
+    contact_prev::CuDeviceVector{UInt8},
+    bindex::CuDeviceVector{Int32}, bflat::CuDeviceVector{Int32}, bcounts::CuDeviceVector{Int32},
+    bin_lut::CuDeviceMatrix{Int32},
+    counts_bins::CuDeviceVector{Int64},
+    rcut2_pair::CuDeviceMatrix{T}, Lx::T, Ly::T) where {T<:AbstractFloat}
+    i = (blockIdx().x-1)*blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    ti = typeid[i]
+    halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly
+    base  = neighbors_index[i]
+    n     = counts[i]
+    bbase, bnb, b1, b2 = _bond_cache(Int32(i), bindex, bflat, bcounts)
+    @inbounds for t in 0:Int(n-1)
+        j = neighbors_flat[base + t + 1]
+        if i < j
+            if _is_bonded_cached(j, bbase, bnb, b1, b2, bflat)
+                continue
+            end
             tj = typeid[j]
             rc = rcut2_pair[ti, tj]
             cutoff2 = rc*rc
@@ -224,6 +345,47 @@ function _events3!(
     return
 end
 
+# 3D contact events excluding directly bonded pairs.
+function _events3_excl!(
+    rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T}, typeid::CuDeviceVector{Int32},
+    neighbors_index::CuDeviceVector{Int32}, neighbors_flat::CuDeviceVector{Int32}, counts::CuDeviceVector{Int32},
+    contact_prev::CuDeviceVector{UInt8},
+    bindex::CuDeviceVector{Int32}, bflat::CuDeviceVector{Int32}, bcounts::CuDeviceVector{Int32},
+    bin_lut::CuDeviceMatrix{Int32},
+    counts_bins::CuDeviceVector{Int64},
+    cutoff2::T, Lx::T, Ly::T, Lz::T) where {T<:AbstractFloat}
+    i = (blockIdx().x-1)*blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    ti = typeid[i]
+    halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly; halfLz = T(0.5)*Lz
+    base  = neighbors_index[i]
+    n     = counts[i]
+    bbase, bnb, b1, b2 = _bond_cache(Int32(i), bindex, bflat, bcounts)
+    @inbounds for t in 0:Int(n-1)
+        j = neighbors_flat[base + t + 1]
+        if i < j
+            if _is_bonded_cached(j, bbase, bnb, b1, b2, bflat)
+                continue
+            end
+            dx = _mic_fast(rx[i] - rx[j], halfLx, Lx)
+            dy = _mic_fast(ry[i] - ry[j], halfLy, Ly)
+            dz = _mic_fast(rz[i] - rz[j], halfLz, Lz)
+            r2 = muladd(dx, dx, muladd(dy, dy, dz*dz))
+            cur = (r2 > zero(T)) & (r2 < cutoff2)
+            prev = contact_prev[base + t + 1] != 0
+            if (!prev) & cur
+                tj = typeid[j]
+                b = bin_lut[ti, tj]
+                if b >= 0
+                    CUDA.@atomic counts_bins[Int32(b+1)] += Int64(1)
+                end
+            end
+            contact_prev[base + t + 1] = cur
+        end
+    end
+    return
+end
+
 # 3D contact events with per-type cutoffs.
 function _events3_pair!(
     rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T}, typeid::CuDeviceVector{Int32},
@@ -241,6 +403,49 @@ function _events3_pair!(
     @inbounds for t in 0:Int(n-1)
         j = neighbors_flat[base + t + 1]
         if i < j
+            tj = typeid[j]
+            rc = rcut2_pair[ti, tj]
+            cutoff2 = rc*rc
+            dx = _mic_fast(rx[i] - rx[j], halfLx, Lx)
+            dy = _mic_fast(ry[i] - ry[j], halfLy, Ly)
+            dz = _mic_fast(rz[i] - rz[j], halfLz, Lz)
+            r2 = muladd(dx, dx, muladd(dy, dy, dz*dz))
+            cur = (r2 > zero(T)) & (r2 < cutoff2)
+            prev = contact_prev[base + t + 1] != 0
+            if (!prev) & cur
+                b = bin_lut[ti, tj]
+                if b >= 0
+                    CUDA.atomic_add!(counts_bins, Int32(b+1), Int64(1))
+                end
+            end
+            contact_prev[base + t + 1] = cur
+        end
+    end
+    return
+end
+
+# 3D contact events with per-type cutoffs, excluding directly bonded pairs.
+function _events3_pair_excl!(
+    rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T}, typeid::CuDeviceVector{Int32},
+    neighbors_index::CuDeviceVector{Int32}, neighbors_flat::CuDeviceVector{Int32}, counts::CuDeviceVector{Int32},
+    contact_prev::CuDeviceVector{UInt8},
+    bindex::CuDeviceVector{Int32}, bflat::CuDeviceVector{Int32}, bcounts::CuDeviceVector{Int32},
+    bin_lut::CuDeviceMatrix{Int32},
+    counts_bins::CuDeviceVector{Int64},
+    rcut2_pair::CuDeviceMatrix{T}, Lx::T, Ly::T, Lz::T) where {T<:AbstractFloat}
+    i = (blockIdx().x-1)*blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    ti = typeid[i]
+    halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly; halfLz = T(0.5)*Lz
+    base  = neighbors_index[i]
+    n     = counts[i]
+    bbase, bnb, b1, b2 = _bond_cache(Int32(i), bindex, bflat, bcounts)
+    @inbounds for t in 0:Int(n-1)
+        j = neighbors_flat[base + t + 1]
+        if i < j
+            if _is_bonded_cached(j, bbase, bnb, b1, b2, bflat)
+                continue
+            end
             tj = typeid[j]
             rc = rcut2_pair[ti, tj]
             cutoff2 = rc*rc
@@ -434,55 +639,117 @@ function _collisions_update_after_positions!(st)
     blocks = cld(N, threads)
     if st.rz === nothing
         Lx = st.box2[1]; Ly = st.box2[2]
+        has_bonds = st.bonds !== nothing
         if st.rcut_pair === nothing
             cutoff2 = T(st.pair_lj.rcut) * T(st.pair_lj.rcut)
-            k = CUDA.@cuda launch=false _events2!(st.rx, st.ry, st.typeid,
-                                                  nb.neighbors_index, nb.neighbors_flat, nb.counts,
-                                                  st.coll_prev,
-                                                  st.coll_bins, st.coll_counts,
-                                                  cutoff2, Lx, Ly)
-            k(st.rx, st.ry, st.typeid,
-              nb.neighbors_index, nb.neighbors_flat, nb.counts,
-              st.coll_prev,
-              st.coll_bins, st.coll_counts,
-              cutoff2, Lx, Ly; threads, blocks)
+            if has_bonds
+                k = CUDA.@cuda launch=false _events2_excl!(st.rx, st.ry, st.typeid,
+                                                           nb.neighbors_index, nb.neighbors_flat, nb.counts,
+                                                           st.coll_prev,
+                                                           st.bonds.index, st.bonds.flat, st.bonds.counts,
+                                                           st.coll_bins, st.coll_counts,
+                                                           cutoff2, Lx, Ly)
+                k(st.rx, st.ry, st.typeid,
+                  nb.neighbors_index, nb.neighbors_flat, nb.counts,
+                  st.coll_prev,
+                  st.bonds.index, st.bonds.flat, st.bonds.counts,
+                  st.coll_bins, st.coll_counts,
+                  cutoff2, Lx, Ly; threads, blocks)
+            else
+                k = CUDA.@cuda launch=false _events2!(st.rx, st.ry, st.typeid,
+                                                      nb.neighbors_index, nb.neighbors_flat, nb.counts,
+                                                      st.coll_prev,
+                                                      st.coll_bins, st.coll_counts,
+                                                      cutoff2, Lx, Ly)
+                k(st.rx, st.ry, st.typeid,
+                  nb.neighbors_index, nb.neighbors_flat, nb.counts,
+                  st.coll_prev,
+                  st.coll_bins, st.coll_counts,
+                  cutoff2, Lx, Ly; threads, blocks)
+            end
         else
-            k = CUDA.@cuda launch=false _events2_pair!(st.rx, st.ry, st.typeid,
-                                                       nb.neighbors_index, nb.neighbors_flat, nb.counts,
-                                                       st.coll_prev,
-                                                       st.coll_bins, st.coll_counts,
-                                                       st.rcut_pair, Lx, Ly)
-            k(st.rx, st.ry, st.typeid,
-              nb.neighbors_index, nb.neighbors_flat, nb.counts,
-              st.coll_prev,
-              st.coll_bins, st.coll_counts,
-              st.rcut_pair, Lx, Ly; threads, blocks)
+            if has_bonds
+                k = CUDA.@cuda launch=false _events2_pair_excl!(st.rx, st.ry, st.typeid,
+                                                                nb.neighbors_index, nb.neighbors_flat, nb.counts,
+                                                                st.coll_prev,
+                                                                st.bonds.index, st.bonds.flat, st.bonds.counts,
+                                                                st.coll_bins, st.coll_counts,
+                                                                st.rcut_pair, Lx, Ly)
+                k(st.rx, st.ry, st.typeid,
+                  nb.neighbors_index, nb.neighbors_flat, nb.counts,
+                  st.coll_prev,
+                  st.bonds.index, st.bonds.flat, st.bonds.counts,
+                  st.coll_bins, st.coll_counts,
+                  st.rcut_pair, Lx, Ly; threads, blocks)
+            else
+                k = CUDA.@cuda launch=false _events2_pair!(st.rx, st.ry, st.typeid,
+                                                           nb.neighbors_index, nb.neighbors_flat, nb.counts,
+                                                           st.coll_prev,
+                                                           st.coll_bins, st.coll_counts,
+                                                           st.rcut_pair, Lx, Ly)
+                k(st.rx, st.ry, st.typeid,
+                  nb.neighbors_index, nb.neighbors_flat, nb.counts,
+                  st.coll_prev,
+                  st.coll_bins, st.coll_counts,
+                  st.rcut_pair, Lx, Ly; threads, blocks)
+            end
         end
     else
         Lx = st.box3[1]; Ly = st.box3[2]; Lz = st.box3[3]
+        has_bonds = st.bonds !== nothing
         if st.rcut_pair === nothing
             cutoff2 = T(st.pair_lj.rcut) * T(st.pair_lj.rcut)
-            k = CUDA.@cuda launch=false _events3!(st.rx, st.ry, st.rz, st.typeid,
-                                                  nb.neighbors_index, nb.neighbors_flat, nb.counts,
-                                                  st.coll_prev,
-                                                  st.coll_bins, st.coll_counts,
-                                                  cutoff2, Lx, Ly, Lz)
-            k(st.rx, st.ry, st.rz, st.typeid,
-              nb.neighbors_index, nb.neighbors_flat, nb.counts,
-              st.coll_prev,
-              st.coll_bins, st.coll_counts,
-              cutoff2, Lx, Ly, Lz; threads, blocks)
+            if has_bonds
+                k = CUDA.@cuda launch=false _events3_excl!(st.rx, st.ry, st.rz, st.typeid,
+                                                           nb.neighbors_index, nb.neighbors_flat, nb.counts,
+                                                           st.coll_prev,
+                                                           st.bonds.index, st.bonds.flat, st.bonds.counts,
+                                                           st.coll_bins, st.coll_counts,
+                                                           cutoff2, Lx, Ly, Lz)
+                k(st.rx, st.ry, st.rz, st.typeid,
+                  nb.neighbors_index, nb.neighbors_flat, nb.counts,
+                  st.coll_prev,
+                  st.bonds.index, st.bonds.flat, st.bonds.counts,
+                  st.coll_bins, st.coll_counts,
+                  cutoff2, Lx, Ly, Lz; threads, blocks)
+            else
+                k = CUDA.@cuda launch=false _events3!(st.rx, st.ry, st.rz, st.typeid,
+                                                      nb.neighbors_index, nb.neighbors_flat, nb.counts,
+                                                      st.coll_prev,
+                                                      st.coll_bins, st.coll_counts,
+                                                      cutoff2, Lx, Ly, Lz)
+                k(st.rx, st.ry, st.rz, st.typeid,
+                  nb.neighbors_index, nb.neighbors_flat, nb.counts,
+                  st.coll_prev,
+                  st.coll_bins, st.coll_counts,
+                  cutoff2, Lx, Ly, Lz; threads, blocks)
+            end
         else
-            k = CUDA.@cuda launch=false _events3_pair!(st.rx, st.ry, st.rz, st.typeid,
-                                                       nb.neighbors_index, nb.neighbors_flat, nb.counts,
-                                                       st.coll_prev,
-                                                       st.coll_bins, st.coll_counts,
-                                                       st.rcut_pair, Lx, Ly, Lz)
-            k(st.rx, st.ry, st.rz, st.typeid,
-              nb.neighbors_index, nb.neighbors_flat, nb.counts,
-              st.coll_prev,
-              st.coll_bins, st.coll_counts,
-              st.rcut_pair, Lx, Ly, Lz; threads, blocks)
+            if has_bonds
+                k = CUDA.@cuda launch=false _events3_pair_excl!(st.rx, st.ry, st.rz, st.typeid,
+                                                                nb.neighbors_index, nb.neighbors_flat, nb.counts,
+                                                                st.coll_prev,
+                                                                st.bonds.index, st.bonds.flat, st.bonds.counts,
+                                                                st.coll_bins, st.coll_counts,
+                                                                st.rcut_pair, Lx, Ly, Lz)
+                k(st.rx, st.ry, st.rz, st.typeid,
+                  nb.neighbors_index, nb.neighbors_flat, nb.counts,
+                  st.coll_prev,
+                  st.bonds.index, st.bonds.flat, st.bonds.counts,
+                  st.coll_bins, st.coll_counts,
+                  st.rcut_pair, Lx, Ly, Lz; threads, blocks)
+            else
+                k = CUDA.@cuda launch=false _events3_pair!(st.rx, st.ry, st.rz, st.typeid,
+                                                           nb.neighbors_index, nb.neighbors_flat, nb.counts,
+                                                           st.coll_prev,
+                                                           st.coll_bins, st.coll_counts,
+                                                           st.rcut_pair, Lx, Ly, Lz)
+                k(st.rx, st.ry, st.rz, st.typeid,
+                  nb.neighbors_index, nb.neighbors_flat, nb.counts,
+                  st.coll_prev,
+                  st.coll_bins, st.coll_counts,
+                  st.rcut_pair, Lx, Ly, Lz; threads, blocks)
+            end
         end
     end
     return nothing
