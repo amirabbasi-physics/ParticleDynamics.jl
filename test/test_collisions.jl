@@ -82,3 +82,25 @@ end
     @test cu == Int64[1]
     @test cb == Int64[0]
 end
+
+@testset "Collision Counting 3D pair cutoffs" begin
+    seed_all!(0xC0113)
+    T = Float64
+
+    st = build_tiny3d(
+        N=8, T=T, box=(T(12), T(12), T(12)), cutoff=T(2.5), skin=T(0.3), cap=Int32(32),
+        neigh_interval=2, use_neighborlist=true, nonbonded=:lj, gamma=T(1), temperature=T(0.5)
+    )
+
+    st.typeid .= CuArray(Int32[1, 1, 1, 1, 2, 2, 2, 2])
+    NonEqSimGPU.enable_collision_counting!(st; ntypes=2, bins=:all_pairs)
+    NonEqSimGPU.set_collision_pair_cutoffs!(st, T[1.0 1.1; 1.1 1.2])
+
+    for _ in 1:2
+        Simulation.step!(st, Simulation.velocityverlet(st), T(1e-3); compute_energy=false)
+    end
+
+    counts = NonEqSimGPU.collisions_read_counts!(st)
+    @test length(counts) == 3
+    @test all(c -> c >= 0, counts)
+end

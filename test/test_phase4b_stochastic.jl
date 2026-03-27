@@ -3,6 +3,34 @@
 
     params = ParamsFromExamples.recommended_test_params()
 
+    function exact_free_vv_ou_msd_2d(n_steps::Int, dt::Float64, gamma::Float64,
+                                     mass::Float64, noise_scale::Float64,
+                                     tau::Float64)
+        q = gamma * dt / (2 * mass)
+        a = (1 - q) / (1 + q)
+        b = 1 / (1 + q)
+        rho = tau > 0 ? exp(-dt / tau) : 0.0
+        sigma_beta = tau > 0 ? noise_scale * sqrt(max(1 - rho^2, 0.0)) : noise_scale
+        c = b * dt
+        d = b * dt / (2 * mass)
+        e = b / mass
+
+        A = Matrix{Float64}(undef, 3, 3)
+        A[1, 1] = 1.0; A[1, 2] = c;   A[1, 3] = d * rho
+        A[2, 1] = 0.0; A[2, 2] = a;   A[2, 3] = e * rho
+        A[3, 1] = 0.0; A[3, 2] = 0.0; A[3, 3] = rho
+
+        g = [d * sigma_beta, e * sigma_beta, sigma_beta]
+        Q = g * g'
+        Σ = zeros(3, 3)
+        msd = Vector{Float64}(undef, n_steps)
+        for step in 1:n_steps
+            Σ = A * Σ * transpose(A) + Q
+            msd[step] = 2 * Σ[1, 1]
+        end
+        return msd
+    end
+
     @testset "4B-1 Brownian free diffusion MSD slope" begin
         p = params.brownian
         dt = clamp(Float64(p.dt), 2.0e-4, 5.0e-4)
@@ -289,5 +317,71 @@
         @test isfinite(m_dt4)
         @test e_dt2 < e_dt
         @test e_dt4 < e_dt2
+    end
+
+    @testset "4B-5 Free VV OU MSD matches exact discrete recursion" begin
+        dt = 1.0e-3
+        gamma = 10.0
+        temperature = 0.0
+        tau = 0.25
+        noise_scale = 2.0
+        mass = 1.0
+
+        N = 4096
+        steps = 600
+        sample_stride = 10
+        nside = ceil(Int, sqrt(N))
+        boxL = 2048.0
+
+        st = Simulation.build_simulation(
+            N = N, box = (boxL, boxL),
+            cutoff = 1.0, skin = 0.5, cap = Int32(256), neigh_interval = 50,
+            use_neighborlist = true, epsilon = 0.0, sigma = 1.0,
+            gamma = gamma, temperature = temperature, noise_corr_time = tau, dt = dt,
+            mass = mass, nonbonded = :soft_repulsive, precision = :f64,
+            unwrapped_positions = true
+        )
+
+        rx = Vector{Float64}(undef, N)
+        ry = similar(rx)
+        for i in 1:N
+            ix = (i - 1) % nside
+            iy = (i - 1) ÷ nside
+            rx[i] = (ix + 0.5) * boxL / nside - boxL / 2
+            ry[i] = (iy + 0.5) * boxL / nside - boxL / 2
+        end
+        copyto!(st.rx, rx)
+        copyto!(st.ry, ry)
+        copyto!(st.vx, zeros(Float64, N))
+        copyto!(st.vy, zeros(Float64, N))
+        NonEqSimGPU.NeighborLists.update_neighbors_inplace!(st.nbh, st.rx, st.ry; box = st.box2, step = st.step)
+        Simulation.sync_unwrapped!(st)
+        Filters.set_noise_scale!(st, noise_scale)
+
+        spec = Simulation.velocityverlet(st)
+        rx0 = copy(st.rx_unwrap)
+        ry0 = copy(st.ry_unwrap)
+        msd_exact = exact_free_vv_ou_msd_2d(steps, dt, gamma, mass, noise_scale, tau)
+
+        msd_num = Float64[]
+        msd_ref = Float64[]
+        for step in 1:steps
+            Simulation.step!(st, spec, dt; compute_energy = false)
+            if step % sample_stride == 0
+                push!(msd_num, Float64(CUDA.sum((st.rx_unwrap .- rx0).^2 .+ (st.ry_unwrap .- ry0).^2) / N))
+                push!(msd_ref, msd_exact[step])
+            end
+        end
+
+        @test length(msd_num) >= 20
+        i1 = 5
+        rel_final = abs(msd_num[end] - msd_ref[end]) / msd_ref[end]
+        rel_rms = sqrt(sum((xn - xr)^2 for (xn, xr) in zip(msd_num[i1:end], msd_ref[i1:end])) /
+                       sum(xr^2 for xr in msd_ref[i1:end]))
+
+        @test all(isfinite, msd_num)
+        @test all(isfinite, msd_ref)
+        @test rel_final <= 0.08
+        @test rel_rms <= 0.06
     end
 end

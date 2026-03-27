@@ -415,7 +415,7 @@ function _events3_pair!(
             if (!prev) & cur
                 b = bin_lut[ti, tj]
                 if b >= 0
-                    CUDA.atomic_add!(counts_bins, Int32(b+1), Int64(1))
+                    CUDA.@atomic counts_bins[Int32(b+1)] += Int64(1)
                 end
             end
             contact_prev[base + t + 1] = cur
@@ -458,7 +458,7 @@ function _events3_pair_excl!(
             if (!prev) & cur
                 b = bin_lut[ti, tj]
                 if b >= 0
-                    CUDA.atomic_add!(counts_bins, Int32(b+1), Int64(1))
+                    CUDA.@atomic counts_bins[Int32(b+1)] += Int64(1)
                 end
             end
             contact_prev[base + t + 1] = cur

@@ -8,7 +8,7 @@ using NonEqSimGPU: step!, eulermaruyama
 N = 10000
 L = 125.0
 dt = 2e-7             # small enough to resolve τ and steep forces
-n_steps = 5e7
+n_steps = 1e6
 write_interval = 1e5
 
 function initialize_square_lattice!(st, box::NTuple{2,Real})
