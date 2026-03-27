@@ -3,32 +3,38 @@
 
     params = ParamsFromExamples.recommended_test_params()
 
-    function exact_free_vv_ou_msd_2d(n_steps::Int, dt::Float64, gamma::Float64,
-                                     mass::Float64, noise_scale::Float64,
-                                     tau::Float64)
-        q = gamma * dt / (2 * mass)
-        a = (1 - q) / (1 + q)
-        b = 1 / (1 + q)
-        rho = tau > 0 ? exp(-dt / tau) : 0.0
-        sigma_beta = tau > 0 ? noise_scale * sqrt(max(1 - rho^2, 0.0)) : noise_scale
-        c = b * dt
-        d = b * dt / (2 * mass)
-        e = b / mass
+    function report_D(noise_scale::Float64, tau::Float64, dt::Float64)
+        return noise_scale^2 * tau / dt^2
+    end
 
-        A = Matrix{Float64}(undef, 3, 3)
-        A[1, 1] = 1.0; A[1, 2] = c;   A[1, 3] = d * rho
-        A[2, 1] = 0.0; A[2, 2] = a;   A[2, 3] = e * rho
-        A[3, 1] = 0.0; A[3, 2] = 0.0; A[3, 3] = rho
+    function _resonant(mass::Float64, gamma::Float64, tau::Float64)
+        scale = max(abs(mass), abs(gamma * tau), 1.0)
+        return abs(mass - gamma * tau) <= 1.0e-12 * scale
+    end
 
-        g = [d * sigma_beta, e * sigma_beta, sigma_beta]
-        Q = g * g'
-        Σ = zeros(3, 3)
-        msd = Vector{Float64}(undef, n_steps)
-        for step in 1:n_steps
-            Σ = A * Σ * transpose(A) + Q
-            msd[step] = 2 * Σ[1, 1]
+    function vacf_report_1d(t::Float64, mass::Float64, gamma::Float64,
+                            tau::Float64, D::Float64)
+        t1 = abs(t)
+        if _resonant(mass, gamma, tau)
+            return D / (2 * gamma * mass) *
+                   (1 + (gamma / mass) * t1) * exp(-gamma * t1 / mass)
         end
-        return msd
+        return D / (mass^2 - gamma^2 * tau^2) *
+               ((mass / gamma) * exp(-gamma * t1 / mass) - tau * exp(-t1 / tau))
+    end
+
+    function msd_report_1d(t::Float64, mass::Float64, gamma::Float64,
+                           tau::Float64, D::Float64)
+        if _resonant(mass, gamma, tau)
+            return D / gamma^2 * (2 * t - 3 * tau + (t + 3 * tau) * exp(-t / tau))
+        end
+        pref = 2 * D / (mass^2 - gamma^2 * tau^2)
+        return pref * (
+            (mass^3 / gamma^3) * (exp(-gamma * t / mass) - 1) +
+            (mass^2 / gamma^2) * t -
+            tau^3 * (exp(-t / tau) - 1) -
+            tau^2 * t
+        )
     end
 
     @testset "4B-1 Brownian free diffusion MSD slope" begin
@@ -319,19 +325,21 @@
         @test e_dt4 < e_dt2
     end
 
-    @testset "4B-5 Free VV OU MSD matches exact discrete recursion" begin
+    @testset "4B-5 Free VV OU MSD/VACF match report formulas" begin
         dt = 1.0e-3
-        gamma = 10.0
+        gamma = 100.0
         temperature = 0.0
-        tau = 0.25
+        tau = 2.25
         noise_scale = 2.0
         mass = 1.0
 
-        N = 4096
-        steps = 600
-        sample_stride = 10
+        N = 512
+        burn_steps = 7000
+        steps = 60
+        sample_stride = 20
         nside = ceil(Int, sqrt(N))
         boxL = 2048.0
+        D = report_D(noise_scale, tau, dt)
 
         st = Simulation.build_simulation(
             N = N, box = (boxL, boxL),
@@ -359,29 +367,44 @@
         Filters.set_noise_scale!(st, noise_scale)
 
         spec = Simulation.velocityverlet(st)
+
+        for _ in 1:burn_steps
+            Simulation.step!(st, spec, dt; compute_energy = false)
+        end
+
         rx0 = copy(st.rx_unwrap)
         ry0 = copy(st.ry_unwrap)
-        msd_exact = exact_free_vv_ou_msd_2d(steps, dt, gamma, mass, noise_scale, tau)
+        vx0 = copy(st.vx)
+        vy0 = copy(st.vy)
 
         msd_num = Float64[]
         msd_ref = Float64[]
+        vacf_num = Float64[]
+        vacf_ref = Float64[]
         for step in 1:steps
             Simulation.step!(st, spec, dt; compute_energy = false)
             if step % sample_stride == 0
+                t = step * dt
                 push!(msd_num, Float64(CUDA.sum((st.rx_unwrap .- rx0).^2 .+ (st.ry_unwrap .- ry0).^2) / N))
-                push!(msd_ref, msd_exact[step])
+                push!(msd_ref, 2 * msd_report_1d(t, mass, gamma, tau, D))
+                push!(vacf_num, Float64(CUDA.sum(vx0 .* st.vx .+ vy0 .* st.vy) / N))
+                push!(vacf_ref, 2 * vacf_report_1d(t, mass, gamma, tau, D))
             end
         end
 
-        @test length(msd_num) >= 20
-        i1 = 5
-        rel_final = abs(msd_num[end] - msd_ref[end]) / msd_ref[end]
-        rel_rms = sqrt(sum((xn - xr)^2 for (xn, xr) in zip(msd_num[i1:end], msd_ref[i1:end])) /
-                       sum(xr^2 for xr in msd_ref[i1:end]))
+        @test length(msd_num) >= 3
+        rel_msd = [abs(xn - xr) / max(abs(xr), 1.0e-12) for (xn, xr) in zip(msd_num, msd_ref)]
+        rel_vacf = [abs(xn - xr) / max(abs(xr), 1.0e-12) for (xn, xr) in zip(vacf_num, vacf_ref)]
+        mean_rel_msd = sum(rel_msd) / length(rel_msd)
+        mean_rel_vacf = sum(rel_vacf) / length(rel_vacf)
 
         @test all(isfinite, msd_num)
         @test all(isfinite, msd_ref)
-        @test rel_final <= 0.08
-        @test rel_rms <= 0.06
+        @test all(isfinite, vacf_num)
+        @test all(isfinite, vacf_ref)
+        @test mean_rel_msd <= 0.05
+        @test maximum(rel_msd) <= 0.08
+        @test mean_rel_vacf <= 0.05
+        @test maximum(rel_vacf) <= 0.08
     end
 end
