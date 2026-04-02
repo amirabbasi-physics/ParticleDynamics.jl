@@ -70,4 +70,38 @@ using GSDFiles
             GSDFiles.close(r)
         end
     end
+
+    mktempdir() do tmp
+        path = joinpath(tmp, "tiny_traj_virial.gsd")
+
+        st = build_tiny2d(
+            N=8, T=Float32, box=(20f0, 20f0), cutoff=2.5f0, skin=0.3f0, cap=Int32(32),
+            neigh_interval=1, use_neighborlist=true, nonbonded=:wca, gamma=1f0, temperature=0f0
+        )
+
+        step!(st, 1f-4; compute_energy=true)
+        expected_virial = Array(st.virial_tensor)
+
+        h = NonEqSimGPU.gsd_open(path)
+        try
+            NonEqSimGPU.write_gsd_frame!(h, st; step=st.step, types_names=["A"], write_virial=true)
+        finally
+            NonEqSimGPU.gsd_close(h)
+        end
+
+        frame = NonEqSimGPU.read_gsd_frame!(path)
+        @test haskey(frame.particle_properties, :virial)
+        got_virial = frame.particle_properties[:virial]
+        @test size(got_virial) == size(expected_virial)
+        @test isapprox(got_virial, expected_virial; atol=1e-6, rtol=1e-6)
+
+        r = GSDFiles.open_read(path)
+        try
+            raw = GSDFiles.read_frame(r, 1)
+            @test hasproperty(raw.particles, :virial)
+            @test isapprox(raw.particles.virial, expected_virial; atol=1e-6, rtol=1e-6)
+        finally
+            GSDFiles.close(r)
+        end
+    end
 end
