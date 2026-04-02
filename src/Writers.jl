@@ -42,7 +42,8 @@ when destructured/iterated, while exposing richer metadata via fields:
 - `forceM`: optional force matrix (N×3, same precision as positions).
 - `particle_properties`: dictionary with optional particle properties
   (mass, charge, diameter, body, orientation, etc) converted to sensible
-  Julia arrays; custom `particles/property/*` chunks appear under the
+  Julia arrays. When present, custom force/virial chunks are also exposed as
+  `:force` and `:virial`; other `particles/property/*` chunks appear under the
   `:property` key.
 - `per_type_properties`: dictionary for `particles/type_*` chunks
   (e.g. `:shapes` for per-type shape JSON blobs).
@@ -496,6 +497,13 @@ end
     return hcat(X, Y, Z)
 end
 
+@inline function _soa_to_tensormat(V::CuArray{T,2}) where {T<:AbstractFloat}
+    M = Matrix{T}(undef, size(V)...)
+    copyto!(M, V)
+    CUDA.synchronize()
+    return M
+end
+
 # -- public API -----------------------------------------------------------
 
 """
@@ -508,11 +516,18 @@ Usage (2D):
 
 Usage (3D) is identical; z-components are written when present. Set
 `write_unwrapped=true` to store unwrapped positions in the custom
-`particles/position_unwrapped` chunk.
+`particles/position_unwrapped` chunk. Set `write_virial=true` to store the
+current total per-particle configurational virial tensor from `st.virial_tensor`
+using the package's native component order:
+- 2D: `(xx, yy, xy)`
+- 3D: `(xx, yy, zz, xy, xz, yz)`
+
+Virial buffers are refreshed by force evaluations with `compute_energy=true`;
+the writer dumps whatever is currently stored in `st.virial_tensor`.
 """
 function write_gsd_frame!(h, st; diameter=1.0, types_names=["A"], step::Int=0,
                           write_forces::Bool=false, write_unwrapped::Bool=false,
-                          sync_on_write::Bool=false)
+                          write_virial::Bool=false, sync_on_write::Bool=false)
     # Element type used for numeric conversions
     T = eltype(st.rx)
     N = length(st.rx)
@@ -530,6 +545,10 @@ function write_gsd_frame!(h, st; diameter=1.0, types_names=["A"], step::Int=0,
     if write_forces
         frcM = st.fz === nothing ? _soa_to_frcmat(st.fx, st.fy) :
                                    _soa_to_frcmat(st.fx, st.fy, st.fz)
+    end
+
+    if write_virial
+        virialM = _soa_to_tensormat(st.virial_tensor)
     end
 
     if write_unwrapped
@@ -586,6 +605,10 @@ function write_gsd_frame!(h, st; diameter=1.0, types_names=["A"], step::Int=0,
     # Forces: default is false for both Brownian and Langevin; enable only if user asks
     if write_forces
         GSDFiles.write_particles_force!(h, T.(frcM))
+    end
+
+    if write_virial
+        GSDFiles.write_particles_virial!(h, T.(virialM))
     end
 
     if write_unwrapped
@@ -924,6 +947,35 @@ function read_gsd_frame!(file_path::AbstractString; step::Union{Nothing,Integer}
 
                 if local_forceM !== nothing
                     particle_props[:force] = local_forceM
+                end
+
+                vir_e = GSDFiles._maybe_one_of(r, ents, [
+                    "particles/virial",
+                    "particles/property/virial",
+                ])
+                local_virialM = nothing
+                if vir_e !== nothing
+                    virial_raw = read_chunk(vir_e)
+                    name_vir = r.names[Int(vir_e.id)+1]
+                    if virial_raw isa AbstractMatrix
+                        local_virialM = Matrix{T}(virial_raw)
+                    elseif virial_raw isa AbstractVector
+                        if length(virial_raw) == 3N
+                            reshaped = reshape(virial_raw, (3, N))'
+                            local_virialM = Matrix{T}(reshaped)
+                        elseif length(virial_raw) == 6N
+                            reshaped = reshape(virial_raw, (6, N))'
+                            local_virialM = Matrix{T}(reshaped)
+                        else
+                            @warn "Unexpected virial chunk shape; skipping virial" file=file_path frame_index=idx chunk=name_vir
+                        end
+                    else
+                        @warn "Unsupported virial chunk type; skipping virial" file=file_path frame_index=idx chunk=name_vir
+                    end
+                    startswith(name_vir, "particles/property/") && push!(property_skip, name_vir)
+                end
+                if local_virialM !== nothing
+                    particle_props[:virial] = local_virialM
                 end
 
                 property_data = Dict{Symbol,Any}()
