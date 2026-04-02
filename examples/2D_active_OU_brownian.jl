@@ -7,9 +7,9 @@ using NonEqSimGPU: step!, eulermaruyama
 
 N = 10000
 L = 125.0
-dt = 2e-7             # small enough to resolve τ and steep forces
-n_steps = 1e6
-write_interval = 1e5
+dt = 2e-4             # small enough to resolve τ and steep forces
+n_steps = 1e5
+write_interval = 1e4
 
 function initialize_square_lattice!(st, box::NTuple{2,Real})
     N = length(st.rx)
@@ -31,9 +31,9 @@ end
 
 # Fodor et al. parameters (PRL 117, 038103)
 gamma = 1.0f0                # mobility μ = 1/γ = 1
-temperature = 100.0f0        # D = 100 => T = D when γ = 1
+temperature = 0.0      # D = 100 => T = D when γ = 1
 corr_time = 100.0           # persistence time τ
-
+active_impulse = 10.0
 # Use the steep short-range repulsion from the paper (A = 100, a = 2). Approximate with soft_repulsive.
 epsilon = 1.0e6
 sigma = 1.0
@@ -57,6 +57,7 @@ st = build_simulation(
 
 initialize_square_lattice!(st, (L, L))
 
+Filters.set_noise_scale!(st, active_impulse)
 spec = eulermaruyama(st)
 
 gsd_path = joinpath(@__DIR__, "traj2d_active_OU_bd.gsd")

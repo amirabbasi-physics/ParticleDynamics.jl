@@ -21,6 +21,20 @@ export lj_forces_soa!, lj_forces_soa_noE!,
     return dx
 end
 
+# Row-wise neighbor kernels visit each physical pair twice, once from each
+# endpoint. Store half the dyadic contribution per row so the particle-summed
+# virial equals the exact pairwise configurational virial.
+@inline function _half_virial2(dx::T, dy::T, fx::T, fy::T) where {T<:AbstractFloat}
+    half = T(0.5)
+    return half * dx * fx, half * dy * fy, half * dx * fy
+end
+
+@inline function _half_virial3(dx::T, dy::T, dz::T, fx::T, fy::T, fz::T) where {T<:AbstractFloat}
+    half = T(0.5)
+    return half * dx * fx, half * dy * fy, half * dz * fz,
+           half * dx * fy, half * dx * fz, half * dy * fz
+end
+
 # Lennard-Jones, returns force components and pair energy
 @inline function lj_pair_2d(dx::T, dy::T, r2::T, ϵ::T, σ::T) where {T<:AbstractFloat}
     invr2 = one(T) / r2
@@ -63,6 +77,34 @@ function _lj2_allpairs_kernel!(
     return
 end
 
+function _lj2_allpairs_kernel_virial!(
+    rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
+    fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, Epot::CuDeviceVector{T}, V::CuDeviceMatrix{T},
+    Lx::T, Ly::T, halfLx::T, halfLy::T,
+    ϵ::T, σ::T, cutoff2::T
+) where {T<:AbstractFloat}
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    xi = rx[i]; yi = ry[i]
+    accx = zero(T); accy = zero(T); eacc = zero(T)
+    vxx = zero(T); vyy = zero(T); vxy = zero(T)
+    @inbounds for j in 1:N
+        dx = mic_fast(xi - rx[j], halfLx, Lx)
+        dy = mic_fast(yi - ry[j], halfLy, Ly)
+        r2 = muladd(dx, dx, dy*dy)
+        if (r2 > zero(T)) & (r2 < cutoff2)
+            fxij, fyij, ep = lj_pair_2d(dx, dy, r2, ϵ, σ)
+            accx += fxij; accy += fyij
+            eacc += T(0.5) * ep
+            dvxx, dvyy, dvxy = _half_virial2(dx, dy, fxij, fyij)
+            vxx += dvxx; vyy += dvyy; vxy += dvxy
+        end
+    end
+    fx[i] = accx; fy[i] = accy; Epot[i] = eacc
+    V[i, 1] = vxx; V[i, 2] = vyy; V[i, 3] = vxy
+    return
+end
+
 function _lj3_allpairs_kernel!(
     rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
     fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, fz::CuDeviceVector{T}, Epot::CuDeviceVector{T},
@@ -85,6 +127,37 @@ function _lj3_allpairs_kernel!(
         end
     end
     fx[i] = accx; fy[i] = accy; fz[i] = accz; Epot[i] = eacc
+    return
+end
+
+function _lj3_allpairs_kernel_virial!(
+    rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
+    fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, fz::CuDeviceVector{T}, Epot::CuDeviceVector{T}, V::CuDeviceMatrix{T},
+    Lx::T, Ly::T, Lz::T, halfLx::T, halfLy::T, halfLz::T,
+    ϵ::T, σ::T, cutoff2::T
+) where {T<:AbstractFloat}
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    xi = rx[i]; yi = ry[i]; zi = rz[i]
+    accx = zero(T); accy = zero(T); accz = zero(T); eacc = zero(T)
+    vxx = zero(T); vyy = zero(T); vzz = zero(T); vxy = zero(T); vxz = zero(T); vyz = zero(T)
+    @inbounds for j in 1:N
+        dx = mic_fast(xi - rx[j], halfLx, Lx)
+        dy = mic_fast(yi - ry[j], halfLy, Ly)
+        dz = mic_fast(zi - rz[j], halfLz, Lz)
+        r2 = muladd(dx, dx, muladd(dy, dy, dz*dz))
+        if (r2 > zero(T)) & (r2 < cutoff2)
+            fxij, fyij, fzij, ep = lj_pair_3d(dx, dy, dz, r2, ϵ, σ)
+            accx += fxij; accy += fyij; accz += fzij
+            eacc += T(0.5) * ep
+            dvxx, dvyy, dvzz, dvxy, dvxz, dvyz = _half_virial3(dx, dy, dz, fxij, fyij, fzij)
+            vxx += dvxx; vyy += dvyy; vzz += dvzz
+            vxy += dvxy; vxz += dvxz; vyz += dvyz
+        end
+    end
+    fx[i] = accx; fy[i] = accy; fz[i] = accz; Epot[i] = eacc
+    V[i, 1] = vxx; V[i, 2] = vyy; V[i, 3] = vzz
+    V[i, 4] = vxy; V[i, 5] = vxz; V[i, 6] = vyz
     return
 end
 
@@ -172,6 +245,36 @@ function _lj2_allpairs_kernel_excl!(
     return
 end
 
+function _lj2_allpairs_kernel_excl_virial!(
+    rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
+    fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, Epot::CuDeviceVector{T}, V::CuDeviceMatrix{T},
+    bindex::CuDeviceVector{Int32}, bflat::CuDeviceVector{Int32}, bcounts::CuDeviceVector{Int32},
+    Lx::T, Ly::T, halfLx::T, halfLy::T,
+    ϵ::T, σ::T, cutoff2::T
+) where {T<:AbstractFloat}
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    xi = rx[i]; yi = ry[i]
+    accx = zero(T); accy = zero(T); eacc = zero(T)
+    vxx = zero(T); vyy = zero(T); vxy = zero(T)
+    @inbounds for j in 1:N
+        if _is_bonded(Int32(i), Int32(j), bindex, bflat, bcounts); continue; end
+        dx = mic_fast(xi - rx[j], halfLx, Lx)
+        dy = mic_fast(yi - ry[j], halfLy, Ly)
+        r2 = muladd(dx, dx, dy*dy)
+        if (r2 > zero(T)) & (r2 < cutoff2)
+            fxij, fyij, ep = lj_pair_2d(dx, dy, r2, ϵ, σ)
+            accx += fxij; accy += fyij
+            eacc += T(0.5) * ep
+            dvxx, dvyy, dvxy = _half_virial2(dx, dy, fxij, fyij)
+            vxx += dvxx; vyy += dvyy; vxy += dvxy
+        end
+    end
+    fx[i] = accx; fy[i] = accy; Epot[i] = eacc
+    V[i, 1] = vxx; V[i, 2] = vyy; V[i, 3] = vxy
+    return
+end
+
 function _lj3_allpairs_kernel_excl!(
     rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
     fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, fz::CuDeviceVector{T}, Epot::CuDeviceVector{T},
@@ -196,6 +299,39 @@ function _lj3_allpairs_kernel_excl!(
         end
     end
     fx[i] = accx; fy[i] = accy; fz[i] = accz; Epot[i] = eacc
+    return
+end
+
+function _lj3_allpairs_kernel_excl_virial!(
+    rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
+    fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, fz::CuDeviceVector{T}, Epot::CuDeviceVector{T}, V::CuDeviceMatrix{T},
+    bindex::CuDeviceVector{Int32}, bflat::CuDeviceVector{Int32}, bcounts::CuDeviceVector{Int32},
+    Lx::T, Ly::T, Lz::T, halfLx::T, halfLy::T, halfLz::T,
+    ϵ::T, σ::T, cutoff2::T
+) where {T<:AbstractFloat}
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    xi = rx[i]; yi = ry[i]; zi = rz[i]
+    accx = zero(T); accy = zero(T); accz = zero(T); eacc = zero(T)
+    vxx = zero(T); vyy = zero(T); vzz = zero(T); vxy = zero(T); vxz = zero(T); vyz = zero(T)
+    @inbounds for j in 1:N
+        if _is_bonded(Int32(i), Int32(j), bindex, bflat, bcounts); continue; end
+        dx = mic_fast(xi - rx[j], halfLx, Lx)
+        dy = mic_fast(yi - ry[j], halfLy, Ly)
+        dz = mic_fast(zi - rz[j], halfLz, Lz)
+        r2 = muladd(dx, dx, muladd(dy, dy, dz*dz))
+        if (r2 > zero(T)) & (r2 < cutoff2)
+            fxij, fyij, fzij, ep = lj_pair_3d(dx, dy, dz, r2, ϵ, σ)
+            accx += fxij; accy += fyij; accz += fzij
+            eacc += T(0.5) * ep
+            dvxx, dvyy, dvzz, dvxy, dvxz, dvyz = _half_virial3(dx, dy, dz, fxij, fyij, fzij)
+            vxx += dvxx; vyy += dvyy; vzz += dvzz
+            vxy += dvxy; vxz += dvxz; vyz += dvyz
+        end
+    end
+    fx[i] = accx; fy[i] = accy; fz[i] = accz; Epot[i] = eacc
+    V[i, 1] = vxx; V[i, 2] = vyy; V[i, 3] = vzz
+    V[i, 4] = vxy; V[i, 5] = vxz; V[i, 6] = vyz
     return
 end
 
@@ -305,6 +441,18 @@ function lj_forces_soa!(rx::CuArray{T,1}, ry::CuArray{T,1},
     return nothing
 end
 
+function lj_forces_soa!(rx::CuArray{T,1}, ry::CuArray{T,1},
+                        fx::CuArray{T,1}, fy::CuArray{T,1}, Epot::CuArray{T,1}, V::CuArray{T,2},
+                        ::NeighborLists.AllPairsNeighborMatrix{T},
+                        box::Definitions.Box2{T}, params::Definitions.LJParams{T}) where {T<:AbstractFloat}
+    N = length(rx); threads = (N < 100_000) ? 128 : 256; blocks = cld(N, threads)
+    cutoff2 = params.rcut * params.rcut
+    Lx = box[1]; Ly = box[2]; halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly
+    k = CUDA.@cuda launch=false _lj2_allpairs_kernel_virial!(rx, ry, fx, fy, Epot, V, Lx, Ly, halfLx, halfLy, params.ϵ, params.σ, cutoff2)
+    k(rx, ry, fx, fy, Epot, V, Lx, Ly, halfLx, halfLy, params.ϵ, params.σ, cutoff2; threads, blocks)
+    return nothing
+end
+
 function lj_forces_soa!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
                         fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1}, Epot::CuArray{T,1},
                         ::NeighborLists.AllPairsNeighborMatrix{T},
@@ -315,6 +463,19 @@ function lj_forces_soa!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly; halfLz = T(0.5)*Lz
     k = CUDA.@cuda launch=false _lj3_allpairs_kernel!(rx, ry, rz, fx, fy, fz, Epot, Lx, Ly, Lz, halfLx, halfLy, halfLz, params.ϵ, params.σ, cutoff2)
     k(rx, ry, rz, fx, fy, fz, Epot, Lx, Ly, Lz, halfLx, halfLy, halfLz, params.ϵ, params.σ, cutoff2; threads, blocks)
+    return nothing
+end
+
+function lj_forces_soa!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
+                        fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1}, Epot::CuArray{T,1}, V::CuArray{T,2},
+                        ::NeighborLists.AllPairsNeighborMatrix{T},
+                        box::Definitions.Box3{T}, params::Definitions.LJParams{T}) where {T<:AbstractFloat}
+    N = length(rx); threads = (N < 100_000) ? 128 : 256; blocks = cld(N, threads)
+    cutoff2 = params.rcut * params.rcut
+    Lx = box[1]; Ly = box[2]; Lz = box[3]
+    halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly; halfLz = T(0.5)*Lz
+    k = CUDA.@cuda launch=false _lj3_allpairs_kernel_virial!(rx, ry, rz, fx, fy, fz, Epot, V, Lx, Ly, Lz, halfLx, halfLy, halfLz, params.ϵ, params.σ, cutoff2)
+    k(rx, ry, rz, fx, fy, fz, Epot, V, Lx, Ly, Lz, halfLx, halfLy, halfLz, params.ϵ, params.σ, cutoff2; threads, blocks)
     return nothing
 end
 
@@ -362,6 +523,18 @@ function lj_forces_soa_excl!(rx::CuArray{T,1}, ry::CuArray{T,1},
     return nothing
 end
 
+function lj_forces_soa_excl!(rx::CuArray{T,1}, ry::CuArray{T,1},
+                             fx::CuArray{T,1}, fy::CuArray{T,1}, Epot::CuArray{T,1}, V::CuArray{T,2},
+                             ::NeighborLists.AllPairsNeighborMatrix{T}, bonds::BondedForces.BondList,
+                             box::Definitions.Box2{T}, params::Definitions.LJParams{T}) where {T<:AbstractFloat}
+    N = length(rx); threads = (N < 100_000) ? 128 : 256; blocks = cld(N, threads)
+    cutoff2 = params.rcut * params.rcut
+    Lx = box[1]; Ly = box[2]; halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly
+    k = CUDA.@cuda launch=false _lj2_allpairs_kernel_excl_virial!(rx, ry, fx, fy, Epot, V, bonds.index, bonds.flat, bonds.counts, Lx, Ly, halfLx, halfLy, params.ϵ, params.σ, cutoff2)
+    k(rx, ry, fx, fy, Epot, V, bonds.index, bonds.flat, bonds.counts, Lx, Ly, halfLx, halfLy, params.ϵ, params.σ, cutoff2; threads, blocks)
+    return nothing
+end
+
 function lj_forces_soa_excl!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
                              fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1}, Epot::CuArray{T,1},
                              ::NeighborLists.AllPairsNeighborMatrix{T}, bonds::BondedForces.BondList,
@@ -372,6 +545,19 @@ function lj_forces_soa_excl!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly; halfLz = T(0.5)*Lz
     k = CUDA.@cuda launch=false _lj3_allpairs_kernel_excl!(rx, ry, rz, fx, fy, fz, Epot, bonds.index, bonds.flat, bonds.counts, Lx, Ly, Lz, halfLx, halfLy, halfLz, params.ϵ, params.σ, cutoff2)
     k(rx, ry, rz, fx, fy, fz, Epot, bonds.index, bonds.flat, bonds.counts, Lx, Ly, Lz, halfLx, halfLy, halfLz, params.ϵ, params.σ, cutoff2; threads, blocks)
+    return nothing
+end
+
+function lj_forces_soa_excl!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
+                             fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1}, Epot::CuArray{T,1}, V::CuArray{T,2},
+                             ::NeighborLists.AllPairsNeighborMatrix{T}, bonds::BondedForces.BondList,
+                             box::Definitions.Box3{T}, params::Definitions.LJParams{T}) where {T<:AbstractFloat}
+    N = length(rx); threads = (N < 100_000) ? 128 : 256; blocks = cld(N, threads)
+    cutoff2 = params.rcut * params.rcut
+    Lx = box[1]; Ly = box[2]; Lz = box[3]
+    halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly; halfLz = T(0.5)*Lz
+    k = CUDA.@cuda launch=false _lj3_allpairs_kernel_excl_virial!(rx, ry, rz, fx, fy, fz, Epot, V, bonds.index, bonds.flat, bonds.counts, Lx, Ly, Lz, halfLx, halfLy, halfLz, params.ϵ, params.σ, cutoff2)
+    k(rx, ry, rz, fx, fy, fz, Epot, V, bonds.index, bonds.flat, bonds.counts, Lx, Ly, Lz, halfLx, halfLy, halfLz, params.ϵ, params.σ, cutoff2; threads, blocks)
     return nothing
 end
 
@@ -432,6 +618,40 @@ function _wca2_allpairs_kernel!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
     return
 end
 
+function _wca2_allpairs_kernel_virial!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
+    fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, Epot::CuDeviceVector{T}, V::CuDeviceMatrix{T},
+    Lx::T, Ly::T, halfLx::T, halfLy::T, ϵ::T, σ::T) where {T<:AbstractFloat}
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    xi = rx[i]; yi = ry[i]
+    accx = zero(T); accy = zero(T); eacc = zero(T)
+    vxx = zero(T); vyy = zero(T); vxy = zero(T)
+    rc2 = (T(1.122462048309373) * σ)^2
+    @inbounds for j in 1:N
+        dx = mic_fast(xi - rx[j], halfLx, Lx)
+        dy = mic_fast(yi - ry[j], halfLy, Ly)
+        r2 = muladd(dx, dx, dy*dy)
+        if (r2 > zero(T)) & (r2 < rc2)
+            invr2 = one(T) / r2
+            s2    = (σ*σ) * invr2
+            s6    = s2*s2*s2
+            s12   = s6*s6
+            f_over_r = T(24)*ϵ*(T(2)*s12 - s6)*invr2
+            fxij = f_over_r * dx
+            fyij = f_over_r * dy
+            accx += fxij
+            accy += fyij
+            ep = T(4)*ϵ*(s12 - s6) + ϵ
+            eacc += T(0.5) * ep
+            dvxx, dvyy, dvxy = _half_virial2(dx, dy, fxij, fyij)
+            vxx += dvxx; vyy += dvyy; vxy += dvxy
+        end
+    end
+    fx[i] = accx; fy[i] = accy; Epot[i] = eacc
+    V[i, 1] = vxx; V[i, 2] = vyy; V[i, 3] = vxy
+    return
+end
+
 function _wca3_allpairs_kernel!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
     fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, fz::CuDeviceVector{T}, Epot::CuDeviceVector{T},
     Lx::T, Ly::T, Lz::T, halfLx::T, halfLy::T, halfLz::T, ϵ::T, σ::T) where {T<:AbstractFloat}
@@ -459,6 +679,45 @@ function _wca3_allpairs_kernel!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz
         end
     end
     fx[i] = accx; fy[i] = accy; fz[i] = accz; Epot[i] = eacc
+    return
+end
+
+function _wca3_allpairs_kernel_virial!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
+    fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, fz::CuDeviceVector{T}, Epot::CuDeviceVector{T}, V::CuDeviceMatrix{T},
+    Lx::T, Ly::T, Lz::T, halfLx::T, halfLy::T, halfLz::T, ϵ::T, σ::T) where {T<:AbstractFloat}
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    xi = rx[i]; yi = ry[i]; zi = rz[i]
+    accx = zero(T); accy = zero(T); accz = zero(T); eacc = zero(T)
+    vxx = zero(T); vyy = zero(T); vzz = zero(T); vxy = zero(T); vxz = zero(T); vyz = zero(T)
+    rc2 = (T(1.122462048309373) * σ)^2
+    @inbounds for j in 1:N
+        dx = mic_fast(xi - rx[j], halfLx, Lx)
+        dy = mic_fast(yi - ry[j], halfLy, Ly)
+        dz = mic_fast(zi - rz[j], halfLz, Lz)
+        r2 = muladd(dx, dx, muladd(dy, dy, dz*dz))
+        if (r2 > zero(T)) & (r2 < rc2)
+            invr2 = one(T) / r2
+            s2    = (σ*σ) * invr2
+            s6    = s2*s2*s2
+            s12   = s6*s6
+            f_over_r = T(24)*ϵ*(T(2)*s12 - s6)*invr2
+            fxij = f_over_r * dx
+            fyij = f_over_r * dy
+            fzij = f_over_r * dz
+            accx += fxij
+            accy += fyij
+            accz += fzij
+            ep = T(4)*ϵ*(s12 - s6) + ϵ
+            eacc += T(0.5) * ep
+            dvxx, dvyy, dvzz, dvxy, dvxz, dvyz = _half_virial3(dx, dy, dz, fxij, fyij, fzij)
+            vxx += dvxx; vyy += dvyy; vzz += dvzz
+            vxy += dvxy; vxz += dvxz; vyz += dvyz
+        end
+    end
+    fx[i] = accx; fy[i] = accy; fz[i] = accz; Epot[i] = eacc
+    V[i, 1] = vxx; V[i, 2] = vyy; V[i, 3] = vzz
+    V[i, 4] = vxy; V[i, 5] = vxz; V[i, 6] = vyz
     return
 end
 
@@ -492,6 +751,42 @@ function _wca2_allpairs_kernel_excl!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T
     return
 end
 
+function _wca2_allpairs_kernel_excl_virial!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
+    fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, Epot::CuDeviceVector{T}, V::CuDeviceMatrix{T},
+    bindex::CuDeviceVector{Int32}, bflat::CuDeviceVector{Int32}, bcounts::CuDeviceVector{Int32},
+    Lx::T, Ly::T, halfLx::T, halfLy::T, ϵ::T, σ::T) where {T<:AbstractFloat}
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    xi = rx[i]; yi = ry[i]
+    accx = zero(T); accy = zero(T); eacc = zero(T)
+    vxx = zero(T); vyy = zero(T); vxy = zero(T)
+    rc2 = (T(1.122462048309373) * σ)^2
+    @inbounds for j in 1:N
+        if _is_bonded(Int32(i), Int32(j), bindex, bflat, bcounts); continue; end
+        dx = mic_fast(xi - rx[j], halfLx, Lx)
+        dy = mic_fast(yi - ry[j], halfLy, Ly)
+        r2 = muladd(dx, dx, dy*dy)
+        if (r2 > zero(T)) & (r2 < rc2)
+            invr2 = one(T) / r2
+            s2    = (σ*σ) * invr2
+            s6    = s2*s2*s2
+            s12   = s6*s6
+            f_over_r = T(24)*ϵ*(T(2)*s12 - s6)*invr2
+            fxij = f_over_r * dx
+            fyij = f_over_r * dy
+            accx += fxij
+            accy += fyij
+            ep = T(4)*ϵ*(s12 - s6) + ϵ
+            eacc += T(0.5) * ep
+            dvxx, dvyy, dvxy = _half_virial2(dx, dy, fxij, fyij)
+            vxx += dvxx; vyy += dvyy; vxy += dvxy
+        end
+    end
+    fx[i] = accx; fy[i] = accy; Epot[i] = eacc
+    V[i, 1] = vxx; V[i, 2] = vyy; V[i, 3] = vxy
+    return
+end
+
 function _wca3_allpairs_kernel_excl!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
     fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, fz::CuDeviceVector{T}, Epot::CuDeviceVector{T},
     bindex::CuDeviceVector{Int32}, bflat::CuDeviceVector{Int32}, bcounts::CuDeviceVector{Int32},
@@ -521,6 +816,47 @@ function _wca3_allpairs_kernel_excl!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T
         end
     end
     fx[i] = accx; fy[i] = accy; fz[i] = accz; Epot[i] = eacc
+    return
+end
+
+function _wca3_allpairs_kernel_excl_virial!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
+    fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, fz::CuDeviceVector{T}, Epot::CuDeviceVector{T}, V::CuDeviceMatrix{T},
+    bindex::CuDeviceVector{Int32}, bflat::CuDeviceVector{Int32}, bcounts::CuDeviceVector{Int32},
+    Lx::T, Ly::T, Lz::T, halfLx::T, halfLy::T, halfLz::T, ϵ::T, σ::T) where {T<:AbstractFloat}
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    xi = rx[i]; yi = ry[i]; zi = rz[i]
+    accx = zero(T); accy = zero(T); accz = zero(T); eacc = zero(T)
+    vxx = zero(T); vyy = zero(T); vzz = zero(T); vxy = zero(T); vxz = zero(T); vyz = zero(T)
+    rc2 = (T(1.122462048309373) * σ)^2
+    @inbounds for j in 1:N
+        if _is_bonded(Int32(i), Int32(j), bindex, bflat, bcounts); continue; end
+        dx = mic_fast(xi - rx[j], halfLx, Lx)
+        dy = mic_fast(yi - ry[j], halfLy, Ly)
+        dz = mic_fast(zi - rz[j], halfLz, Lz)
+        r2 = muladd(dx, dx, muladd(dy, dy, dz*dz))
+        if (r2 > zero(T)) & (r2 < rc2)
+            invr2 = one(T) / r2
+            s2    = (σ*σ) * invr2
+            s6    = s2*s2*s2
+            s12   = s6*s6
+            f_over_r = T(24)*ϵ*(T(2)*s12 - s6)*invr2
+            fxij = f_over_r * dx
+            fyij = f_over_r * dy
+            fzij = f_over_r * dz
+            accx += fxij
+            accy += fyij
+            accz += fzij
+            ep = T(4)*ϵ*(s12 - s6) + ϵ
+            eacc += T(0.5) * ep
+            dvxx, dvyy, dvzz, dvxy, dvxz, dvyz = _half_virial3(dx, dy, dz, fxij, fyij, fzij)
+            vxx += dvxx; vyy += dvyy; vzz += dvzz
+            vxy += dvxy; vxz += dvxz; vyz += dvyz
+        end
+    end
+    fx[i] = accx; fy[i] = accy; fz[i] = accz; Epot[i] = eacc
+    V[i, 1] = vxx; V[i, 2] = vyy; V[i, 3] = vzz
+    V[i, 4] = vxy; V[i, 5] = vxz; V[i, 6] = vyz
     return
 end
 
@@ -655,6 +991,17 @@ function wca_forces_soa!(rx::CuArray{T,1}, ry::CuArray{T,1},
     return nothing
 end
 
+function wca_forces_soa!(rx::CuArray{T,1}, ry::CuArray{T,1},
+                        fx::CuArray{T,1}, fy::CuArray{T,1}, Epot::CuArray{T,1}, V::CuArray{T,2},
+                        ::NeighborLists.AllPairsNeighborMatrix{T},
+                        box::Definitions.Box2{T}, params::Definitions.LJParams{T}) where {T<:AbstractFloat}
+    N = length(rx); threads = (N < 100_000) ? 128 : 256; blocks = cld(N, threads)
+    Lx = box[1]; Ly = box[2]; halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly
+    k = CUDA.@cuda launch=false _wca2_allpairs_kernel_virial!(rx, ry, fx, fy, Epot, V, Lx, Ly, halfLx, halfLy, params.ϵ, params.σ)
+    k(rx, ry, fx, fy, Epot, V, Lx, Ly, halfLx, halfLy, params.ϵ, params.σ; threads, blocks)
+    return nothing
+end
+
 function wca_forces_soa!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
                         fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1}, Epot::CuArray{T,1},
                         ::NeighborLists.AllPairsNeighborMatrix{T},
@@ -664,6 +1011,18 @@ function wca_forces_soa!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly; halfLz = T(0.5)*Lz
     k = CUDA.@cuda launch=false _wca3_allpairs_kernel!(rx, ry, rz, fx, fy, fz, Epot, Lx, Ly, Lz, halfLx, halfLy, halfLz, params.ϵ, params.σ)
     k(rx, ry, rz, fx, fy, fz, Epot, Lx, Ly, Lz, halfLx, halfLy, halfLz, params.ϵ, params.σ; threads, blocks)
+    return nothing
+end
+
+function wca_forces_soa!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
+                        fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1}, Epot::CuArray{T,1}, V::CuArray{T,2},
+                        ::NeighborLists.AllPairsNeighborMatrix{T},
+                        box::Definitions.Box3{T}, params::Definitions.LJParams{T}) where {T<:AbstractFloat}
+    N = length(rx); threads = (N < 100_000) ? 128 : 256; blocks = cld(N, threads)
+    Lx = box[1]; Ly = box[2]; Lz = box[3]
+    halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly; halfLz = T(0.5)*Lz
+    k = CUDA.@cuda launch=false _wca3_allpairs_kernel_virial!(rx, ry, rz, fx, fy, fz, Epot, V, Lx, Ly, Lz, halfLx, halfLy, halfLz, params.ϵ, params.σ)
+    k(rx, ry, rz, fx, fy, fz, Epot, V, Lx, Ly, Lz, halfLx, halfLy, halfLz, params.ϵ, params.σ; threads, blocks)
     return nothing
 end
 
@@ -708,6 +1067,17 @@ function wca_forces_soa_excl!(rx::CuArray{T,1}, ry::CuArray{T,1},
     return nothing
 end
 
+function wca_forces_soa_excl!(rx::CuArray{T,1}, ry::CuArray{T,1},
+                        fx::CuArray{T,1}, fy::CuArray{T,1}, Epot::CuArray{T,1}, V::CuArray{T,2},
+                        ::NeighborLists.AllPairsNeighborMatrix{T}, bonds::BondedForces.BondList,
+                        box::Definitions.Box2{T}, params::Definitions.LJParams{T}) where {T<:AbstractFloat}
+    N = length(rx); threads = (N < 100_000) ? 128 : 256; blocks = cld(N, threads)
+    Lx = box[1]; Ly = box[2]; halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly
+    k = CUDA.@cuda launch=false _wca2_allpairs_kernel_excl_virial!(rx, ry, fx, fy, Epot, V, bonds.index, bonds.flat, bonds.counts, Lx, Ly, halfLx, halfLy, params.ϵ, params.σ)
+    k(rx, ry, fx, fy, Epot, V, bonds.index, bonds.flat, bonds.counts, Lx, Ly, halfLx, halfLy, params.ϵ, params.σ; threads, blocks)
+    return nothing
+end
+
 function wca_forces_soa_excl!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
                         fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1}, Epot::CuArray{T,1},
                         ::NeighborLists.AllPairsNeighborMatrix{T}, bonds::BondedForces.BondList,
@@ -717,6 +1087,18 @@ function wca_forces_soa_excl!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly; halfLz = T(0.5)*Lz
     k = CUDA.@cuda launch=false _wca3_allpairs_kernel_excl!(rx, ry, rz, fx, fy, fz, Epot, bonds.index, bonds.flat, bonds.counts, Lx, Ly, Lz, halfLx, halfLy, halfLz, params.ϵ, params.σ)
     k(rx, ry, rz, fx, fy, fz, Epot, bonds.index, bonds.flat, bonds.counts, Lx, Ly, Lz, halfLx, halfLy, halfLz, params.ϵ, params.σ; threads, blocks)
+    return nothing
+end
+
+function wca_forces_soa_excl!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
+                        fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1}, Epot::CuArray{T,1}, V::CuArray{T,2},
+                        ::NeighborLists.AllPairsNeighborMatrix{T}, bonds::BondedForces.BondList,
+                        box::Definitions.Box3{T}, params::Definitions.LJParams{T}) where {T<:AbstractFloat}
+    N = length(rx); threads = (N < 100_000) ? 128 : 256; blocks = cld(N, threads)
+    Lx = box[1]; Ly = box[2]; Lz = box[3]
+    halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly; halfLz = T(0.5)*Lz
+    k = CUDA.@cuda launch=false _wca3_allpairs_kernel_excl_virial!(rx, ry, rz, fx, fy, fz, Epot, V, bonds.index, bonds.flat, bonds.counts, Lx, Ly, Lz, halfLx, halfLy, halfLz, params.ϵ, params.σ)
+    k(rx, ry, rz, fx, fy, fz, Epot, V, bonds.index, bonds.flat, bonds.counts, Lx, Ly, Lz, halfLx, halfLy, halfLz, params.ϵ, params.σ; threads, blocks)
     return nothing
 end
 
@@ -772,6 +1154,37 @@ function _harmrep2_allpairs_kernel!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}
     return
 end
 
+function _harmrep2_allpairs_kernel_virial!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
+    fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, Epot::CuDeviceVector{T}, V::CuDeviceMatrix{T},
+    Lx::T, Ly::T, halfLx::T, halfLy::T, ϵ::T, σ::T ) where {T<:AbstractFloat}
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    xi = rx[i]; yi = ry[i]
+    accx = zero(T); accy = zero(T); eacc = zero(T)
+    vxx = zero(T); vyy = zero(T); vxy = zero(T)
+    σ2 = σ*σ
+    @inbounds for j in 1:N
+        dx = mic_fast(xi - rx[j], halfLx, Lx)
+        dy = mic_fast(yi - ry[j], halfLy, Ly)
+        r2 = muladd(dx, dx, dy*dy)
+        if (r2 > zero(T)) & (r2 < σ2)
+            r = sqrt(r2)
+            f_over_r = (ϵ/σ) * (one(T) - r/σ) / r
+            fxij = f_over_r * dx
+            fyij = f_over_r * dy
+            accx += fxij
+            accy += fyij
+            ep = T(0.5) * ϵ * (one(T) - r/σ)*(one(T) - r/σ)
+            eacc += T(0.5) * ep
+            dvxx, dvyy, dvxy = _half_virial2(dx, dy, fxij, fyij)
+            vxx += dvxx; vyy += dvyy; vxy += dvxy
+        end
+    end
+    fx[i] = accx; fy[i] = accy; Epot[i] = eacc
+    V[i, 1] = vxx; V[i, 2] = vyy; V[i, 3] = vxy
+    return
+end
+
 function _harmrep3_allpairs_kernel!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
     fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, fz::CuDeviceVector{T}, Epot::CuDeviceVector{T},
     Lx::T, Ly::T, Lz::T, halfLx::T, halfLy::T, halfLz::T, ϵ::T, σ::T ) where {T<:AbstractFloat}
@@ -796,6 +1209,42 @@ function _harmrep3_allpairs_kernel!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}
         end
     end
     fx[i] = accx; fy[i] = accy; fz[i] = accz; Epot[i] = eacc
+    return
+end
+
+function _harmrep3_allpairs_kernel_virial!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
+    fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, fz::CuDeviceVector{T}, Epot::CuDeviceVector{T}, V::CuDeviceMatrix{T},
+    Lx::T, Ly::T, Lz::T, halfLx::T, halfLy::T, halfLz::T, ϵ::T, σ::T ) where {T<:AbstractFloat}
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    xi = rx[i]; yi = ry[i]; zi = rz[i]
+    accx = zero(T); accy = zero(T); accz = zero(T); eacc = zero(T)
+    vxx = zero(T); vyy = zero(T); vzz = zero(T); vxy = zero(T); vxz = zero(T); vyz = zero(T)
+    σ2 = σ*σ
+    @inbounds for j in 1:N
+        dx = mic_fast(xi - rx[j], halfLx, Lx)
+        dy = mic_fast(yi - ry[j], halfLy, Ly)
+        dz = mic_fast(zi - rz[j], halfLz, Lz)
+        r2 = muladd(dx, dx, muladd(dy, dy, dz*dz))
+        if (r2 > zero(T)) & (r2 < σ2)
+            r = sqrt(r2)
+            f_over_r = (ϵ/σ) * (one(T) - r/σ) / r
+            fxij = f_over_r * dx
+            fyij = f_over_r * dy
+            fzij = f_over_r * dz
+            accx += fxij
+            accy += fyij
+            accz += fzij
+            ep = T(0.5) * ϵ * (one(T) - r/σ)*(one(T) - r/σ)
+            eacc += T(0.5) * ep
+            dvxx, dvyy, dvzz, dvxy, dvxz, dvyz = _half_virial3(dx, dy, dz, fxij, fyij, fzij)
+            vxx += dvxx; vyy += dvyy; vzz += dvzz
+            vxy += dvxy; vxz += dvxz; vyz += dvyz
+        end
+    end
+    fx[i] = accx; fy[i] = accy; fz[i] = accz; Epot[i] = eacc
+    V[i, 1] = vxx; V[i, 2] = vyy; V[i, 3] = vzz
+    V[i, 4] = vxy; V[i, 5] = vxz; V[i, 6] = vyz
     return
 end
 
@@ -866,6 +1315,18 @@ function harmonic_rep_forces_soa!(rx::CuArray{T,1}, ry::CuArray{T,1},
     return nothing
 end
 
+function harmonic_rep_forces_soa!(rx::CuArray{T,1}, ry::CuArray{T,1},
+                                  fx::CuArray{T,1}, fy::CuArray{T,1}, Epot::CuArray{T,1}, V::CuArray{T,2},
+                                  ::NeighborLists.AllPairsNeighborMatrix{T},
+                                  box::Definitions.Box2{T}, params::Definitions.SoftRepulsiveParams{T}
+                                  ) where {T<:AbstractFloat}
+    N = length(rx); threads = (N < 100_000) ? 128 : 256; blocks = cld(N, threads)
+    Lx = box[1]; Ly = box[2]; halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly
+    k = CUDA.@cuda launch=false _harmrep2_allpairs_kernel_virial!(rx, ry, fx, fy, Epot, V, Lx, Ly, halfLx, halfLy, params.ϵ, params.σ)
+    k(rx, ry, fx, fy, Epot, V, Lx, Ly, halfLx, halfLy, params.ϵ, params.σ; threads, blocks)
+    return nothing
+end
+
 function harmonic_rep_forces_soa!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
                                   fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1}, Epot::CuArray{T,1},
                                   ::NeighborLists.AllPairsNeighborMatrix{T},
@@ -876,6 +1337,19 @@ function harmonic_rep_forces_soa!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArra
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly; halfLz = T(0.5)*Lz
     k = CUDA.@cuda launch=false _harmrep3_allpairs_kernel!(rx, ry, rz, fx, fy, fz, Epot, Lx, Ly, Lz, halfLx, halfLy, halfLz, params.ϵ, params.σ)
     k(rx, ry, rz, fx, fy, fz, Epot, Lx, Ly, Lz, halfLx, halfLy, halfLz, params.ϵ, params.σ; threads, blocks)
+    return nothing
+end
+
+function harmonic_rep_forces_soa!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
+                                  fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1}, Epot::CuArray{T,1}, V::CuArray{T,2},
+                                  ::NeighborLists.AllPairsNeighborMatrix{T},
+                                  box::Definitions.Box3{T}, params::Definitions.SoftRepulsiveParams{T}
+                                  ) where {T<:AbstractFloat}
+    N = length(rx); threads = (N < 100_000) ? 128 : 256; blocks = cld(N, threads)
+    Lx = box[1]; Ly = box[2]; Lz = box[3]
+    halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly; halfLz = T(0.5)*Lz
+    k = CUDA.@cuda launch=false _harmrep3_allpairs_kernel_virial!(rx, ry, rz, fx, fy, fz, Epot, V, Lx, Ly, Lz, halfLx, halfLy, halfLz, params.ϵ, params.σ)
+    k(rx, ry, rz, fx, fy, fz, Epot, V, Lx, Ly, Lz, halfLx, halfLy, halfLz, params.ϵ, params.σ; threads, blocks)
     return nothing
 end
 
@@ -936,6 +1410,39 @@ function _harmrep2_allpairs_kernel_excl!(rx::CuDeviceVector{T}, ry::CuDeviceVect
     return
 end
 
+function _harmrep2_allpairs_kernel_excl_virial!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
+    fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, Epot::CuDeviceVector{T}, V::CuDeviceMatrix{T},
+    bindex::CuDeviceVector{Int32}, bflat::CuDeviceVector{Int32}, bcounts::CuDeviceVector{Int32},
+    Lx::T, Ly::T, halfLx::T, halfLy::T, ϵ::T, σ::T ) where {T<:AbstractFloat}
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    xi = rx[i]; yi = ry[i]
+    accx = zero(T); accy = zero(T); eacc = zero(T)
+    vxx = zero(T); vyy = zero(T); vxy = zero(T)
+    σ2 = σ*σ
+    @inbounds for j in 1:N
+        if _is_bonded(Int32(i), Int32(j), bindex, bflat, bcounts); continue; end
+        dx = mic_fast(xi - rx[j], halfLx, Lx)
+        dy = mic_fast(yi - ry[j], halfLy, Ly)
+        r2 = muladd(dx, dx, dy*dy)
+        if (r2 > zero(T)) & (r2 < σ2)
+            r = sqrt(r2)
+            f_over_r = (ϵ/σ) * (one(T) - r/σ) / r
+            fxij = f_over_r * dx
+            fyij = f_over_r * dy
+            accx += fxij
+            accy += fyij
+            ep = T(0.5) * ϵ * (one(T) - r/σ)*(one(T) - r/σ)
+            eacc += T(0.5) * ep
+            dvxx, dvyy, dvxy = _half_virial2(dx, dy, fxij, fyij)
+            vxx += dvxx; vyy += dvyy; vxy += dvxy
+        end
+    end
+    fx[i] = accx; fy[i] = accy; Epot[i] = eacc
+    V[i, 1] = vxx; V[i, 2] = vyy; V[i, 3] = vxy
+    return
+end
+
 function _harmrep3_allpairs_kernel_excl!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
     fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, fz::CuDeviceVector{T}, Epot::CuDeviceVector{T},
     bindex::CuDeviceVector{Int32}, bflat::CuDeviceVector{Int32}, bcounts::CuDeviceVector{Int32},
@@ -962,6 +1469,44 @@ function _harmrep3_allpairs_kernel_excl!(rx::CuDeviceVector{T}, ry::CuDeviceVect
         end
     end
     fx[i] = accx; fy[i] = accy; fz[i] = accz; Epot[i] = eacc
+    return
+end
+
+function _harmrep3_allpairs_kernel_excl_virial!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
+    fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, fz::CuDeviceVector{T}, Epot::CuDeviceVector{T}, V::CuDeviceMatrix{T},
+    bindex::CuDeviceVector{Int32}, bflat::CuDeviceVector{Int32}, bcounts::CuDeviceVector{Int32},
+    Lx::T, Ly::T, Lz::T, halfLx::T, halfLy::T, halfLz::T, ϵ::T, σ::T ) where {T<:AbstractFloat}
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    xi = rx[i]; yi = ry[i]; zi = rz[i]
+    accx = zero(T); accy = zero(T); accz = zero(T); eacc = zero(T)
+    vxx = zero(T); vyy = zero(T); vzz = zero(T); vxy = zero(T); vxz = zero(T); vyz = zero(T)
+    σ2 = σ*σ
+    @inbounds for j in 1:N
+        if _is_bonded(Int32(i), Int32(j), bindex, bflat, bcounts); continue; end
+        dx = mic_fast(xi - rx[j], halfLx, Lx)
+        dy = mic_fast(yi - ry[j], halfLy, Ly)
+        dz = mic_fast(zi - rz[j], halfLz, Lz)
+        r2 = muladd(dx, dx, muladd(dy, dy, dz*dz))
+        if (r2 > zero(T)) & (r2 < σ2)
+            r = sqrt(r2)
+            f_over_r = (ϵ/σ) * (one(T) - r/σ) / r
+            fxij = f_over_r * dx
+            fyij = f_over_r * dy
+            fzij = f_over_r * dz
+            accx += fxij
+            accy += fyij
+            accz += fzij
+            ep = T(0.5) * ϵ * (one(T) - r/σ)*(one(T) - r/σ)
+            eacc += T(0.5) * ep
+            dvxx, dvyy, dvzz, dvxy, dvxz, dvyz = _half_virial3(dx, dy, dz, fxij, fyij, fzij)
+            vxx += dvxx; vyy += dvyy; vzz += dvzz
+            vxy += dvxy; vxz += dvxz; vyz += dvyz
+        end
+    end
+    fx[i] = accx; fy[i] = accy; fz[i] = accz; Epot[i] = eacc
+    V[i, 1] = vxx; V[i, 2] = vyy; V[i, 3] = vzz
+    V[i, 4] = vxy; V[i, 5] = vxz; V[i, 6] = vyz
     return
 end
 
@@ -1029,6 +1574,18 @@ function harmonic_rep_forces_soa_excl!(rx::CuArray{T,1}, ry::CuArray{T,1},
     return nothing
 end
 
+function harmonic_rep_forces_soa_excl!(rx::CuArray{T,1}, ry::CuArray{T,1},
+                                  fx::CuArray{T,1}, fy::CuArray{T,1}, Epot::CuArray{T,1}, V::CuArray{T,2},
+                                  ::NeighborLists.AllPairsNeighborMatrix{T}, bonds::BondedForces.BondList,
+                                  box::Definitions.Box2{T}, params::Definitions.SoftRepulsiveParams{T}
+                                  ) where {T<:AbstractFloat}
+    N = length(rx); threads = (N < 100_000) ? 128 : 256; blocks = cld(N, threads)
+    Lx = box[1]; Ly = box[2]; halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly
+    k = CUDA.@cuda launch=false _harmrep2_allpairs_kernel_excl_virial!(rx, ry, fx, fy, Epot, V, bonds.index, bonds.flat, bonds.counts, Lx, Ly, halfLx, halfLy, params.ϵ, params.σ)
+    k(rx, ry, fx, fy, Epot, V, bonds.index, bonds.flat, bonds.counts, Lx, Ly, halfLx, halfLy, params.ϵ, params.σ; threads, blocks)
+    return nothing
+end
+
 function harmonic_rep_forces_soa_excl!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
                                   fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1}, Epot::CuArray{T,1},
                                   ::NeighborLists.AllPairsNeighborMatrix{T}, bonds::BondedForces.BondList,
@@ -1042,6 +1599,18 @@ function harmonic_rep_forces_soa_excl!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::C
     return nothing
 end
 
+function harmonic_rep_forces_soa_excl!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
+                                  fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1}, Epot::CuArray{T,1}, V::CuArray{T,2},
+                                  ::NeighborLists.AllPairsNeighborMatrix{T}, bonds::BondedForces.BondList,
+                                  box::Definitions.Box3{T}, params::Definitions.SoftRepulsiveParams{T}
+                                  ) where {T<:AbstractFloat}
+    N = length(rx); threads = (N < 100_000) ? 128 : 256; blocks = cld(N, threads)
+    Lx = box[1]; Ly = box[2]; Lz = box[3]
+    halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly; halfLz = T(0.5)*Lz
+    k = CUDA.@cuda launch=false _harmrep3_allpairs_kernel_excl_virial!(rx, ry, rz, fx, fy, fz, Epot, V, bonds.index, bonds.flat, bonds.counts, Lx, Ly, Lz, halfLx, halfLy, halfLz, params.ϵ, params.σ)
+    k(rx, ry, rz, fx, fy, fz, Epot, V, bonds.index, bonds.flat, bonds.counts, Lx, Ly, Lz, halfLx, halfLy, halfLz, params.ϵ, params.σ; threads, blocks)
+    return nothing
+end
 function harmonic_rep_forces_soa_noE_excl!(rx::CuArray{T,1}, ry::CuArray{T,1},
                                       fx::CuArray{T,1}, fy::CuArray{T,1},
                                       ::NeighborLists.AllPairsNeighborMatrix{T}, bonds::BondedForces.BondList,
@@ -1302,6 +1871,41 @@ function _lj2_csr_kernel!(
     return
 end
 
+function _lj2_csr_kernel_virial!(
+    rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
+    fx::CuDeviceVector{T}, fy::CuDeviceVector{T},
+    Epot::CuDeviceVector{T}, V::CuDeviceMatrix{T},
+    neighbors_index::CuDeviceVector{Int32},
+    neighbors_flat::CuDeviceVector{Int32},
+    counts::CuDeviceVector{Int32},
+    Lx::T, Ly::T, halfLx::T, halfLy::T,
+    ϵ::T, σ::T, cutoff2::T
+) where {T<:AbstractFloat}
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    xi = rx[i]; yi = ry[i]
+    accx = zero(T); accy = zero(T); eacc = zero(T)
+    vxx = zero(T); vyy = zero(T); vxy = zero(T)
+    base  = neighbors_index[i]
+    nlist = counts[i]
+    @inbounds for t in 0:Int(nlist-1)
+        j = neighbors_flat[base + t + 1]
+        dx = mic_fast(xi - rx[j], halfLx, Lx)
+        dy = mic_fast(yi - ry[j], halfLy, Ly)
+        r2 = muladd(dx, dx, dy*dy)
+        if (r2 > zero(T)) & (r2 < cutoff2)
+            fxij, fyij, ep = lj_pair_2d(dx, dy, r2, ϵ, σ)
+            accx += fxij; accy += fyij
+            eacc += T(0.5) * ep
+            dvxx, dvyy, dvxy = _half_virial2(dx, dy, fxij, fyij)
+            vxx += dvxx; vyy += dvyy; vxy += dvxy
+        end
+    end
+    fx[i] = accx; fy[i] = accy; Epot[i] = eacc
+    V[i, 1] = vxx; V[i, 2] = vyy; V[i, 3] = vxy
+    return
+end
+
 # ───────────────────────────────────────────────────────────────────────────────
 # Mixed-σ LJ (per-particle size; Lorentz mixing, global ϵ)
 # ───────────────────────────────────────────────────────────────────────────────
@@ -1346,6 +1950,52 @@ function _lj2_csr_kernel_mixed!(
     return
 end
 
+function _lj2_csr_kernel_mixed_virial!(
+    rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
+    fx::CuDeviceVector{T}, fy::CuDeviceVector{T},
+    Epot::CuDeviceVector{T}, V::CuDeviceMatrix{T},
+    neighbors_index::CuDeviceVector{Int32},
+    neighbors_flat::CuDeviceVector{Int32},
+    counts::CuDeviceVector{Int32},
+    Lx::T, Ly::T, halfLx::T, halfLy::T,
+    ϵ::T,
+    σp::CuDeviceVector{T}, rcut_factor::T
+) where {T<:AbstractFloat}
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    xi = rx[i]; yi = ry[i]
+    accx = zero(T); accy = zero(T); eacc = zero(T)
+    vxx = zero(T); vyy = zero(T); vxy = zero(T)
+    base  = neighbors_index[i]
+    nlist = counts[i]
+    σi = σp[i]
+    @inbounds for t in 0:Int(nlist-1)
+        j = neighbors_flat[base + t + 1]
+        dx = mic_fast(xi - rx[j], halfLx, Lx)
+        dy = mic_fast(yi - ry[j], halfLy, Ly)
+        r2 = muladd(dx, dx, dy*dy)
+        σij = T(0.5) * (σi + σp[j])
+        rcut_ij = rcut_factor * σij
+        if (r2 > zero(T)) & (r2 < rcut_ij*rcut_ij)
+            invr2 = one(T) / r2
+            s2    = (σij*σij) * invr2
+            s6    = s2*s2*s2
+            s12   = s6*s6
+            f_over_r = T(24)*ϵ*(T(2)*s12 - s6)*invr2
+            fxij = f_over_r * dx
+            fyij = f_over_r * dy
+            accx += fxij
+            accy += fyij
+            eacc += T(0.5) * (T(4)*ϵ*(s12 - s6))
+            dvxx, dvyy, dvxy = _half_virial2(dx, dy, fxij, fyij)
+            vxx += dvxx; vyy += dvyy; vxy += dvxy
+        end
+    end
+    fx[i] = accx; fy[i] = accy; Epot[i] = eacc
+    V[i, 1] = vxx; V[i, 2] = vyy; V[i, 3] = vxy
+    return
+end
+
 function _lj3_csr_kernel_mixed!(
     rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
     fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, fz::CuDeviceVector{T},
@@ -1385,6 +2035,57 @@ function _lj3_csr_kernel_mixed!(
         end
     end
     fx[i] = accx; fy[i] = accy; fz[i] = accz; Epot[i] = eacc
+    return
+end
+
+function _lj3_csr_kernel_mixed_virial!(
+    rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
+    fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, fz::CuDeviceVector{T},
+    Epot::CuDeviceVector{T}, V::CuDeviceMatrix{T},
+    neighbors_index::CuDeviceVector{Int32},
+    neighbors_flat::CuDeviceVector{Int32},
+    counts::CuDeviceVector{Int32},
+    Lx::T, Ly::T, Lz::T, halfLx::T, halfLy::T, halfLz::T,
+    ϵ::T,
+    σp::CuDeviceVector{T}, rcut_factor::T
+) where {T<:AbstractFloat}
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    xi = rx[i]; yi = ry[i]; zi = rz[i]
+    accx = zero(T); accy = zero(T); accz = zero(T); eacc = zero(T)
+    vxx = zero(T); vyy = zero(T); vzz = zero(T); vxy = zero(T); vxz = zero(T); vyz = zero(T)
+    base  = neighbors_index[i]
+    nlist = counts[i]
+    σi = σp[i]
+    @inbounds for t in 0:Int(nlist-1)
+        j = neighbors_flat[base + t + 1]
+        dx = mic_fast(xi - rx[j], halfLx, Lx)
+        dy = mic_fast(yi - ry[j], halfLy, Ly)
+        dz = mic_fast(zi - rz[j], halfLz, Lz)
+        r2 = muladd(dx, dx, muladd(dy, dy, dz*dz))
+        σij = T(0.5) * (σi + σp[j])
+        rcut_ij = rcut_factor * σij
+        if (r2 > zero(T)) & (r2 < rcut_ij*rcut_ij)
+            invr2 = one(T) / r2
+            s2    = (σij*σij) * invr2
+            s6    = s2*s2*s2
+            s12   = s6*s6
+            f_over_r = T(24)*ϵ*(T(2)*s12 - s6)*invr2
+            fxij = f_over_r * dx
+            fyij = f_over_r * dy
+            fzij = f_over_r * dz
+            accx += fxij
+            accy += fyij
+            accz += fzij
+            eacc += T(0.5) * (T(4)*ϵ*(s12 - s6))
+            dvxx, dvyy, dvzz, dvxy, dvxz, dvyz = _half_virial3(dx, dy, dz, fxij, fyij, fzij)
+            vxx += dvxx; vyy += dvyy; vzz += dvzz
+            vxy += dvxy; vxz += dvxz; vyz += dvyz
+        end
+    end
+    fx[i] = accx; fy[i] = accy; fz[i] = accz; Epot[i] = eacc
+    V[i, 1] = vxx; V[i, 2] = vyy; V[i, 3] = vzz
+    V[i, 4] = vxy; V[i, 5] = vxz; V[i, 6] = vyz
     return
 end
 
@@ -1489,6 +2190,29 @@ function lj_forces_soa_mixed!(rx::CuArray{T,1}, ry::CuArray{T,1},
     return nothing
 end
 
+function lj_forces_soa_mixed!(rx::CuArray{T,1}, ry::CuArray{T,1},
+                              fx::CuArray{T,1}, fy::CuArray{T,1}, Epot::CuArray{T,1}, V::CuArray{T,2},
+                              nbh::NeighborLists.AbstractNeighborMatrix,
+                              box::Definitions.Box2{T},
+                              ϵ::T,
+                              σp::CuArray{T,1}, rcut_factor::T) where {T<:AbstractFloat}
+    N = length(rx)
+    threads = (N < 100_000) ? 128 : 256
+    blocks  = cld(N, threads)
+    Lx = T(box[1]); Ly = T(box[2])
+    halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly
+    k = CUDA.@cuda launch=false _lj2_csr_kernel_mixed_virial!(
+        rx, ry, fx, fy, Epot, V,
+        nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+        Lx, Ly, halfLx, halfLy,
+        ϵ, σp, rcut_factor)
+    k(rx, ry, fx, fy, Epot, V,
+      nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+      Lx, Ly, halfLx, halfLy,
+      ϵ, σp, rcut_factor; threads, blocks)
+    return nothing
+end
+
 function lj_forces_soa_mixed!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
                               fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1}, Epot::CuArray{T,1},
                               nbh::NeighborLists.AbstractNeighborMatrix,
@@ -1506,6 +2230,29 @@ function lj_forces_soa_mixed!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,
         Lx, Ly, Lz, halfLx, halfLy, halfLz,
         ϵ, σp, rcut_factor)
     k(rx, ry, rz, fx, fy, fz, Epot,
+      nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+      Lx, Ly, Lz, halfLx, halfLy, halfLz,
+      ϵ, σp, rcut_factor; threads, blocks)
+    return nothing
+end
+
+function lj_forces_soa_mixed!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
+                              fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1}, Epot::CuArray{T,1}, V::CuArray{T,2},
+                              nbh::NeighborLists.AbstractNeighborMatrix,
+                              box::Definitions.Box3{T},
+                              ϵ::T,
+                              σp::CuArray{T,1}, rcut_factor::T) where {T<:AbstractFloat}
+    N = length(rx)
+    threads = (N < 100_000) ? 128 : 256
+    blocks  = cld(N, threads)
+    Lx = T(box[1]); Ly = T(box[2]); Lz = T(box[3])
+    halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly; halfLz = T(0.5)*Lz
+    k = CUDA.@cuda launch=false _lj3_csr_kernel_mixed_virial!(
+        rx, ry, rz, fx, fy, fz, Epot, V,
+        nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+        Lx, Ly, Lz, halfLx, halfLy, halfLz,
+        ϵ, σp, rcut_factor)
+    k(rx, ry, rz, fx, fy, fz, Epot, V,
       nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
       Lx, Ly, Lz, halfLx, halfLy, halfLz,
       ϵ, σp, rcut_factor; threads, blocks)
@@ -1591,6 +2338,44 @@ function _lj3_csr_kernel!(
     end
 
     fx[i] = accx; fy[i] = accy; fz[i] = accz; Epot[i] = eacc
+    return
+end
+
+function _lj3_csr_kernel_virial!(
+    rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
+    fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, fz::CuDeviceVector{T},
+    Epot::CuDeviceVector{T}, V::CuDeviceMatrix{T},
+    neighbors_index::CuDeviceVector{Int32},
+    neighbors_flat::CuDeviceVector{Int32},
+    counts::CuDeviceVector{Int32},
+    Lx::T, Ly::T, Lz::T, halfLx::T, halfLy::T, halfLz::T,
+    ϵ::T, σ::T, cutoff2::T
+) where {T<:AbstractFloat}
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    xi = rx[i]; yi = ry[i]; zi = rz[i]
+    accx = zero(T); accy = zero(T); accz = zero(T); eacc = zero(T)
+    vxx = zero(T); vyy = zero(T); vzz = zero(T); vxy = zero(T); vxz = zero(T); vyz = zero(T)
+    base  = neighbors_index[i]
+    nlist = counts[i]
+    @inbounds for t in 0:Int(nlist-1)
+        j = neighbors_flat[base + t + 1]
+        dx = mic_fast(xi - rx[j], halfLx, Lx)
+        dy = mic_fast(yi - ry[j], halfLy, Ly)
+        dz = mic_fast(zi - rz[j], halfLz, Lz)
+        r2 = muladd(dx, dx, muladd(dy, dy, dz*dz))
+        if (r2 > zero(T)) & (r2 < cutoff2)
+            fxij, fyij, fzij, ep = lj_pair_3d(dx, dy, dz, r2, ϵ, σ)
+            accx += fxij; accy += fyij; accz += fzij
+            eacc += T(0.5) * ep
+            dvxx, dvyy, dvzz, dvxy, dvxz, dvyz = _half_virial3(dx, dy, dz, fxij, fyij, fzij)
+            vxx += dvxx; vyy += dvyy; vzz += dvzz
+            vxy += dvxy; vxz += dvxz; vyz += dvyz
+        end
+    end
+    fx[i] = accx; fy[i] = accy; fz[i] = accz; Epot[i] = eacc
+    V[i, 1] = vxx; V[i, 2] = vyy; V[i, 3] = vzz
+    V[i, 4] = vxy; V[i, 5] = vxz; V[i, 6] = vyz
     return
 end
 
@@ -1703,6 +2488,43 @@ function _lj2_csr_kernel_excl!(
     return
 end
 
+function _lj2_csr_kernel_excl_virial!(
+    rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
+    fx::CuDeviceVector{T}, fy::CuDeviceVector{T},
+    Epot::CuDeviceVector{T}, V::CuDeviceMatrix{T},
+    neighbors_index::CuDeviceVector{Int32},
+    neighbors_flat::CuDeviceVector{Int32},
+    counts::CuDeviceVector{Int32},
+    bindex::CuDeviceVector{Int32}, bflat::CuDeviceVector{Int32}, bcounts::CuDeviceVector{Int32},
+    Lx::T, Ly::T, halfLx::T, halfLy::T,
+    eps::T, sig::T, cutoff2::T
+) where {T<:AbstractFloat}
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    xi = rx[i]; yi = ry[i]
+    accx = zero(T); accy = zero(T); eacc = zero(T)
+    vxx = zero(T); vyy = zero(T); vxy = zero(T)
+    base  = neighbors_index[i]
+    nlist = counts[i]
+    @inbounds for t in 0:Int(nlist-1)
+        j = neighbors_flat[base + t + 1]
+        if _is_bonded(Int32(i), j, bindex, bflat, bcounts); continue; end
+        dx = mic_fast(xi - rx[j], halfLx, Lx)
+        dy = mic_fast(yi - ry[j], halfLy, Ly)
+        r2 = muladd(dx, dx, dy*dy)
+        if (r2 > zero(T)) & (r2 < cutoff2)
+            fxij, fyij, ep = lj_pair_2d(dx, dy, r2, eps, sig)
+            accx += fxij; accy += fyij
+            eacc += T(0.5) * ep
+            dvxx, dvyy, dvxy = _half_virial2(dx, dy, fxij, fyij)
+            vxx += dvxx; vyy += dvyy; vxy += dvxy
+        end
+    end
+    fx[i] = accx; fy[i] = accy; Epot[i] = eacc
+    V[i, 1] = vxx; V[i, 2] = vyy; V[i, 3] = vxy
+    return
+end
+
 function _lj3_csr_kernel_excl!(
     rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
     fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, fz::CuDeviceVector{T},
@@ -1738,6 +2560,46 @@ function _lj3_csr_kernel_excl!(
     end
 
     fx[i] = accx; fy[i] = accy; fz[i] = accz; Epot[i] = eacc
+    return
+end
+
+function _lj3_csr_kernel_excl_virial!(
+    rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
+    fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, fz::CuDeviceVector{T},
+    Epot::CuDeviceVector{T}, V::CuDeviceMatrix{T},
+    neighbors_index::CuDeviceVector{Int32},
+    neighbors_flat::CuDeviceVector{Int32},
+    counts::CuDeviceVector{Int32},
+    bindex::CuDeviceVector{Int32}, bflat::CuDeviceVector{Int32}, bcounts::CuDeviceVector{Int32},
+    Lx::T, Ly::T, Lz::T, halfLx::T, halfLy::T, halfLz::T,
+    eps::T, sig::T, cutoff2::T
+) where {T<:AbstractFloat}
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    xi = rx[i]; yi = ry[i]; zi = rz[i]
+    accx = zero(T); accy = zero(T); accz = zero(T); eacc = zero(T)
+    vxx = zero(T); vyy = zero(T); vzz = zero(T); vxy = zero(T); vxz = zero(T); vyz = zero(T)
+    base  = neighbors_index[i]
+    nlist = counts[i]
+    @inbounds for t in 0:Int(nlist-1)
+        j = neighbors_flat[base + t + 1]
+        if _is_bonded(Int32(i), j, bindex, bflat, bcounts); continue; end
+        dx = mic_fast(xi - rx[j], halfLx, Lx)
+        dy = mic_fast(yi - ry[j], halfLy, Ly)
+        dz = mic_fast(zi - rz[j], halfLz, Lz)
+        r2 = muladd(dx, dx, muladd(dy, dy, dz*dz))
+        if (r2 > zero(T)) & (r2 < cutoff2)
+            fxij, fyij, fzij, ep = lj_pair_3d(dx, dy, dz, r2, eps, sig)
+            accx += fxij; accy += fyij; accz += fzij
+            eacc += T(0.5) * ep
+            dvxx, dvyy, dvzz, dvxy, dvxz, dvyz = _half_virial3(dx, dy, dz, fxij, fyij, fzij)
+            vxx += dvxx; vyy += dvyy; vzz += dvzz
+            vxy += dvxy; vxz += dvxz; vyz += dvyz
+        end
+    end
+    fx[i] = accx; fy[i] = accy; fz[i] = accz; Epot[i] = eacc
+    V[i, 1] = vxx; V[i, 2] = vyy; V[i, 3] = vzz
+    V[i, 4] = vxy; V[i, 5] = vxz; V[i, 6] = vyz
     return
 end
 
@@ -1908,6 +2770,30 @@ function lj_forces_soa!(rx::CuArray{T,1}, ry::CuArray{T,1},
     return nothing
 end
 
+function lj_forces_soa!(rx::CuArray{T,1}, ry::CuArray{T,1},
+                        fx::CuArray{T,1}, fy::CuArray{T,1},
+                        Epot::CuArray{T,1}, V::CuArray{T,2},
+                        nbh::NeighborLists.NeighborMatrix{T},
+                        box::Definitions.Box2{T}, params::Definitions.LJParams{T}) where {T<:AbstractFloat}
+    N = length(rx)
+    threads = (N < 100_000) ? 128 : 256
+    blocks  = cld(N, threads)
+    cutoff2 = params.rcut * params.rcut
+    Lx = T(box[1]); Ly = T(box[2])
+    halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly
+    k = CUDA.@cuda launch=false _lj2_csr_kernel_virial!(
+        rx, ry, fx, fy, Epot, V,
+        nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+        Lx, Ly, halfLx, halfLy,
+        params.ϵ, params.σ, cutoff2
+    )
+    k(rx, ry, fx, fy, Epot, V,
+      nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+      Lx, Ly, halfLx, halfLy,
+      params.ϵ, params.σ, cutoff2; threads, blocks)
+    return nothing
+end
+
 # ---- 3D, CSR (NeighborLists.NeighborMatrix)
 function lj_forces_soa!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
                         fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1},
@@ -1929,6 +2815,30 @@ function lj_forces_soa!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
         params.ϵ, params.σ, cutoff2
     )
     k(rx, ry, rz, fx, fy, fz, Epot,
+      nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+      Lx, Ly, Lz, halfLx, halfLy, halfLz,
+      params.ϵ, params.σ, cutoff2; threads, blocks)
+    return nothing
+end
+
+function lj_forces_soa!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
+                        fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1},
+                        Epot::CuArray{T,1}, V::CuArray{T,2},
+                        nbh::NeighborLists.NeighborMatrix{T},
+                        box::Definitions.Box3{T}, params::Definitions.LJParams{T}) where {T<:AbstractFloat}
+    N = length(rx)
+    threads = (N < 100_000) ? 128 : 256
+    blocks  = cld(N, threads)
+    cutoff2 = params.rcut * params.rcut
+    Lx = T(box[1]); Ly = T(box[2]); Lz = T(box[3])
+    halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly; halfLz = T(0.5)*Lz
+    k = CUDA.@cuda launch=false _lj3_csr_kernel_virial!(
+        rx, ry, rz, fx, fy, fz, Epot, V,
+        nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+        Lx, Ly, Lz, halfLx, halfLy, halfLz,
+        params.ϵ, params.σ, cutoff2
+    )
+    k(rx, ry, rz, fx, fy, fz, Epot, V,
       nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
       Lx, Ly, Lz, halfLx, halfLy, halfLz,
       params.ϵ, params.σ, cutoff2; threads, blocks)
@@ -1962,6 +2872,30 @@ function lj_forces_soa!(rx::CuArray{T,1}, ry::CuArray{T,1},
     return nothing
 end
 
+function lj_forces_soa!(rx::CuArray{T,1}, ry::CuArray{T,1},
+                        fx::CuArray{T,1}, fy::CuArray{T,1},
+                        Epot::CuArray{T,1}, V::CuArray{T,2},
+                        nbh::NeighborLists.StencilNeighborMatrix,
+                        box::Definitions.Box2{T}, params::Definitions.LJParams{T}) where {T<:AbstractFloat}
+    N = length(rx)
+    threads = (N < 100_000) ? 128 : 256
+    blocks  = cld(N, threads)
+    cutoff2 = params.rcut * params.rcut
+    Lx = T(box[1]); Ly = T(box[2])
+    halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly
+    k = CUDA.@cuda launch=false _lj2_csr_kernel_virial!(
+        rx, ry, fx, fy, Epot, V,
+        nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+        Lx, Ly, halfLx, halfLy,
+        params.ϵ, params.σ, cutoff2
+    )
+    k(rx, ry, fx, fy, Epot, V,
+      nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+      Lx, Ly, halfLx, halfLy,
+      params.ϵ, params.σ, cutoff2; threads, blocks)
+    return nothing
+end
+
 function lj_forces_soa!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
                         fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1},
                         Epot::CuArray{T,1},
@@ -1982,6 +2916,30 @@ function lj_forces_soa!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
         params.ϵ, params.σ, cutoff2
     )
     k(rx, ry, rz, fx, fy, fz, Epot,
+      nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+      Lx, Ly, Lz, halfLx, halfLy, halfLz,
+      params.ϵ, params.σ, cutoff2; threads, blocks)
+    return nothing
+end
+
+function lj_forces_soa!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
+                        fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1},
+                        Epot::CuArray{T,1}, V::CuArray{T,2},
+                        nbh::NeighborLists.StencilNeighborMatrix,
+                        box::Definitions.Box3{T}, params::Definitions.LJParams{T}) where {T<:AbstractFloat}
+    N = length(rx)
+    threads = (N < 100_000) ? 128 : 256
+    blocks  = cld(N, threads)
+    cutoff2 = params.rcut * params.rcut
+    Lx = T(box[1]); Ly = T(box[2]); Lz = T(box[3])
+    halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly; halfLz = T(0.5)*Lz
+    k = CUDA.@cuda launch=false _lj3_csr_kernel_virial!(
+        rx, ry, rz, fx, fy, fz, Epot, V,
+        nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+        Lx, Ly, Lz, halfLx, halfLy, halfLz,
+        params.ϵ, params.σ, cutoff2
+    )
+    k(rx, ry, rz, fx, fy, fz, Epot, V,
       nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
       Lx, Ly, Lz, halfLx, halfLy, halfLz,
       params.ϵ, params.σ, cutoff2; threads, blocks)
@@ -2018,6 +2976,33 @@ function lj_forces_soa_excl!(rx::CuArray{T,1}, ry::CuArray{T,1},
     return nothing
 end
 
+function lj_forces_soa_excl!(rx::CuArray{T,1}, ry::CuArray{T,1},
+                             fx::CuArray{T,1}, fy::CuArray{T,1},
+                             Epot::CuArray{T,1}, V::CuArray{T,2},
+                             nbh::NeighborLists.NeighborMatrix{T},
+                             bonds::BondedForces.BondList,
+                             box::Definitions.Box2{T}, params::Definitions.LJParams{T}) where {T<:AbstractFloat}
+    N = length(rx)
+    threads = (N < 100_000) ? 128 : 256
+    blocks  = cld(N, threads)
+    cutoff2 = params.rcut * params.rcut
+    Lx = T(box[1]); Ly = T(box[2])
+    halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly
+    k = CUDA.@cuda launch=false _lj2_csr_kernel_excl_virial!(
+        rx, ry, fx, fy, Epot, V,
+        nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+        bonds.index, bonds.flat, bonds.counts,
+        Lx, Ly, halfLx, halfLy,
+        params.ϵ, params.σ, cutoff2
+    )
+    k(rx, ry, fx, fy, Epot, V,
+      nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+      bonds.index, bonds.flat, bonds.counts,
+      Lx, Ly, halfLx, halfLy,
+      params.ϵ, params.σ, cutoff2; threads, blocks)
+    return nothing
+end
+
 function lj_forces_soa_excl!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
                              fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1},
                              Epot::CuArray{T,1},
@@ -2040,6 +3025,33 @@ function lj_forces_soa_excl!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1
         params.ϵ, params.σ, cutoff2
     )
     k(rx, ry, rz, fx, fy, fz, Epot,
+      nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+      bonds.index, bonds.flat, bonds.counts,
+      Lx, Ly, Lz, halfLx, halfLy, halfLz,
+      params.ϵ, params.σ, cutoff2; threads, blocks)
+    return nothing
+end
+
+function lj_forces_soa_excl!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
+                             fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1},
+                             Epot::CuArray{T,1}, V::CuArray{T,2},
+                             nbh::NeighborLists.NeighborMatrix{T},
+                             bonds::BondedForces.BondList,
+                             box::Definitions.Box3{T}, params::Definitions.LJParams{T}) where {T<:AbstractFloat}
+    N = length(rx)
+    threads = (N < 100_000) ? 128 : 256
+    blocks  = cld(N, threads)
+    cutoff2 = params.rcut * params.rcut
+    Lx = T(box[1]); Ly = T(box[2]); Lz = T(box[3])
+    halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly; halfLz = T(0.5)*Lz
+    k = CUDA.@cuda launch=false _lj3_csr_kernel_excl_virial!(
+        rx, ry, rz, fx, fy, fz, Epot, V,
+        nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+        bonds.index, bonds.flat, bonds.counts,
+        Lx, Ly, Lz, halfLx, halfLy, halfLz,
+        params.ϵ, params.σ, cutoff2
+    )
+    k(rx, ry, rz, fx, fy, fz, Epot, V,
       nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
       bonds.index, bonds.flat, bonds.counts,
       Lx, Ly, Lz, halfLx, halfLy, halfLz,
@@ -2075,6 +3087,33 @@ function lj_forces_soa_excl!(rx::CuArray{T,1}, ry::CuArray{T,1},
     return nothing
 end
 
+function lj_forces_soa_excl!(rx::CuArray{T,1}, ry::CuArray{T,1},
+                             fx::CuArray{T,1}, fy::CuArray{T,1},
+                             Epot::CuArray{T,1}, V::CuArray{T,2},
+                             nbh::NeighborLists.StencilNeighborMatrix,
+                             bonds::BondedForces.BondList,
+                             box::Definitions.Box2{T}, params::Definitions.LJParams{T}) where {T<:AbstractFloat}
+    N = length(rx)
+    threads = (N < 100_000) ? 128 : 256
+    blocks  = cld(N, threads)
+    cutoff2 = params.rcut * params.rcut
+    Lx = T(box[1]); Ly = T(box[2])
+    halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly
+    k = CUDA.@cuda launch=false _lj2_csr_kernel_excl_virial!(
+        rx, ry, fx, fy, Epot, V,
+        nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+        bonds.index, bonds.flat, bonds.counts,
+        Lx, Ly, halfLx, halfLy,
+        params.ϵ, params.σ, cutoff2
+    )
+    k(rx, ry, fx, fy, Epot, V,
+      nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+      bonds.index, bonds.flat, bonds.counts,
+      Lx, Ly, halfLx, halfLy,
+      params.ϵ, params.σ, cutoff2; threads, blocks)
+    return nothing
+end
+
 function lj_forces_soa_excl!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
                              fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1},
                              Epot::CuArray{T,1},
@@ -2095,6 +3134,33 @@ function lj_forces_soa_excl!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1
         params.ϵ, params.σ, cutoff2
     )
     k(rx, ry, rz, fx, fy, fz, Epot,
+      nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+      bonds.index, bonds.flat, bonds.counts,
+      Lx, Ly, Lz, halfLx, halfLy, halfLz,
+      params.ϵ, params.σ, cutoff2; threads, blocks)
+    return nothing
+end
+
+function lj_forces_soa_excl!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
+                             fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1},
+                             Epot::CuArray{T,1}, V::CuArray{T,2},
+                             nbh::NeighborLists.StencilNeighborMatrix,
+                             bonds::BondedForces.BondList,
+                             box::Definitions.Box3{T}, params::Definitions.LJParams{T}) where {T<:AbstractFloat}
+    N = length(rx)
+    threads = (N < 100_000) ? 128 : 256
+    blocks  = cld(N, threads)
+    cutoff2 = params.rcut * params.rcut
+    Lx = T(box[1]); Ly = T(box[2]); Lz = T(box[3])
+    halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly; halfLz = T(0.5)*Lz
+    k = CUDA.@cuda launch=false _lj3_csr_kernel_excl_virial!(
+        rx, ry, rz, fx, fy, fz, Epot, V,
+        nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+        bonds.index, bonds.flat, bonds.counts,
+        Lx, Ly, Lz, halfLx, halfLy, halfLz,
+        params.ϵ, params.σ, cutoff2
+    )
+    k(rx, ry, rz, fx, fy, fz, Epot, V,
       nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
       bonds.index, bonds.flat, bonds.counts,
       Lx, Ly, Lz, halfLx, halfLy, halfLz,
@@ -2308,6 +3374,51 @@ function _lj2_csr_kernel_pairs!(
     return
 end
 
+function _lj2_csr_kernel_pairs_virial!(
+    rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
+    fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, Epot::CuDeviceVector{T}, V::CuDeviceMatrix{T},
+    neighbors_index::CuDeviceVector{Int32}, neighbors_flat::CuDeviceVector{Int32}, counts::CuDeviceVector{Int32},
+    Lx::T, Ly::T, halfLx::T, halfLy::T,
+    typeid::CuDeviceVector{Int32},
+    sigma_pair::CuDeviceMatrix{T}, epsilon_pair::CuDeviceMatrix{T}, rcut_pair::CuDeviceMatrix{T}
+) where {T<:AbstractFloat}
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    xi = rx[i]; yi = ry[i]
+    accx = zero(T); accy = zero(T); eacc = zero(T)
+    vxx = zero(T); vyy = zero(T); vxy = zero(T)
+    base  = neighbors_index[i]
+    nlist = counts[i]
+    ti = typeid[i]
+    @inbounds for t in 0:Int(nlist-1)
+        j = neighbors_flat[base + t + 1]
+        dx = mic_fast(xi - rx[j], halfLx, Lx)
+        dy = mic_fast(yi - ry[j], halfLy, Ly)
+        r2 = muladd(dx, dx, dy*dy)
+        tj = typeid[j]
+        σij = sigma_pair[ti, tj]
+        εij = epsilon_pair[ti, tj]
+        rc = rcut_pair[ti, tj]
+        if (r2 > zero(T)) & (r2 < rc*rc)
+            invr2 = one(T) / r2
+            s2    = (σij*σij) * invr2
+            s6    = s2*s2*s2
+            s12   = s6*s6
+            f_over_r = T(24)*εij*(T(2)*s12 - s6)*invr2
+            fxij = f_over_r * dx
+            fyij = f_over_r * dy
+            accx += fxij
+            accy += fyij
+            eacc += T(0.5) * (T(4)*εij*(s12 - s6))
+            dvxx, dvyy, dvxy = _half_virial2(dx, dy, fxij, fyij)
+            vxx += dvxx; vyy += dvyy; vxy += dvxy
+        end
+    end
+    fx[i] = accx; fy[i] = accy; Epot[i] = eacc
+    V[i, 1] = vxx; V[i, 2] = vyy; V[i, 3] = vxy
+    return
+end
+
 function _lj3_csr_kernel_pairs!(
     rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
     fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, fz::CuDeviceVector{T}, Epot::CuDeviceVector{T},
@@ -2346,6 +3457,56 @@ function _lj3_csr_kernel_pairs!(
         end
     end
     fx[i] = accx; fy[i] = accy; fz[i] = accz; Epot[i] = eacc
+    return
+end
+
+function _lj3_csr_kernel_pairs_virial!(
+    rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
+    fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, fz::CuDeviceVector{T}, Epot::CuDeviceVector{T}, V::CuDeviceMatrix{T},
+    neighbors_index::CuDeviceVector{Int32}, neighbors_flat::CuDeviceVector{Int32}, counts::CuDeviceVector{Int32},
+    Lx::T, Ly::T, Lz::T, halfLx::T, halfLy::T, halfLz::T,
+    typeid::CuDeviceVector{Int32},
+    sigma_pair::CuDeviceMatrix{T}, epsilon_pair::CuDeviceMatrix{T}, rcut_pair::CuDeviceMatrix{T}
+) where {T<:AbstractFloat}
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    xi = rx[i]; yi = ry[i]; zi = rz[i]
+    accx = zero(T); accy = zero(T); accz = zero(T); eacc = zero(T)
+    vxx = zero(T); vyy = zero(T); vzz = zero(T); vxy = zero(T); vxz = zero(T); vyz = zero(T)
+    base  = neighbors_index[i]
+    nlist = counts[i]
+    ti = typeid[i]
+    @inbounds for t in 0:Int(nlist-1)
+        j = neighbors_flat[base + t + 1]
+        dx = mic_fast(xi - rx[j], halfLx, Lx)
+        dy = mic_fast(yi - ry[j], halfLy, Ly)
+        dz = mic_fast(zi - rz[j], halfLz, Lz)
+        r2 = muladd(dx, dx, muladd(dy, dy, dz*dz))
+        tj = typeid[j]
+        σij = sigma_pair[ti, tj]
+        εij = epsilon_pair[ti, tj]
+        rc = rcut_pair[ti, tj]
+        if (r2 > zero(T)) & (r2 < rc*rc)
+            invr2 = one(T) / r2
+            s2    = (σij*σij) * invr2
+            s6    = s2*s2*s2
+            s12   = s6*s6
+            f_over_r = T(24)*εij*(T(2)*s12 - s6)*invr2
+            fxij = f_over_r * dx
+            fyij = f_over_r * dy
+            fzij = f_over_r * dz
+            accx += fxij
+            accy += fyij
+            accz += fzij
+            eacc += T(0.5) * (T(4)*εij*(s12 - s6))
+            dvxx, dvyy, dvzz, dvxy, dvxz, dvyz = _half_virial3(dx, dy, dz, fxij, fyij, fzij)
+            vxx += dvxx; vyy += dvyy; vzz += dvzz
+            vxy += dvxy; vxz += dvxz; vyz += dvyz
+        end
+    end
+    fx[i] = accx; fy[i] = accy; fz[i] = accz; Epot[i] = eacc
+    V[i, 1] = vxx; V[i, 2] = vyy; V[i, 3] = vzz
+    V[i, 4] = vxy; V[i, 5] = vxz; V[i, 6] = vyz
     return
 end
 
@@ -2451,6 +3612,29 @@ function lj_forces_soa_pairs!(rx::CuArray{T,1}, ry::CuArray{T,1},
     return nothing
 end
 
+function lj_forces_soa_pairs!(rx::CuArray{T,1}, ry::CuArray{T,1},
+                              fx::CuArray{T,1}, fy::CuArray{T,1}, Epot::CuArray{T,1}, V::CuArray{T,2},
+                              nbh::NeighborLists.AbstractNeighborMatrix,
+                              box::Definitions.Box2{T},
+                              typeid::CuArray{Int32,1},
+                              sigma_pair::CuArray{T,2}, epsilon_pair::CuArray{T,2}, rcut_pair::CuArray{T,2}) where {T<:AbstractFloat}
+    N = length(rx)
+    threads = (N < 100_000) ? 128 : 256
+    blocks  = cld(N, threads)
+    Lx = T(box[1]); Ly = T(box[2])
+    halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly
+    k = CUDA.@cuda launch=false _lj2_csr_kernel_pairs_virial!(
+        rx, ry, fx, fy, Epot, V,
+        nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+        Lx, Ly, halfLx, halfLy,
+        typeid, sigma_pair, epsilon_pair, rcut_pair)
+    k(rx, ry, fx, fy, Epot, V,
+      nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+      Lx, Ly, halfLx, halfLy,
+      typeid, sigma_pair, epsilon_pair, rcut_pair; threads, blocks)
+    return nothing
+end
+
 function lj_forces_oa_pairs_bugfix() end  
 
 function lj_forces_soa_pairs!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
@@ -2472,6 +3656,29 @@ function lj_forces_soa_pairs!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,
         Lx, Ly, Lz, halfLx, halfLy, halfLz,
         typeid, sigma_pair, epsilon_pair, rcut_pair)
     k(rx, ry, rz, fx, fy, fz, Epot,
+      nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+      Lx, Ly, Lz, halfLx, halfLy, halfLz,
+      typeid, sigma_pair, epsilon_pair, rcut_pair; threads, blocks)
+    return nothing
+end
+
+function lj_forces_soa_pairs!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
+                              fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1}, Epot::CuArray{T,1}, V::CuArray{T,2},
+                              nbh::NeighborLists.AbstractNeighborMatrix,
+                              box::Definitions.Box3{T},
+                              typeid::CuArray{Int32,1},
+                              sigma_pair::CuArray{T,2}, epsilon_pair::CuArray{T,2}, rcut_pair::CuArray{T,2}) where {T<:AbstractFloat}
+    N = length(rx)
+    threads = (N < 100_000) ? 128 : 256
+    blocks  = cld(N, threads)
+    Lx = T(box[1]); Ly = T(box[2]); Lz = T(box[3])
+    halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly; halfLz = T(0.5)*Lz
+    k = CUDA.@cuda launch=false _lj3_csr_kernel_pairs_virial!(
+        rx, ry, rz, fx, fy, fz, Epot, V,
+        nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+        Lx, Ly, Lz, halfLx, halfLy, halfLz,
+        typeid, sigma_pair, epsilon_pair, rcut_pair)
+    k(rx, ry, rz, fx, fy, fz, Epot, V,
       nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
       Lx, Ly, Lz, halfLx, halfLy, halfLz,
       typeid, sigma_pair, epsilon_pair, rcut_pair; threads, blocks)
@@ -2566,6 +3773,47 @@ function _wca2_csr_kernel_mixed!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
     return
 end
 
+function _wca2_csr_kernel_mixed_virial!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
+    fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, Epot::CuDeviceVector{T}, V::CuDeviceMatrix{T},
+    neighbors_index::CuDeviceVector{Int32}, neighbors_flat::CuDeviceVector{Int32}, counts::CuDeviceVector{Int32},
+    Lx::T, Ly::T, halfLx::T, halfLy::T,
+    ϵ::T, σp::CuDeviceVector{T}, rcut_factor::T) where {T<:AbstractFloat}
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    xi = rx[i]; yi = ry[i]
+    accx = zero(T); accy = zero(T); eacc = zero(T)
+    vxx = zero(T); vyy = zero(T); vxy = zero(T)
+    base  = neighbors_index[i]
+    nlist = counts[i]
+    σi = σp[i]
+    @inbounds for t in 0:Int(nlist-1)
+        j = neighbors_flat[base + t + 1]
+        dx = mic_fast(xi - rx[j], halfLx, Lx)
+        dy = mic_fast(yi - ry[j], halfLy, Ly)
+        r2 = muladd(dx, dx, dy*dy)
+        σij = T(0.5) * (σi + σp[j])
+        rc = rcut_factor * σij
+        if (r2 > zero(T)) & (r2 < rc*rc)
+            invr2 = one(T) / r2
+            s2    = (σij*σij) * invr2
+            s6    = s2*s2*s2
+            s12   = s6*s6
+            f_over_r = T(24)*ϵ*(T(2)*s12 - s6)*invr2
+            fxij = f_over_r * dx
+            fyij = f_over_r * dy
+            accx += fxij
+            accy += fyij
+            ep = T(4)*ϵ*(s12 - s6) + ϵ
+            eacc += T(0.5) * ep
+            dvxx, dvyy, dvxy = _half_virial2(dx, dy, fxij, fyij)
+            vxx += dvxx; vyy += dvyy; vxy += dvxy
+        end
+    end
+    fx[i] = accx; fy[i] = accy; Epot[i] = eacc
+    V[i, 1] = vxx; V[i, 2] = vyy; V[i, 3] = vxy
+    return
+end
+
 function _wca3_csr_kernel_mixed!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
     fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, fz::CuDeviceVector{T}, Epot::CuDeviceVector{T},
     neighbors_index::CuDeviceVector{Int32}, neighbors_flat::CuDeviceVector{Int32}, counts::CuDeviceVector{Int32},
@@ -2600,6 +3848,52 @@ function _wca3_csr_kernel_mixed!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, r
         end
     end
     fx[i] = accx; fy[i] = accy; fz[i] = accz; Epot[i] = eacc
+    return
+end
+
+function _wca3_csr_kernel_mixed_virial!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
+    fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, fz::CuDeviceVector{T}, Epot::CuDeviceVector{T}, V::CuDeviceMatrix{T},
+    neighbors_index::CuDeviceVector{Int32}, neighbors_flat::CuDeviceVector{Int32}, counts::CuDeviceVector{Int32},
+    Lx::T, Ly::T, Lz::T, halfLx::T, halfLy::T, halfLz::T,
+    ϵ::T, σp::CuDeviceVector{T}, rcut_factor::T) where {T<:AbstractFloat}
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    xi = rx[i]; yi = ry[i]; zi = rz[i]
+    accx = zero(T); accy = zero(T); accz = zero(T); eacc = zero(T)
+    vxx = zero(T); vyy = zero(T); vzz = zero(T); vxy = zero(T); vxz = zero(T); vyz = zero(T)
+    base  = neighbors_index[i]
+    nlist = counts[i]
+    σi = σp[i]
+    @inbounds for t in 0:Int(nlist-1)
+        j = neighbors_flat[base + t + 1]
+        dx = mic_fast(xi - rx[j], halfLx, Lx)
+        dy = mic_fast(yi - ry[j], halfLy, Ly)
+        dz = mic_fast(zi - rz[j], halfLz, Lz)
+        r2 = muladd(dx, dx, muladd(dy, dy, dz*dz))
+        σij = T(0.5) * (σi + σp[j])
+        rc = rcut_factor * σij
+        if (r2 > zero(T)) & (r2 < rc*rc)
+            invr2 = one(T) / r2
+            s2    = (σij*σij) * invr2
+            s6    = s2*s2*s2
+            s12   = s6*s6
+            f_over_r = T(24)*ϵ*(T(2)*s12 - s6)*invr2
+            fxij = f_over_r * dx
+            fyij = f_over_r * dy
+            fzij = f_over_r * dz
+            accx += fxij
+            accy += fyij
+            accz += fzij
+            ep = T(4)*ϵ*(s12 - s6) + ϵ
+            eacc += T(0.5) * ep
+            dvxx, dvyy, dvzz, dvxy, dvxz, dvyz = _half_virial3(dx, dy, dz, fxij, fyij, fzij)
+            vxx += dvxx; vyy += dvyy; vzz += dvzz
+            vxy += dvxy; vxz += dvxz; vyz += dvyz
+        end
+    end
+    fx[i] = accx; fy[i] = accy; fz[i] = accz; Epot[i] = eacc
+    V[i, 1] = vxx; V[i, 2] = vyy; V[i, 3] = vzz
+    V[i, 4] = vxy; V[i, 5] = vxz; V[i, 6] = vyz
     return
 end
 
@@ -2711,6 +4005,52 @@ function _wca2_csr_kernel_pairs!(
     return
 end
 
+function _wca2_csr_kernel_pairs_virial!(
+    rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
+    fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, Epot::CuDeviceVector{T}, V::CuDeviceMatrix{T},
+    neighbors_index::CuDeviceVector{Int32}, neighbors_flat::CuDeviceVector{Int32}, counts::CuDeviceVector{Int32},
+    Lx::T, Ly::T, halfLx::T, halfLy::T,
+    typeid::CuDeviceVector{Int32},
+    sigma_pair::CuDeviceMatrix{T}, epsilon_pair::CuDeviceMatrix{T}, rcut_pair::CuDeviceMatrix{T}
+) where {T<:AbstractFloat}
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    xi = rx[i]; yi = ry[i]
+    accx = zero(T); accy = zero(T); eacc = zero(T)
+    vxx = zero(T); vyy = zero(T); vxy = zero(T)
+    base  = neighbors_index[i]
+    nlist = counts[i]
+    ti = typeid[i]
+    @inbounds for t in 0:Int(nlist-1)
+        j = neighbors_flat[base + t + 1]
+        dx = mic_fast(xi - rx[j], halfLx, Lx)
+        dy = mic_fast(yi - ry[j], halfLy, Ly)
+        r2 = muladd(dx, dx, dy*dy)
+        tj = typeid[j]
+        σij = sigma_pair[ti, tj]
+        εij = epsilon_pair[ti, tj]
+        rc = rcut_pair[ti, tj]
+        if (r2 > zero(T)) & (r2 < rc*rc)
+            invr2 = one(T) / r2
+            s2    = (σij*σij) * invr2
+            s6    = s2*s2*s2
+            s12   = s6*s6
+            f_over_r = T(24)*εij*(T(2)*s12 - s6)*invr2
+            fxij = f_over_r * dx
+            fyij = f_over_r * dy
+            accx += fxij
+            accy += fyij
+            ep = T(4)*εij*(s12 - s6) + εij
+            eacc += T(0.5) * ep
+            dvxx, dvyy, dvxy = _half_virial2(dx, dy, fxij, fyij)
+            vxx += dvxx; vyy += dvyy; vxy += dvxy
+        end
+    end
+    fx[i] = accx; fy[i] = accy; Epot[i] = eacc
+    V[i, 1] = vxx; V[i, 2] = vyy; V[i, 3] = vxy
+    return
+end
+
 function _wca3_csr_kernel_pairs!(
     rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
     fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, fz::CuDeviceVector{T}, Epot::CuDeviceVector{T},
@@ -2750,6 +4090,57 @@ function _wca3_csr_kernel_pairs!(
         end
     end
     fx[i] = accx; fy[i] = accy; fz[i] = accz; Epot[i] = eacc
+    return
+end
+
+function _wca3_csr_kernel_pairs_virial!(
+    rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
+    fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, fz::CuDeviceVector{T}, Epot::CuDeviceVector{T}, V::CuDeviceMatrix{T},
+    neighbors_index::CuDeviceVector{Int32}, neighbors_flat::CuDeviceVector{Int32}, counts::CuDeviceVector{Int32},
+    Lx::T, Ly::T, Lz::T, halfLx::T, halfLy::T, halfLz::T,
+    typeid::CuDeviceVector{Int32},
+    sigma_pair::CuDeviceMatrix{T}, epsilon_pair::CuDeviceMatrix{T}, rcut_pair::CuDeviceMatrix{T}
+) where {T<:AbstractFloat}
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    xi = rx[i]; yi = ry[i]; zi = rz[i]
+    accx = zero(T); accy = zero(T); accz = zero(T); eacc = zero(T)
+    vxx = zero(T); vyy = zero(T); vzz = zero(T); vxy = zero(T); vxz = zero(T); vyz = zero(T)
+    base  = neighbors_index[i]
+    nlist = counts[i]
+    ti = typeid[i]
+    @inbounds for t in 0:Int(nlist-1)
+        j = neighbors_flat[base + t + 1]
+        dx = mic_fast(xi - rx[j], halfLx, Lx)
+        dy = mic_fast(yi - ry[j], halfLy, Ly)
+        dz = mic_fast(zi - rz[j], halfLz, Lz)
+        r2 = muladd(dx, dx, muladd(dy, dy, dz*dz))
+        tj = typeid[j]
+        σij = sigma_pair[ti, tj]
+        εij = epsilon_pair[ti, tj]
+        rc = rcut_pair[ti, tj]
+        if (r2 > zero(T)) & (r2 < rc*rc)
+            invr2 = one(T) / r2
+            s2    = (σij*σij) * invr2
+            s6    = s2*s2*s2
+            s12   = s6*s6
+            f_over_r = T(24)*εij*(T(2)*s12 - s6)*invr2
+            fxij = f_over_r * dx
+            fyij = f_over_r * dy
+            fzij = f_over_r * dz
+            accx += fxij
+            accy += fyij
+            accz += fzij
+            ep = T(4)*εij*(s12 - s6) + εij
+            eacc += T(0.5) * ep
+            dvxx, dvyy, dvzz, dvxy, dvxz, dvyz = _half_virial3(dx, dy, dz, fxij, fyij, fzij)
+            vxx += dvxx; vyy += dvyy; vzz += dvzz
+            vxy += dvxy; vxz += dvxz; vyz += dvyz
+        end
+    end
+    fx[i] = accx; fy[i] = accy; fz[i] = accz; Epot[i] = eacc
+    V[i, 1] = vxx; V[i, 2] = vyy; V[i, 3] = vzz
+    V[i, 4] = vxy; V[i, 5] = vxz; V[i, 6] = vyz
     return
 end
 
@@ -2864,6 +4255,45 @@ function _wca2_csr_kernel!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
     return
 end
 
+function _wca2_csr_kernel_virial!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
+    fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, Epot::CuDeviceVector{T}, V::CuDeviceMatrix{T},
+    neighbors_index::CuDeviceVector{Int32}, neighbors_flat::CuDeviceVector{Int32}, counts::CuDeviceVector{Int32},
+    Lx::T, Ly::T, halfLx::T, halfLy::T,
+    ϵ::T, σ::T) where {T<:AbstractFloat}
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    xi = rx[i]; yi = ry[i]
+    accx = zero(T); accy = zero(T); eacc = zero(T)
+    vxx = zero(T); vyy = zero(T); vxy = zero(T)
+    base  = neighbors_index[i]
+    nlist = counts[i]
+    rc2 = T(1.2599211) * (σ*σ)
+    @inbounds for t in 0:Int(nlist-1)
+        j = neighbors_flat[base + t + 1]
+        dx = mic_fast(xi - rx[j], halfLx, Lx)
+        dy = mic_fast(yi - ry[j], halfLy, Ly)
+        r2 = muladd(dx, dx, dy*dy)
+        if (r2 > zero(T)) & (r2 < rc2)
+            invr2 = one(T) / r2
+            s2    = (σ*σ) * invr2
+            s6    = s2*s2*s2
+            s12   = s6*s6
+            f_over_r = T(24)*ϵ*(T(2)*s12 - s6)*invr2
+            fxij = f_over_r * dx
+            fyij = f_over_r * dy
+            accx += fxij
+            accy += fyij
+            ep = T(4)*ϵ*(s12 - s6) + ϵ
+            eacc += T(0.5) * ep
+            dvxx, dvyy, dvxy = _half_virial2(dx, dy, fxij, fyij)
+            vxx += dvxx; vyy += dvyy; vxy += dvxy
+        end
+    end
+    fx[i] = accx; fy[i] = accy; Epot[i] = eacc
+    V[i, 1] = vxx; V[i, 2] = vyy; V[i, 3] = vxy
+    return
+end
+
 # Exclusion variants (skip bonded pairs)
 function _wca2_csr_kernel_excl!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
     fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, Epot::CuDeviceVector{T},
@@ -2897,6 +4327,47 @@ function _wca2_csr_kernel_excl!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
         end
     end
     fx[i] = accx; fy[i] = accy; Epot[i] = eacc
+    return
+end
+
+function _wca2_csr_kernel_excl_virial!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
+    fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, Epot::CuDeviceVector{T}, V::CuDeviceMatrix{T},
+    neighbors_index::CuDeviceVector{Int32}, neighbors_flat::CuDeviceVector{Int32}, counts::CuDeviceVector{Int32},
+    bindex::CuDeviceVector{Int32}, bflat::CuDeviceVector{Int32}, bcounts::CuDeviceVector{Int32},
+    Lx::T, Ly::T, halfLx::T, halfLy::T,
+    ϵ::T, σ::T) where {T<:AbstractFloat}
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    xi = rx[i]; yi = ry[i]
+    accx = zero(T); accy = zero(T); eacc = zero(T)
+    vxx = zero(T); vyy = zero(T); vxy = zero(T)
+    base  = neighbors_index[i]
+    nlist = counts[i]
+    rc2 = T(1.2599211) * (σ*σ)
+    @inbounds for t in 0:Int(nlist-1)
+        j = neighbors_flat[base + t + 1]
+        if _is_bonded(Int32(i), j, bindex, bflat, bcounts); continue; end
+        dx = mic_fast(xi - rx[j], halfLx, Lx)
+        dy = mic_fast(yi - ry[j], halfLy, Ly)
+        r2 = muladd(dx, dx, dy*dy)
+        if (r2 > zero(T)) & (r2 < rc2)
+            invr2 = one(T) / r2
+            s2    = (σ*σ) * invr2
+            s6    = s2*s2*s2
+            s12   = s6*s6
+            f_over_r = T(24)*ϵ*(T(2)*s12 - s6)*invr2
+            fxij = f_over_r * dx
+            fyij = f_over_r * dy
+            accx += fxij
+            accy += fyij
+            ep = T(4)*ϵ*(s12 - s6) + ϵ
+            eacc += T(0.5) * ep
+            dvxx, dvyy, dvxy = _half_virial2(dx, dy, fxij, fyij)
+            vxx += dvxx; vyy += dvyy; vxy += dvxy
+        end
+    end
+    fx[i] = accx; fy[i] = accy; Epot[i] = eacc
+    V[i, 1] = vxx; V[i, 2] = vyy; V[i, 3] = vxy
     return
 end
 
@@ -2934,6 +4405,52 @@ function _wca3_csr_kernel_excl!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz
         end
     end
     fx[i] = accx; fy[i] = accy; fz[i] = accz; Epot[i] = eacc
+    return
+end
+
+function _wca3_csr_kernel_excl_virial!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
+    fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, fz::CuDeviceVector{T}, Epot::CuDeviceVector{T}, V::CuDeviceMatrix{T},
+    neighbors_index::CuDeviceVector{Int32}, neighbors_flat::CuDeviceVector{Int32}, counts::CuDeviceVector{Int32},
+    bindex::CuDeviceVector{Int32}, bflat::CuDeviceVector{Int32}, bcounts::CuDeviceVector{Int32},
+    Lx::T, Ly::T, Lz::T, halfLx::T, halfLy::T, halfLz::T,
+    ϵ::T, σ::T ) where {T<:AbstractFloat}
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    xi = rx[i]; yi = ry[i]; zi = rz[i]
+    accx = zero(T); accy = zero(T); accz = zero(T); eacc = zero(T)
+    vxx = zero(T); vyy = zero(T); vzz = zero(T); vxy = zero(T); vxz = zero(T); vyz = zero(T)
+    base  = neighbors_index[i]
+    nlist = counts[i]
+    rc2 = T(1.2599211) * (σ*σ)
+    @inbounds for t in 0:Int(nlist-1)
+        j = neighbors_flat[base + t + 1]
+        if _is_bonded(Int32(i), j, bindex, bflat, bcounts); continue; end
+        dx = mic_fast(xi - rx[j], halfLx, Lx)
+        dy = mic_fast(yi - ry[j], halfLy, Ly)
+        dz = mic_fast(zi - rz[j], halfLz, Lz)
+        r2 = muladd(dx, dx, muladd(dy, dy, dz*dz))
+        if (r2 > zero(T)) & (r2 < rc2)
+            invr2 = one(T) / r2
+            s2    = (σ*σ) * invr2
+            s6    = s2*s2*s2
+            s12   = s6*s6
+            f_over_r = T(24)*ϵ*(T(2)*s12 - s6)*invr2
+            fxij = f_over_r * dx
+            fyij = f_over_r * dy
+            fzij = f_over_r * dz
+            accx += fxij
+            accy += fyij
+            accz += fzij
+            ep = T(4)*ϵ*(s12 - s6) + ϵ
+            eacc += T(0.5) * ep
+            dvxx, dvyy, dvzz, dvxy, dvxz, dvyz = _half_virial3(dx, dy, dz, fxij, fyij, fzij)
+            vxx += dvxx; vyy += dvyy; vzz += dvzz
+            vxy += dvxy; vxz += dvxz; vyz += dvyz
+        end
+    end
+    fx[i] = accx; fy[i] = accy; fz[i] = accz; Epot[i] = eacc
+    V[i, 1] = vxx; V[i, 2] = vyy; V[i, 3] = vzz
+    V[i, 4] = vxy; V[i, 5] = vxz; V[i, 6] = vyz
     return
 end
 
@@ -3030,6 +4547,31 @@ function wca_forces_soa_excl!(rx::CuArray{T,1}, ry::CuArray{T,1},
     return nothing
 end
 
+function wca_forces_soa_excl!(rx::CuArray{T,1}, ry::CuArray{T,1},
+                              fx::CuArray{T,1}, fy::CuArray{T,1}, Epot::CuArray{T,1}, V::CuArray{T,2},
+                              nbh::NeighborLists.NeighborMatrix{T},
+                              bonds::BondedForces.BondList,
+                              box::Definitions.Box2{T}, params::Definitions.LJParams{T} ) where {T<:AbstractFloat}
+    N = length(rx)
+    threads = (N < 100_000) ? 128 : 256
+    blocks  = cld(N, threads)
+    Lx = T(box[1]); Ly = T(box[2])
+    halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly
+    k = CUDA.@cuda launch=false _wca2_csr_kernel_excl_virial!(
+        rx, ry, fx, fy, Epot, V,
+        nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+        bonds.index, bonds.flat, bonds.counts,
+        Lx, Ly, halfLx, halfLy,
+        params.ϵ, params.σ
+    )
+    k(rx, ry, fx, fy, Epot, V,
+      nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+      bonds.index, bonds.flat, bonds.counts,
+      Lx, Ly, halfLx, halfLy,
+      params.ϵ, params.σ; threads, blocks)
+    return nothing
+end
+
 function wca_forces_soa_excl!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
                               fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1}, Epot::CuArray{T,1},
                               nbh::NeighborLists.NeighborMatrix{T},
@@ -3048,6 +4590,31 @@ function wca_forces_soa_excl!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,
         params.ϵ, params.σ
     )
     k(rx, ry, rz, fx, fy, fz, Epot,
+      nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+      bonds.index, bonds.flat, bonds.counts,
+      Lx, Ly, Lz, halfLx, halfLy, halfLz,
+      params.ϵ, params.σ; threads, blocks)
+    return nothing
+end
+
+function wca_forces_soa_excl!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
+                              fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1}, Epot::CuArray{T,1}, V::CuArray{T,2},
+                              nbh::NeighborLists.NeighborMatrix{T},
+                              bonds::BondedForces.BondList,
+                              box::Definitions.Box3{T}, params::Definitions.LJParams{T} ) where {T<:AbstractFloat}
+    N = length(rx)
+    threads = (N < 100_000) ? 128 : 256
+    blocks  = cld(N, threads)
+    Lx = T(box[1]); Ly = T(box[2]); Lz = T(box[3])
+    halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly; halfLz = T(0.5)*Lz
+    k = CUDA.@cuda launch=false _wca3_csr_kernel_excl_virial!(
+        rx, ry, rz, fx, fy, fz, Epot, V,
+        nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+        bonds.index, bonds.flat, bonds.counts,
+        Lx, Ly, Lz, halfLx, halfLy, halfLz,
+        params.ϵ, params.σ
+    )
+    k(rx, ry, rz, fx, fy, fz, Epot, V,
       nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
       bonds.index, bonds.flat, bonds.counts,
       Lx, Ly, Lz, halfLx, halfLy, halfLz,
@@ -3140,6 +4707,50 @@ function _wca3_csr_kernel!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuD
     return
 end
 
+function _wca3_csr_kernel_virial!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
+    fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, fz::CuDeviceVector{T}, Epot::CuDeviceVector{T}, V::CuDeviceMatrix{T},
+    neighbors_index::CuDeviceVector{Int32}, neighbors_flat::CuDeviceVector{Int32}, counts::CuDeviceVector{Int32},
+    Lx::T, Ly::T, Lz::T, halfLx::T, halfLy::T, halfLz::T,
+    ϵ::T, σ::T ) where {T<:AbstractFloat}
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    xi = rx[i]; yi = ry[i]; zi = rz[i]
+    accx = zero(T); accy = zero(T); accz = zero(T); eacc = zero(T)
+    vxx = zero(T); vyy = zero(T); vzz = zero(T); vxy = zero(T); vxz = zero(T); vyz = zero(T)
+    base  = neighbors_index[i]
+    nlist = counts[i]
+    rc2 = T(1.2599211) * (σ*σ)
+    @inbounds for t in 0:Int(nlist-1)
+        j = neighbors_flat[base + t + 1]
+        dx = mic_fast(xi - rx[j], halfLx, Lx)
+        dy = mic_fast(yi - ry[j], halfLy, Ly)
+        dz = mic_fast(zi - rz[j], halfLz, Lz)
+        r2 = muladd(dx, dx, muladd(dy, dy, dz*dz))
+        if (r2 > zero(T)) & (r2 < rc2)
+            invr2 = one(T) / r2
+            s2    = (σ*σ) * invr2
+            s6    = s2*s2*s2
+            s12   = s6*s6
+            f_over_r = T(24)*ϵ*(T(2)*s12 - s6)*invr2
+            fxij = f_over_r * dx
+            fyij = f_over_r * dy
+            fzij = f_over_r * dz
+            accx += fxij
+            accy += fyij
+            accz += fzij
+            ep = T(4)*ϵ*(s12 - s6) + ϵ
+            eacc += T(0.5) * ep
+            dvxx, dvyy, dvzz, dvxy, dvxz, dvyz = _half_virial3(dx, dy, dz, fxij, fyij, fzij)
+            vxx += dvxx; vyy += dvyy; vzz += dvzz
+            vxy += dvxy; vxz += dvxz; vyz += dvyz
+        end
+    end
+    fx[i] = accx; fy[i] = accy; fz[i] = accz; Epot[i] = eacc
+    V[i, 1] = vxx; V[i, 2] = vyy; V[i, 3] = vzz
+    V[i, 4] = vxy; V[i, 5] = vxz; V[i, 6] = vyz
+    return
+end
+
 function _wca2_csr_noE_kernel!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
     fx::CuDeviceVector{T}, fy::CuDeviceVector{T},
     neighbors_index::CuDeviceVector{Int32}, neighbors_flat::CuDeviceVector{Int32}, counts::CuDeviceVector{Int32},
@@ -3220,6 +4831,21 @@ function wca_forces_soa!(rx::CuArray{T,1}, ry::CuArray{T,1},
     return nothing
 end
 
+function wca_forces_soa!(rx::CuArray{T,1}, ry::CuArray{T,1},
+                        fx::CuArray{T,1}, fy::CuArray{T,1}, Epot::CuArray{T,1}, V::CuArray{T,2},
+                        nbh::NeighborLists.NeighborMatrix{T},
+                        box::Definitions.Box2{T}, params::Definitions.LJParams{T} ) where {T<:AbstractFloat}
+    N = length(rx); threads = (N < 100_000) ? 128 : 256; blocks = cld(N, threads)
+    Lx = T(box[1]); Ly = T(box[2]); halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly
+    k = CUDA.@cuda launch=false _wca2_csr_kernel_virial!(rx, ry, fx, fy, Epot, V,
+        nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+        Lx, Ly, halfLx, halfLy, params.ϵ, params.σ)
+    k(rx, ry, fx, fy, Epot, V,
+      nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+      Lx, Ly, halfLx, halfLy, params.ϵ, params.σ; threads, blocks)
+    return nothing
+end
+
 function wca_forces_soa!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
                         fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1}, Epot::CuArray{T,1},
                         nbh::NeighborLists.NeighborMatrix{T},
@@ -3232,6 +4858,23 @@ function wca_forces_soa!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
         nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
         Lx, Ly, Lz, halfLx, halfLy, halfLz, params.ϵ, params.σ)
     k(rx, ry, rz, fx, fy, fz, Epot,
+      nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+      Lx, Ly, Lz, halfLx, halfLy, halfLz, params.ϵ, params.σ; threads, blocks)
+    return nothing
+end
+
+function wca_forces_soa!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
+                        fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1}, Epot::CuArray{T,1}, V::CuArray{T,2},
+                        nbh::NeighborLists.NeighborMatrix{T},
+                        box::Definitions.Box3{T}, params::Definitions.LJParams{T}
+                        ) where {T<:AbstractFloat}
+    N = length(rx); threads = (N < 100_000) ? 128 : 256; blocks = cld(N, threads)
+    Lx = T(box[1]); Ly = T(box[2]); Lz = T(box[3])
+    halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly; halfLz = T(0.5)*Lz
+    k = CUDA.@cuda launch=false _wca3_csr_kernel_virial!(rx, ry, rz, fx, fy, fz, Epot, V,
+        nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+        Lx, Ly, Lz, halfLx, halfLy, halfLz, params.ϵ, params.σ)
+    k(rx, ry, rz, fx, fy, fz, Epot, V,
       nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
       Lx, Ly, Lz, halfLx, halfLy, halfLz, params.ϵ, params.σ; threads, blocks)
     return nothing
@@ -3259,6 +4902,27 @@ function wca_forces_soa_excl!(rx::CuArray{T,1}, ry::CuArray{T,1},
     return nothing
 end
 
+function wca_forces_soa_excl!(rx::CuArray{T,1}, ry::CuArray{T,1},
+                        fx::CuArray{T,1}, fy::CuArray{T,1}, Epot::CuArray{T,1}, V::CuArray{T,2},
+                        nbh::NeighborLists.StencilNeighborMatrix,
+                        bonds::BondedForces.BondList,
+                        box::Definitions.Box2{T}, params::Definitions.LJParams{T}) where {T<:AbstractFloat}
+    N = length(rx); threads = (N < 100_000) ? 128 : 256; blocks = cld(N, threads)
+    Lx = T(box[1]); Ly = T(box[2]); halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly
+    k = CUDA.@cuda launch=false _wca2_csr_kernel_excl_virial!(
+        rx, ry, fx, fy, Epot, V,
+        nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+        bonds.index, bonds.flat, bonds.counts,
+        Lx, Ly, halfLx, halfLy,
+        params.ϵ, params.σ)
+    k(rx, ry, fx, fy, Epot, V,
+      nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+      bonds.index, bonds.flat, bonds.counts,
+      Lx, Ly, halfLx, halfLy,
+      params.ϵ, params.σ; threads, blocks)
+    return nothing
+end
+
 function wca_forces_soa_excl!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
                         fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1}, Epot::CuArray{T,1},
                         nbh::NeighborLists.StencilNeighborMatrix,
@@ -3274,6 +4938,28 @@ function wca_forces_soa_excl!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,
         Lx, Ly, Lz, halfLx, halfLy, halfLz,
         params.ϵ, params.σ)
     k(rx, ry, rz, fx, fy, fz, Epot,
+      nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+      bonds.index, bonds.flat, bonds.counts,
+      Lx, Ly, Lz, halfLx, halfLy, halfLz,
+      params.ϵ, params.σ; threads, blocks)
+    return nothing
+end
+
+function wca_forces_soa_excl!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
+                        fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1}, Epot::CuArray{T,1}, V::CuArray{T,2},
+                        nbh::NeighborLists.StencilNeighborMatrix,
+                        bonds::BondedForces.BondList,
+                        box::Definitions.Box3{T}, params::Definitions.LJParams{T}) where {T<:AbstractFloat}
+    N = length(rx); threads = (N < 100_000) ? 128 : 256; blocks = cld(N, threads)
+    Lx = T(box[1]); Ly = T(box[2]); Lz = T(box[3])
+    halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly; halfLz = T(0.5)*Lz
+    k = CUDA.@cuda launch=false _wca3_csr_kernel_excl_virial!(
+        rx, ry, rz, fx, fy, fz, Epot, V,
+        nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+        bonds.index, bonds.flat, bonds.counts,
+        Lx, Ly, Lz, halfLx, halfLy, halfLz,
+        params.ϵ, params.σ)
+    k(rx, ry, rz, fx, fy, fz, Epot, V,
       nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
       bonds.index, bonds.flat, bonds.counts,
       Lx, Ly, Lz, halfLx, halfLy, halfLz,
@@ -3372,6 +5058,21 @@ function wca_forces_soa!(rx::CuArray{T,1}, ry::CuArray{T,1},
     return nothing
 end
 
+function wca_forces_soa!(rx::CuArray{T,1}, ry::CuArray{T,1},
+                        fx::CuArray{T,1}, fy::CuArray{T,1}, Epot::CuArray{T,1}, V::CuArray{T,2},
+                        nbh::NeighborLists.StencilNeighborMatrix,
+                        box::Definitions.Box2{T}, params::Definitions.LJParams{T} ) where {T<:AbstractFloat}
+    N = length(rx); threads = (N < 100_000) ? 128 : 256; blocks = cld(N, threads)
+    Lx = T(box[1]); Ly = T(box[2]); halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly
+    k = CUDA.@cuda launch=false _wca2_csr_kernel_virial!(rx, ry, fx, fy, Epot, V,
+        nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+        Lx, Ly, halfLx, halfLy, params.ϵ, params.σ)
+    k(rx, ry, fx, fy, Epot, V,
+      nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+      Lx, Ly, halfLx, halfLy, params.ϵ, params.σ; threads, blocks)
+    return nothing
+end
+
 function wca_forces_soa!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
                         fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1}, Epot::CuArray{T,1},
                         nbh::NeighborLists.StencilNeighborMatrix,
@@ -3384,6 +5085,23 @@ function wca_forces_soa!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
         nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
         Lx, Ly, Lz, halfLx, halfLy, halfLz, params.ϵ, params.σ)
     k(rx, ry, rz, fx, fy, fz, Epot,
+      nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+      Lx, Ly, Lz, halfLx, halfLy, halfLz, params.ϵ, params.σ; threads, blocks)
+    return nothing
+end
+
+function wca_forces_soa!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
+                        fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1}, Epot::CuArray{T,1}, V::CuArray{T,2},
+                        nbh::NeighborLists.StencilNeighborMatrix,
+                        box::Definitions.Box3{T}, params::Definitions.LJParams{T}
+                        ) where {T<:AbstractFloat}
+    N = length(rx); threads = (N < 100_000) ? 128 : 256; blocks = cld(N, threads)
+    Lx = T(box[1]); Ly = T(box[2]); Lz = T(box[3])
+    halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly; halfLz = T(0.5)*Lz
+    k = CUDA.@cuda launch=false _wca3_csr_kernel_virial!(rx, ry, rz, fx, fy, fz, Epot, V,
+        nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+        Lx, Ly, Lz, halfLx, halfLy, halfLz, params.ϵ, params.σ)
+    k(rx, ry, rz, fx, fy, fz, Epot, V,
       nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
       Lx, Ly, Lz, halfLx, halfLy, halfLz, params.ϵ, params.σ; threads, blocks)
     return nothing
@@ -3445,6 +5163,29 @@ function wca_forces_soa_mixed!(rx::CuArray{T,1}, ry::CuArray{T,1},
     return nothing
 end
 
+function wca_forces_soa_mixed!(rx::CuArray{T,1}, ry::CuArray{T,1},
+                               fx::CuArray{T,1}, fy::CuArray{T,1}, Epot::CuArray{T,1}, V::CuArray{T,2},
+                               nbh::NeighborLists.AbstractNeighborMatrix,
+                               box::Definitions.Box2{T},
+                               ϵ::T,
+                               σp::CuArray{T,1}, rcut_factor::T) where {T<:AbstractFloat}
+    N = length(rx)
+    threads = (N < 100_000) ? 128 : 256
+    blocks  = cld(N, threads)
+    Lx = T(box[1]); Ly = T(box[2])
+    halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly
+    k = CUDA.@cuda launch=false _wca2_csr_kernel_mixed_virial!(
+        rx, ry, fx, fy, Epot, V,
+        nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+        Lx, Ly, halfLx, halfLy,
+        ϵ, σp, rcut_factor)
+    k(rx, ry, fx, fy, Epot, V,
+      nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+      Lx, Ly, halfLx, halfLy,
+      ϵ, σp, rcut_factor; threads, blocks)
+    return nothing
+end
+
 function wca_forces_soa_mixed!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
                                fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1}, Epot::CuArray{T,1},
                                nbh::NeighborLists.AbstractNeighborMatrix,
@@ -3462,6 +5203,29 @@ function wca_forces_soa_mixed!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T
         Lx, Ly, Lz, halfLx, halfLy, halfLz,
         ϵ, σp, rcut_factor)
     k(rx, ry, rz, fx, fy, fz, Epot,
+      nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+      Lx, Ly, Lz, halfLx, halfLy, halfLz,
+      ϵ, σp, rcut_factor; threads, blocks)
+    return nothing
+end
+
+function wca_forces_soa_mixed!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
+                               fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1}, Epot::CuArray{T,1}, V::CuArray{T,2},
+                               nbh::NeighborLists.AbstractNeighborMatrix,
+                               box::Definitions.Box3{T},
+                               ϵ::T,
+                               σp::CuArray{T,1}, rcut_factor::T) where {T<:AbstractFloat}
+    N = length(rx)
+    threads = (N < 100_000) ? 128 : 256
+    blocks  = cld(N, threads)
+    Lx = T(box[1]); Ly = T(box[2]); Lz = T(box[3])
+    halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly; halfLz = T(0.5)*Lz
+    k = CUDA.@cuda launch=false _wca3_csr_kernel_mixed_virial!(
+        rx, ry, rz, fx, fy, fz, Epot, V,
+        nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+        Lx, Ly, Lz, halfLx, halfLy, halfLz,
+        ϵ, σp, rcut_factor)
+    k(rx, ry, rz, fx, fy, fz, Epot, V,
       nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
       Lx, Ly, Lz, halfLx, halfLy, halfLz,
       ϵ, σp, rcut_factor; threads, blocks)
@@ -3538,6 +5302,30 @@ function wca_forces_soa_pairs!(rx::CuArray{T,1}, ry::CuArray{T,1},
     return nothing
 end
 
+function wca_forces_soa_pairs!(rx::CuArray{T,1}, ry::CuArray{T,1},
+                               fx::CuArray{T,1}, fy::CuArray{T,1}, Epot::CuArray{T,1}, V::CuArray{T,2},
+                               nbh::NeighborLists.AbstractNeighborMatrix,
+                               box::Definitions.Box2{T},
+                               typeid::CuArray{Int32,1},
+                               sigma_pair::CuArray{T,2}, epsilon_pair::CuArray{T,2}, rcut_pair::CuArray{T,2}
+                               ) where {T<:AbstractFloat}
+    N = length(rx)
+    threads = (N < 100_000) ? 128 : 256
+    blocks  = cld(N, threads)
+    Lx = T(box[1]); Ly = T(box[2])
+    halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly
+    k = CUDA.@cuda launch=false _wca2_csr_kernel_pairs_virial!(
+        rx, ry, fx, fy, Epot, V,
+        nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+        Lx, Ly, halfLx, halfLy,
+        typeid, sigma_pair, epsilon_pair, rcut_pair)
+    k(rx, ry, fx, fy, Epot, V,
+      nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+      Lx, Ly, halfLx, halfLy,
+      typeid, sigma_pair, epsilon_pair, rcut_pair; threads, blocks)
+    return nothing
+end
+
 function wca_forces_soa_pairs!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
                                fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1}, Epot::CuArray{T,1},
                                nbh::NeighborLists.AbstractNeighborMatrix,
@@ -3556,6 +5344,30 @@ function wca_forces_soa_pairs!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T
         Lx, Ly, Lz, halfLx, halfLy, halfLz,
         typeid, sigma_pair, epsilon_pair, rcut_pair)
     k(rx, ry, rz, fx, fy, fz, Epot,
+      nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+      Lx, Ly, Lz, halfLx, halfLy, halfLz,
+      typeid, sigma_pair, epsilon_pair, rcut_pair; threads, blocks)
+    return nothing
+end
+
+function wca_forces_soa_pairs!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
+                               fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1}, Epot::CuArray{T,1}, V::CuArray{T,2},
+                               nbh::NeighborLists.AbstractNeighborMatrix,
+                               box::Definitions.Box3{T},
+                               typeid::CuArray{Int32,1},
+                               sigma_pair::CuArray{T,2}, epsilon_pair::CuArray{T,2}, rcut_pair::CuArray{T,2}
+                               ) where {T<:AbstractFloat}
+    N = length(rx)
+    threads = (N < 100_000) ? 128 : 256
+    blocks  = cld(N, threads)
+    Lx = T(box[1]); Ly = T(box[2]); Lz = T(box[3])
+    halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly; halfLz = T(0.5)*Lz
+    k = CUDA.@cuda launch=false _wca3_csr_kernel_pairs_virial!(
+        rx, ry, rz, fx, fy, fz, Epot, V,
+        nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+        Lx, Ly, Lz, halfLx, halfLy, halfLz,
+        typeid, sigma_pair, epsilon_pair, rcut_pair)
+    k(rx, ry, rz, fx, fy, fz, Epot, V,
       nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
       Lx, Ly, Lz, halfLx, halfLy, halfLz,
       typeid, sigma_pair, epsilon_pair, rcut_pair; threads, blocks)
@@ -3643,6 +5455,41 @@ function _harmrep2_csr_kernel!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
     return
 end
 
+function _harmrep2_csr_kernel_virial!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
+    fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, Epot::CuDeviceVector{T}, V::CuDeviceMatrix{T},
+    neighbors_index::CuDeviceVector{Int32}, neighbors_flat::CuDeviceVector{Int32}, counts::CuDeviceVector{Int32},
+    Lx::T, Ly::T, halfLx::T, halfLy::T, ϵ::T, σ::T ) where {T<:AbstractFloat}
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    xi = rx[i]; yi = ry[i]
+    accx = zero(T); accy = zero(T); eacc = zero(T)
+    vxx = zero(T); vyy = zero(T); vxy = zero(T)
+    base  = neighbors_index[i]
+    nlist = counts[i]
+    σ2 = σ*σ
+    @inbounds for t in 0:Int(nlist-1)
+        j = neighbors_flat[base + t + 1]
+        dx = mic_fast(xi - rx[j], halfLx, Lx)
+        dy = mic_fast(yi - ry[j], halfLy, Ly)
+        r2 = muladd(dx, dx, dy*dy)
+        if (r2 > zero(T)) & (r2 < σ2)
+            r = sqrt(r2)
+            f_over_r = (ϵ/σ) * (one(T) - r/σ) / r
+            fxij = f_over_r * dx
+            fyij = f_over_r * dy
+            accx += fxij
+            accy += fyij
+            ep = T(0.5) * ϵ * (one(T) - r/σ)*(one(T) - r/σ)
+            eacc += T(0.5) * ep
+            dvxx, dvyy, dvxy = _half_virial2(dx, dy, fxij, fyij)
+            vxx += dvxx; vyy += dvyy; vxy += dvxy
+        end
+    end
+    fx[i] = accx; fy[i] = accy; Epot[i] = eacc
+    V[i, 1] = vxx; V[i, 2] = vyy; V[i, 3] = vxy
+    return
+end
+
 # Exclusion variants for soft-repulsive harmonic
 function _harmrep2_csr_kernel_excl!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
     fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, Epot::CuDeviceVector{T},
@@ -3672,6 +5519,43 @@ function _harmrep2_csr_kernel_excl!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}
         end
     end
     fx[i] = accx; fy[i] = accy; Epot[i] = eacc
+    return
+end
+
+function _harmrep2_csr_kernel_excl_virial!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
+    fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, Epot::CuDeviceVector{T}, V::CuDeviceMatrix{T},
+    neighbors_index::CuDeviceVector{Int32}, neighbors_flat::CuDeviceVector{Int32}, counts::CuDeviceVector{Int32},
+    bindex::CuDeviceVector{Int32}, bflat::CuDeviceVector{Int32}, bcounts::CuDeviceVector{Int32},
+    Lx::T, Ly::T, halfLx::T, halfLy::T, ϵ::T, σ::T ) where {T<:AbstractFloat}
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    xi = rx[i]; yi = ry[i]
+    accx = zero(T); accy = zero(T); eacc = zero(T)
+    vxx = zero(T); vyy = zero(T); vxy = zero(T)
+    base  = neighbors_index[i]
+    nlist = counts[i]
+    σ2 = σ*σ
+    bbase, bnb, b1, b2 = _bond_cache(Int32(i), bindex, bflat, bcounts)
+    @inbounds for t in 0:Int(nlist-1)
+        j = neighbors_flat[base + t + 1]
+        if _is_bonded_cached(j, bbase, bnb, b1, b2, bflat); continue; end
+        dx = mic_fast(xi - rx[j], halfLx, Lx)
+        dy = mic_fast(yi - ry[j], halfLy, Ly)
+        r2 = muladd(dx, dx, dy*dy)
+        if (r2 > zero(T)) & (r2 < σ2)
+            r = sqrt(r2)
+            f_over_r = (ϵ/σ) * (one(T) - r/σ) / r
+            fxij = f_over_r * dx
+            fyij = f_over_r * dy
+            accx += fxij
+            accy += fyij
+            eacc += T(0.5) * (T(0.5) * ϵ*(one(T) - r/σ)*(one(T) - r/σ))
+            dvxx, dvyy, dvxy = _half_virial2(dx, dy, fxij, fyij)
+            vxx += dvxx; vyy += dvyy; vxy += dvxy
+        end
+    end
+    fx[i] = accx; fy[i] = accy; Epot[i] = eacc
+    V[i, 1] = vxx; V[i, 2] = vyy; V[i, 3] = vxy
     return
 end
 
@@ -3705,6 +5589,48 @@ function _harmrep3_csr_kernel_excl!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}
         end
     end
     fx[i] = accx; fy[i] = accy; fz[i] = accz; Epot[i] = eacc
+    return
+end
+
+function _harmrep3_csr_kernel_excl_virial!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
+    fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, fz::CuDeviceVector{T}, Epot::CuDeviceVector{T}, V::CuDeviceMatrix{T},
+    neighbors_index::CuDeviceVector{Int32}, neighbors_flat::CuDeviceVector{Int32}, counts::CuDeviceVector{Int32},
+    bindex::CuDeviceVector{Int32}, bflat::CuDeviceVector{Int32}, bcounts::CuDeviceVector{Int32},
+    Lx::T, Ly::T, Lz::T, halfLx::T, halfLy::T, halfLz::T, ϵ::T, σ::T ) where {T<:AbstractFloat}
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    xi = rx[i]; yi = ry[i]; zi = rz[i]
+    accx = zero(T); accy = zero(T); accz = zero(T); eacc = zero(T)
+    vxx = zero(T); vyy = zero(T); vzz = zero(T); vxy = zero(T); vxz = zero(T); vyz = zero(T)
+    base  = neighbors_index[i]
+    nlist = counts[i]
+    σ2 = σ*σ
+    bbase, bnb, b1, b2 = _bond_cache(Int32(i), bindex, bflat, bcounts)
+    @inbounds for t in 0:Int(nlist-1)
+        j = neighbors_flat[base + t + 1]
+        if _is_bonded_cached(j, bbase, bnb, b1, b2, bflat); continue; end
+        dx = mic_fast(xi - rx[j], halfLx, Lx)
+        dy = mic_fast(yi - ry[j], halfLy, Ly)
+        dz = mic_fast(zi - rz[j], halfLz, Lz)
+        r2 = muladd(dx, dx, muladd(dy, dy, dz*dz))
+        if (r2 > zero(T)) & (r2 < σ2)
+            r = sqrt(r2)
+            f_over_r = (ϵ/σ) * (one(T) - r/σ) / r
+            fxij = f_over_r * dx
+            fyij = f_over_r * dy
+            fzij = f_over_r * dz
+            accx += fxij
+            accy += fyij
+            accz += fzij
+            eacc += T(0.5) * (T(0.5) * ϵ*(one(T) - r/σ)*(one(T) - r/σ))
+            dvxx, dvyy, dvzz, dvxy, dvxz, dvyz = _half_virial3(dx, dy, dz, fxij, fyij, fzij)
+            vxx += dvxx; vyy += dvyy; vzz += dvzz
+            vxy += dvxy; vxz += dvxz; vyz += dvyz
+        end
+    end
+    fx[i] = accx; fy[i] = accy; fz[i] = accz; Epot[i] = eacc
+    V[i, 1] = vxx; V[i, 2] = vyy; V[i, 3] = vzz
+    V[i, 4] = vxy; V[i, 5] = vxz; V[i, 6] = vyz
     return
 end
 
@@ -3792,6 +5718,25 @@ function harmonic_rep_forces_soa_excl!(rx::CuArray{T,1}, ry::CuArray{T,1},
     return nothing
 end
 
+function harmonic_rep_forces_soa_excl!(rx::CuArray{T,1}, ry::CuArray{T,1},
+                                       fx::CuArray{T,1}, fy::CuArray{T,1}, Epot::CuArray{T,1}, V::CuArray{T,2},
+                                       nbh::NeighborLists.NeighborMatrix{T},
+                                       bonds::BondedForces.BondList,
+                                       box::Definitions.Box2{T}, params::Definitions.SoftRepulsiveParams{T}
+                                       ) where {T<:AbstractFloat}
+    N = length(rx); threads = min(_softrep_threads(N), N); blocks = cld(N, threads)
+    Lx = T(box[1]); Ly = T(box[2]); halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly
+    k = CUDA.@cuda launch=false _harmrep2_csr_kernel_excl_virial!(rx, ry, fx, fy, Epot, V,
+        nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+        bonds.index, bonds.flat, bonds.counts,
+        Lx, Ly, halfLx, halfLy, params.ϵ, params.σ)
+    k(rx, ry, fx, fy, Epot, V,
+      nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+      bonds.index, bonds.flat, bonds.counts,
+      Lx, Ly, halfLx, halfLy, params.ϵ, params.σ; threads, blocks)
+    return nothing
+end
+
 function harmonic_rep_forces_soa_excl!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
                                        fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1}, Epot::CuArray{T,1},
                                        nbh::NeighborLists.NeighborMatrix{T},
@@ -3806,6 +5751,26 @@ function harmonic_rep_forces_soa_excl!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::C
         bonds.index, bonds.flat, bonds.counts,
         Lx, Ly, Lz, halfLx, halfLy, halfLz, params.ϵ, params.σ)
     k(rx, ry, rz, fx, fy, fz, Epot,
+      nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+      bonds.index, bonds.flat, bonds.counts,
+      Lx, Ly, Lz, halfLx, halfLy, halfLz, params.ϵ, params.σ; threads, blocks)
+    return nothing
+end
+
+function harmonic_rep_forces_soa_excl!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
+                                       fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1}, Epot::CuArray{T,1}, V::CuArray{T,2},
+                                       nbh::NeighborLists.NeighborMatrix{T},
+                                       bonds::BondedForces.BondList,
+                                       box::Definitions.Box3{T}, params::Definitions.SoftRepulsiveParams{T}
+                                       ) where {T<:AbstractFloat}
+    N = length(rx); threads = min(_softrep_threads(N), N); blocks = cld(N, threads)
+    Lx = T(box[1]); Ly = T(box[2]); Lz = T(box[3])
+    halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly; halfLz = T(0.5)*Lz
+    k = CUDA.@cuda launch=false _harmrep3_csr_kernel_excl_virial!(rx, ry, rz, fx, fy, fz, Epot, V,
+        nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+        bonds.index, bonds.flat, bonds.counts,
+        Lx, Ly, Lz, halfLx, halfLy, halfLz, params.ϵ, params.σ)
+    k(rx, ry, rz, fx, fy, fz, Epot, V,
       nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
       bonds.index, bonds.flat, bonds.counts,
       Lx, Ly, Lz, halfLx, halfLy, halfLz, params.ϵ, params.σ; threads, blocks)
@@ -3880,6 +5845,47 @@ function _harmrep3_csr_kernel!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz:
         end
     end
     fx[i] = accx; fy[i] = accy; fz[i] = accz; Epot[i] = eacc
+    return
+end
+
+function _harmrep3_csr_kernel_virial!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
+    fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, fz::CuDeviceVector{T}, Epot::CuDeviceVector{T}, V::CuDeviceMatrix{T},
+    neighbors_index::CuDeviceVector{Int32}, neighbors_flat::CuDeviceVector{Int32}, counts::CuDeviceVector{Int32},
+    Lx::T, Ly::T, Lz::T, halfLx::T, halfLy::T, halfLz::T, ϵ::T, σ::T
+    ) where {T<:AbstractFloat}
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    xi = rx[i]; yi = ry[i]; zi = rz[i]
+    accx = zero(T); accy = zero(T); accz = zero(T); eacc = zero(T)
+    vxx = zero(T); vyy = zero(T); vzz = zero(T); vxy = zero(T); vxz = zero(T); vyz = zero(T)
+    base  = neighbors_index[i]
+    nlist = counts[i]
+    σ2 = σ*σ
+    @inbounds for t in 0:Int(nlist-1)
+        j = neighbors_flat[base + t + 1]
+        dx = mic_fast(xi - rx[j], halfLx, Lx)
+        dy = mic_fast(yi - ry[j], halfLy, Ly)
+        dz = mic_fast(zi - rz[j], halfLz, Lz)
+        r2 = muladd(dx, dx, muladd(dy, dy, dz*dz))
+        if (r2 > zero(T)) & (r2 < σ2)
+            r = sqrt(r2)
+            f_over_r = (ϵ/σ) * (one(T) - r/σ) / r
+            fxij = f_over_r * dx
+            fyij = f_over_r * dy
+            fzij = f_over_r * dz
+            accx += fxij
+            accy += fyij
+            accz += fzij
+            ep = T(0.5) * ϵ * (one(T) - r/σ)*(one(T) - r/σ)
+            eacc += T(0.5) * ep
+            dvxx, dvyy, dvzz, dvxy, dvxz, dvyz = _half_virial3(dx, dy, dz, fxij, fyij, fzij)
+            vxx += dvxx; vyy += dvyy; vzz += dvzz
+            vxy += dvxy; vxz += dvxz; vyz += dvyz
+        end
+    end
+    fx[i] = accx; fy[i] = accy; fz[i] = accz; Epot[i] = eacc
+    V[i, 1] = vxx; V[i, 2] = vyy; V[i, 3] = vzz
+    V[i, 4] = vxy; V[i, 5] = vxz; V[i, 6] = vyz
     return
 end
 
@@ -3958,6 +5964,22 @@ function harmonic_rep_forces_soa!(rx::CuArray{T,1}, ry::CuArray{T,1},
     return nothing
 end
 
+function harmonic_rep_forces_soa!(rx::CuArray{T,1}, ry::CuArray{T,1},
+                                  fx::CuArray{T,1}, fy::CuArray{T,1}, Epot::CuArray{T,1}, V::CuArray{T,2},
+                                  nbh::NeighborLists.NeighborMatrix{T},
+                                  box::Definitions.Box2{T}, params::Definitions.SoftRepulsiveParams{T}
+                                  ) where {T<:AbstractFloat}
+    N = length(rx); threads = min(_softrep_threads(N), N); blocks = cld(N, threads)
+    Lx = T(box[1]); Ly = T(box[2]); halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly
+    k = CUDA.@cuda launch=false _harmrep2_csr_kernel_virial!(rx, ry, fx, fy, Epot, V,
+        nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+        Lx, Ly, halfLx, halfLy, params.ϵ, params.σ)
+    k(rx, ry, fx, fy, Epot, V,
+      nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+      Lx, Ly, halfLx, halfLy, params.ϵ, params.σ; threads, blocks)
+    return nothing
+end
+
 function harmonic_rep_forces_soa!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
                                   fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1}, Epot::CuArray{T,1},
                                   nbh::NeighborLists.NeighborMatrix{T},
@@ -3970,6 +5992,23 @@ function harmonic_rep_forces_soa!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArra
         nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
         Lx, Ly, Lz, halfLx, halfLy, halfLz, params.ϵ, params.σ)
     k(rx, ry, rz, fx, fy, fz, Epot,
+      nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+      Lx, Ly, Lz, halfLx, halfLy, halfLz, params.ϵ, params.σ; threads, blocks)
+    return nothing
+end
+
+function harmonic_rep_forces_soa!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
+                                  fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1}, Epot::CuArray{T,1}, V::CuArray{T,2},
+                                  nbh::NeighborLists.NeighborMatrix{T},
+                                  box::Definitions.Box3{T}, params::Definitions.SoftRepulsiveParams{T}
+                                  ) where {T<:AbstractFloat}
+    N = length(rx); threads = min(_softrep_threads(N), N); blocks = cld(N, threads)
+    Lx = T(box[1]); Ly = T(box[2]); Lz = T(box[3])
+    halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly; halfLz = T(0.5)*Lz
+    k = CUDA.@cuda launch=false _harmrep3_csr_kernel_virial!(rx, ry, rz, fx, fy, fz, Epot, V,
+        nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+        Lx, Ly, Lz, halfLx, halfLy, halfLz, params.ϵ, params.σ)
+    k(rx, ry, rz, fx, fy, fz, Epot, V,
       nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
       Lx, Ly, Lz, halfLx, halfLy, halfLz, params.ϵ, params.σ; threads, blocks)
     return nothing

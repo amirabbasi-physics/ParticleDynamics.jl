@@ -29,6 +29,7 @@ using .ParamsFromExamples
         include("test_neighbors.jl")
         include("test_integrators_langevin.jl")
         include("test_integrators_brownian.jl")
+        include("test_virial.jl")
         include("test_collisions.jl")
         include("test_io_gsd.jl")
         include("test_ir_phase2.jl")
