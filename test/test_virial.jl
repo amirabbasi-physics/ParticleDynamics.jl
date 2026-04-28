@@ -121,16 +121,19 @@ using NonEqSimGPU: Simulation, accumulate_virial!, virial_components, virial_ten
 
     function refresh_forces!(st, mode::Symbol; dt::Real=zero(eltype(st.rx)))
         dtT = eltype(st.rx)(dt)
+        T = eltype(st.rx)
+        gamma = one(T)
+        temperature = zero(T)
         if mode == :vv
-            Simulation.step!(st, Simulation.velocityverlet(st), dtT; compute_energy=true)
+            Simulation.step!(st, Simulation.velocityverlet(st; gamma=gamma, temperature=temperature, dt=dtT), dtT; compute_energy=true)
         elseif mode == :baoa
-            Simulation.step!(st, Simulation.baoa(st), dtT; compute_energy=true)
+            Simulation.step!(st, Simulation.baoa(st; gamma=gamma, temperature=temperature, dt=dtT), dtT; compute_energy=true)
         elseif mode == :baoab
-            Simulation.step!(st, Simulation.baoab(st), dtT; compute_energy=true)
+            Simulation.step!(st, Simulation.baoab(st; gamma=gamma, temperature=temperature, dt=dtT), dtT; compute_energy=true)
         elseif mode == :eh
-            Simulation.step!(st, Simulation.eulerheun(st), dtT; compute_energy=true)
+            Simulation.step!(st, Simulation.eulerheun(st; gamma=gamma, temperature=temperature, dt=dtT), dtT; compute_energy=true)
         elseif mode == :em
-            Simulation.step!(st, Simulation.eulermaruyama(st), dtT; compute_energy=true)
+            Simulation.step!(st, Simulation.eulermaruyama(st; gamma=gamma, temperature=temperature, dt=dtT), dtT; compute_energy=true)
         else
             error("unknown refresh mode $(mode)")
         end

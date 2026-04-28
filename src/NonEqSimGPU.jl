@@ -28,8 +28,9 @@ st = build_simulation(N=N, box=box, dt=dt,
                       gamma=50f0, temperature=1f0,
                       nonbonded=:wca, precision=:f32)
 
+vv = velocityverlet(st; gamma=50f0, temperature=1f0, dt=dt)
 for _ in 1:50
-    step!(st, dt; compute_energy=true)
+    step!(st, vv, dt; compute_energy=true)
 end
 ```
 
@@ -50,6 +51,7 @@ include("BondedForces.jl")
 include("NonBondedForces.jl")
 include("LangevinIntegrators.jl")
 include("BrownianIntegrators.jl")
+include("IntegratorInterfaces.jl")
 include("Collisions.jl")
 include("Simulation.jl")
 include("Filters.jl")
@@ -62,9 +64,12 @@ using .Definitions: LJParams, SoftRepulsiveParams,
     BondPotential, HarmonicBond, FENEBond,
     StokesFrictionCoefficient, SphereMass, InertialTime, DiffusiveTime,
     harmonic_bond, fene_bond
+using .IntegratorInterfaces: AbstractIntegratorSpec
 
 using .Simulation: SimulationState, build_simulation, step!, step_graph!, zero_forces!, sync_unwrapped!, accumulate_energies!, accumulate_virial!, virial_components, virial_tensor
-using .Simulation: IntegratorSpec, VVSpec, BAOABSpec, BAOASpec, GSMSpec, BrownianSpec, velocityverlet, baoab, baoa, gsm, eulerheun, eulermaruyama
+using .Simulation: run_integrator_step!, collect_step_observables, thermostatted_dof, thermostatted_particle_mask
+using .Simulation: IntegratorSpec, VVSpec, BAOABSpec, BAOASpec, GSMSpec, BrownianSpec, EMSpec, NHCParams, NHCSpec, CSVRParams, CSVRSpec
+using .Simulation: velocityverlet, baoab, baoa, gsm, eulerheun, eulermaruyama, nosehooverchain, csvr
 using .Writers: InMemoryLogger, CSVWriter, XYZWriter,
     write_xyz!, write_observables_csv!, gsd_open, gsd_close, write_gsd_frame!, read_gsd_frame!
 using .BondedForces: BondList, build_bondlist
@@ -83,7 +88,10 @@ export Filters, BondedForces,
        StokesFrictionCoefficient, SphereMass, InertialTime, DiffusiveTime,
        # Simulation helpers
        SimulationState, build_simulation, step!, step_graph!, zero_forces!, sync_unwrapped!, accumulate_energies!, accumulate_virial!, virial_components, virial_tensor,
-       IntegratorSpec, VVSpec, BAOABSpec, BAOASpec, GSMSpec, BrownianSpec, velocityverlet, baoab, baoa, gsm, eulermaruyama,
+       run_integrator_step!, collect_step_observables, thermostatted_dof, thermostatted_particle_mask,
+       AbstractIntegratorSpec,
+       IntegratorSpec, VVSpec, BAOABSpec, BAOASpec, GSMSpec, BrownianSpec, EMSpec, NHCParams, NHCSpec, CSVRParams, CSVRSpec,
+       velocityverlet, baoab, baoa, gsm, eulermaruyama, nosehooverchain, csvr,
        # Writers
        InMemoryLogger, CSVWriter, XYZWriter,
        write_xyz!, write_observables_csv!, gsd_open, gsd_close, write_gsd_frame!,

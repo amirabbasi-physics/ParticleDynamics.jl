@@ -133,9 +133,9 @@
         NonEqSimGPU.NeighborLists.update_neighbors_inplace!(st_poly.nbh, st_poly.rx, st_poly.ry; box=st_poly.box2, step=st_poly.step)
         NonEqSimGPU.NeighborLists.update_neighbors_inplace!(st_gas.nbh, st_gas.rx, st_gas.ry; box=st_gas.box2, step=st_gas.step)
 
-        spec_poly = Simulation.velocityverlet(st_poly)
-        spec_gas = Simulation.velocityverlet(st_gas)
         dt = T(2.5e-6)
+        spec_poly = Simulation.velocityverlet(st_poly; gamma=T(1), temperature=T(0), dt=dt)
+        spec_gas = Simulation.velocityverlet(st_gas; gamma=T(1), temperature=T(0), dt=dt)
 
         for _ in 1:8
             Simulation.step!(st_poly, spec_poly, dt; compute_energy=true)

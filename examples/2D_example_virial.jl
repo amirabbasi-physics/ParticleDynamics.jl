@@ -61,13 +61,14 @@ st = build_simulation(
 )
 
 initialize_square_lattice!(st, box)
+vv = velocityverlet(st; gamma=gamma, temperature=temperature, dt=dt)
 
 gsd_path = joinpath(@__DIR__, "traj2d_virial.gsd")
 types = ["A"]
 
 gsd_open(gsd_path) do gsdh
     # Populate force and virial buffers before the first dump.
-    step!(st, dt; compute_energy = true)
+    step!(st, vv, dt; compute_energy = true)
     write_gsd_frame!(gsdh, st;
                      diameter = sigma,
                      types_names = types,
@@ -76,14 +77,14 @@ gsd_open(gsd_path) do gsdh
 
     @time for s in 2:N_steps
         if s % N_log == 0
-            step!(st, dt; compute_energy = true)
+            step!(st, vv, dt; compute_energy = true)
             write_gsd_frame!(gsdh, st;
                              diameter = sigma,
                              types_names = types,
                              step = st.step,
                              write_virial = true)
         else
-            step!(st, dt; compute_energy = false)
+            step!(st, vv, dt; compute_energy = false)
         end
     end
 end

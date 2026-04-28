@@ -59,6 +59,7 @@ st = build_simulation(N=N, box=box, cutoff=r_cut, skin= r_cut/2, cap=cap,
 
 # ---- Initialize positions ----
 init_chain_line!(st, box)
+vv = velocityverlet(st; gamma=gamma, temperature=temperature, dt=dt)
 
 gsd_path = joinpath(@__DIR__, "polymer2d.gsd")
 gsdh = gsd_open(gsd_path)
@@ -67,12 +68,12 @@ write_gsd_frame!(gsdh, st; diameter=sigma, types_names=types, step=st.step)
 
 @time for s in 1:N_steps
     if s % N_log == 0
-        step!(st, dt)
+        step!(st, vv, dt)
         write_observables_csv!(joinpath(@__DIR__, "obs2d_polymer.csv"), s; Epot=st.Epot, Ekin=st.Ekin, dq=st.dq)
         write_gsd_frame!(gsdh, st; diameter=sigma, types_names=types, step=st.step)
         @info "polymer step" step=s Epot_sum=sum(st.Epot) Ekin_sum=sum(st.Ekin)
     else
-        step!(st, dt, compute_energy=false)
+        step!(st, vv, dt, compute_energy=false)
     end
 end
 

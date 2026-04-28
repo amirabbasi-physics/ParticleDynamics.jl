@@ -8,7 +8,9 @@
         )
         err = nothing
         try
-            Simulation.step_graph!(st, 1f-3; compute_energy=false)
+            vv = Simulation.velocityverlet(st; gamma=1f0, temperature=1f0, dt=1f-3)
+            Simulation.step_graph!(st, vv, 1f-3; compute_energy=false)
+            Simulation.step_graph!(st, vv.params, 1f-3; compute_energy=false)
         catch e
             err = e
         end
@@ -98,7 +100,7 @@
         fill!(st.coll_prev, UInt8(0x07))
         prev_len = length(st.coll_prev)
 
-        em = Simulation.eulermaruyama(st)
+        em = Simulation.eulermaruyama(st; gamma=1f0, temperature=0.5f0, dt=1f-3)
         err = nothing
         try
             Simulation.step!(st, em, 1f-3; compute_energy=false)
@@ -127,7 +129,7 @@
             cap=Int32(32), neigh_interval=1, use_neighborlist=true,
             nonbonded=:wca, gamma=0f0, temperature=1f0, dt=1f-3
         )
-        spec = Simulation.baoab(st)
+        spec = Simulation.baoab(st; gamma=0f0, temperature=1f0, dt=1f-3)
         err = nothing
         try
             Simulation.step!(st, spec, 1f-3; compute_energy=false)
@@ -148,7 +150,7 @@
             cap=Int32(32), neigh_interval=1, use_neighborlist=true,
             nonbonded=:wca, gamma=0f0, temperature=1f0, dt=1f-3
         )
-        mid = Simulation.eulerheun(st_mid)
+        mid = Simulation.eulerheun(st_mid; gamma=0f0, temperature=1f0, dt=1f-3)
         err_mid = nothing
         try
             Simulation.step!(st_mid, mid, 1f-3; compute_energy=false)
@@ -165,7 +167,7 @@
             cap=Int32(32), neigh_interval=1, use_neighborlist=true,
             nonbonded=:wca, gamma=0f0, temperature=1f0, dt=1f-3
         )
-        em = Simulation.eulermaruyama(st_em)
+        em = Simulation.eulermaruyama(st_em; gamma=0f0, temperature=1f0, dt=1f-3)
         err_em = nothing
         try
             Simulation.step!(st_em, em, 1f-3; compute_energy=false)

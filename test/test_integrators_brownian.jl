@@ -6,22 +6,24 @@
             N=8, T=Float32, box=(10f0, 10f0), cutoff=2.5f0, skin=0.3f0, cap=Int32(16),
             neigh_interval=5, gamma=1f0, temperature=1f0, noise_corr_time=0.05f0
         )
-        bp = BrownianIntegrators.BrownianParams(st)
+        spec = Simulation.eulerheun(st; gamma=1f0, temperature=1f0, noise_corr_time=0.05f0, dt=dt)
+        Simulation.ensure_integrator_workspace!(spec, st)
+        bp = spec.params
         @test bp.corr_time !== nothing
-        bp = Filters.set_corr_time!(bp, 0.2f0)
+        spec.params = Filters.set_corr_time!(bp, 0.2f0)
+        bp = spec.params
         @test bp.corr_time !== nothing
         @test all(abs.(Array(bp.corr_time) .- 0.2f0) .< 1f-6)
 
         BrownianIntegrators.bd_prepare_noise_2d!(
-            st.rf_x, st.rf_y;
+            spec.workspace.rf_x, spec.workspace.rf_y;
             noise_scale=bp.noise_scale,
-            corr_time=bp.corr_time,
-            state_x=st.ou_x, state_y=st.ou_y,
-            dt=dt,
+            ou=bp.ou,
+            state_x=spec.workspace.ou_x, state_y=spec.workspace.ou_y,
         )
         CUDA.synchronize()
-        @test gpu_allfinite(st.rf_x)
-        @test gpu_allfinite(st.rf_y)
+        @test gpu_allfinite(spec.workspace.rf_x)
+        @test gpu_allfinite(spec.workspace.rf_y)
     end
 
     @testset "Euler-Heun and Euler-Maruyama smoke" begin
@@ -34,13 +36,15 @@
 
         rx0 = copy(st.rx)
         ry0 = copy(st.ry)
-        Simulation.step!(st, Simulation.eulerheun(st), dt; compute_energy=true)
+        eh = Simulation.eulerheun(st; gamma=1f0, temperature=1f0, dt=dt)
+        Simulation.step!(st, eh, dt; compute_energy=true)
         @test state_allfinite(st)
         @test msd_2d(rx0, ry0, st.rx, st.ry) > 0.0
 
         rx1 = copy(st.rx)
         ry1 = copy(st.ry)
-        Simulation.step!(st, Simulation.eulermaruyama(st), dt; compute_energy=true)
+        em = Simulation.eulermaruyama(st; gamma=1f0, temperature=1f0, dt=dt)
+        Simulation.step!(st, em, dt; compute_energy=true)
         @test state_allfinite(st)
         @test msd_2d(rx1, ry1, st.rx, st.ry) > 0.0
     end
@@ -62,7 +66,8 @@
         rx_shift = Float32[-2, 2.25]
         copyto!(st.rx, rx_shift)
 
-        Simulation.step!(st, Simulation.eulermaruyama(st), dt; compute_energy=true)
+        em = Simulation.eulermaruyama(st; gamma=1f0, temperature=0f0, dt=dt)
+        Simulation.step!(st, em, dt; compute_energy=true)
 
         rx_now = Array(st.rx)
         ry_now = Array(st.ry)

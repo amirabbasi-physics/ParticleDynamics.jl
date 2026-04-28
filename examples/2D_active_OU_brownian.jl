@@ -49,7 +49,6 @@ st = build_simulation(
     sigma = sigma,
     gamma = gamma,
     temperature = temperature,
-    noise_corr_time = corr_time,
     dt = dt,
     nonbonded = :soft_repulsive,
     precision = :f64,
@@ -57,8 +56,9 @@ st = build_simulation(
 
 initialize_square_lattice!(st, (L, L))
 
-Filters.set_noise_scale!(st, active_impulse)
-spec = eulermaruyama(st)
+spec = eulermaruyama(st; gamma=gamma, temperature=temperature,
+                     noise_corr_time=corr_time, dt=dt)
+Filters.set_noise_scale!(spec, active_impulse)
 
 gsd_path = joinpath(@__DIR__, "traj2d_active_OU_bd.gsd")
 gsdh = NonEqSimGPU.Writers.gsd_open(gsd_path)

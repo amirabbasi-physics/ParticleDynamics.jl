@@ -63,8 +63,10 @@ st = build_simulation(
     precision=:f32,
 )
 
+vv = velocityverlet(st; gamma=50.0f0, temperature=1.0f0, dt=dt)
+
 for _ in 1:200
-    step!(st, dt; compute_energy=false)
+    step!(st, vv, dt; compute_energy=false)
 end
 
 @show st.step
