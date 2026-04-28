@@ -42,9 +42,10 @@ st = build_simulation(
     precision=:f32,
 )
 
-# Default stepping path uses the package's Langevin VV route.
+# Preferred stepping path: keep an explicit integrator spec and reuse it.
+vv = velocityverlet(st; gamma=50.0f0, temperature=1.0f0, dt=dt)
 for _ in 1:200
-    step!(st, dt; compute_energy=false)
+    step!(st, vv, dt; compute_energy=false)
 end
 
 @show st.step
@@ -56,13 +57,17 @@ Expected result: `st.step == 200` and finite state arrays.
 
 ```julia
 # Langevin BAOAB
-bao = baoab(st)
+bao = baoab(st; gamma=50.0f0, temperature=1.0f0, dt=dt)
 step!(st, bao, dt; compute_energy=true)
 
 # Brownian Euler-Maruyama
-em = eulermaruyama(st)
+em = eulermaruyama(st; gamma=50.0f0, temperature=1.0f0, dt=dt)
 step!(st, em, dt; compute_energy=false)
 ```
+
+Explicit specs are the stepping API. Stochastic parameters such as `gamma`,
+temperature, and OU correlation time belong to the integrator constructor, not
+to `SimulationState`.
 
 ### Important runtime policy
 
@@ -102,4 +107,3 @@ Use repository examples as templates:
 - `examples/3D_BD.jl`
 
 These scripts contain production-like parameter scales; for quick iteration/tests, downscale `N` and total steps first.
-

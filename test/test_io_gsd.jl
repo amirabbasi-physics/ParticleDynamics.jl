@@ -79,7 +79,8 @@ using GSDFiles
             neigh_interval=1, use_neighborlist=true, nonbonded=:wca, gamma=1f0, temperature=0f0
         )
 
-        step!(st, 1f-4; compute_energy=true)
+        vv = Simulation.velocityverlet(st; gamma=1f0, temperature=0f0, dt=1f-4)
+        step!(st, vv, 1f-4; compute_energy=true)
         expected_virial = Array(st.virial_tensor)
 
         h = NonEqSimGPU.gsd_open(path)
@@ -97,9 +98,26 @@ using GSDFiles
 
         r = GSDFiles.open_read(path)
         try
-            raw = GSDFiles.read_frame(r, 1)
-            @test hasproperty(raw.particles, :virial)
-            @test isapprox(raw.particles.virial, expected_virial; atol=1e-6, rtol=1e-6)
+            ents = GSDFiles._entries_for_frame(r, UInt64(0))
+
+            function read_chunk_matrix(name::AbstractString)
+                entry = GSDFiles._maybe_one(r, ents, name)
+                @test entry !== nothing
+                entry === nothing && return nothing
+                @test Int(entry.N) == size(expected_virial, 1)
+                @test Int(entry.M) == size(expected_virial, 2)
+                @test entry.type == GSDFiles._R_FLOAT32
+                seek(r.io, entry.location)
+                flat = read!(r.io, Array{Float32}(undef, Int(entry.N) * Int(entry.M)))
+                return reshape(flat, (Int(entry.M), Int(entry.N)))'
+            end
+
+            raw_virial = read_chunk_matrix("particles/virial")
+            prop_virial = read_chunk_matrix("particles/property/virial")
+            @test raw_virial !== nothing
+            @test prop_virial !== nothing
+            @test isapprox(raw_virial, Float32.(expected_virial); atol=1e-6, rtol=1e-6)
+            @test isapprox(prop_virial, Float32.(expected_virial); atol=1e-6, rtol=1e-6)
         finally
             GSDFiles.close(r)
         end

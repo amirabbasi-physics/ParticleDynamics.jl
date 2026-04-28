@@ -43,10 +43,13 @@
         gamma = clamp(Float64(p.gamma), 5.0, 20.0)
         temperature = clamp(Float64(p.temperature), 1.0, 5.0)
         boxL = max(200.0, Float64(p.boxL))
-        integrator = p.integrator in (:eulerheun, :eulermaruyama) ? p.integrator : :eulerheun
+        # Use the midpoint Brownian path for the free-diffusion slope check.
+        # Euler-Maruyama is still covered elsewhere, but its larger weak-error
+        # bias makes this short regression too sensitive to example drift.
+        integrator = :eulerheun
 
-        N = 256
-        steps = 2400
+        N = 384
+        steps = 3200
         sample_stride = 40
 
         st = Simulation.build_simulation(
@@ -72,7 +75,9 @@
         copyto!(st.vy, zeros(Float64, N))
         Simulation.sync_unwrapped!(st)
 
-        spec = integrator == :eulermaruyama ? Simulation.eulermaruyama(st) : Simulation.eulerheun(st)
+        spec = integrator == :eulermaruyama ?
+               Simulation.eulermaruyama(st; gamma=gamma, temperature=temperature, dt=dt) :
+               Simulation.eulerheun(st; gamma=gamma, temperature=temperature, dt=dt)
         rx0 = copy(st.rx_unwrap)
         ry0 = copy(st.ry_unwrap)
 
@@ -150,7 +155,9 @@
             copyto!(st.vx, zeros(Float64, N))
             copyto!(st.vy, zeros(Float64, N))
 
-            spec = spec_symbol == :vv ? Simulation.velocityverlet(st) : Simulation.baoab(st)
+            spec = spec_symbol == :vv ?
+                   Simulation.velocityverlet(st; gamma=gamma, temperature=temperature, dt=dt) :
+                   Simulation.baoab(st; gamma=gamma, temperature=temperature, dt=dt)
 
             for _ in 1:burn_steps
                 Simulation.step!(st, spec, dt; compute_energy=false)
@@ -166,7 +173,7 @@
                 end
             end
             mean_v2 = acc / nsamp
-            return (mean_v2=mean_v2, mass=Float64(st.vv.mass))
+            return (mean_v2=mean_v2, mass=Float64(st.mass))
         end
 
         vv = run_and_measure(:vv)
@@ -200,7 +207,7 @@
             N=N, box=(boxL, boxL),
             cutoff=1.0, skin=0.2, cap=Int32(8), neigh_interval=20,
             use_neighborlist=false, epsilon=0.0, sigma=1.0,
-            gamma=gamma, temperature=temperature, noise_corr_time=tau, dt=dt,
+            gamma=gamma, temperature=temperature, dt=dt,
             nonbonded=:lj, precision=:f64
         )
 
@@ -218,7 +225,7 @@
         copyto!(st.vx, zeros(Float64, N))
         copyto!(st.vy, zeros(Float64, N))
 
-        spec = Simulation.velocityverlet(st)
+        spec = Simulation.velocityverlet(st; gamma=gamma, temperature=temperature, noise_corr_time=tau, dt=dt)
         for _ in 1:burn_steps
             Simulation.step!(st, spec, dt; compute_energy=false)
         end
@@ -227,7 +234,7 @@
         v0y = copy(st.vy)
         c0v = Float64(CUDA.sum(v0x.^2 .+ v0y.^2)) / N
 
-        ou0 = copy(st.ou_y)
+        ou0 = copy(vec(spec.workspace.ou_y))
         c0ou = Float64(CUDA.sum(ou0.^2)) / N
 
         t_lags = Float64[]
@@ -236,7 +243,7 @@
         for lag in 1:lag_max
             Simulation.step!(st, spec, dt; compute_energy=false)
             cv = Float64(CUDA.sum(v0x .* st.vx .+ v0y .* st.vy)) / N
-            co = Float64(CUDA.sum(ou0 .* st.ou_y)) / N
+            co = Float64(CUDA.sum(ou0 .* vec(spec.workspace.ou_y))) / N
             push!(t_lags, lag * dt)
             push!(c_vel, cv / c0v)
             push!(c_ou, co / c0ou)
@@ -302,7 +309,7 @@
             Filters.freeze_particles!(st; filter=Filters.All(), mode=:spring, k=kspring, steps=typemax(Int), include_energy=true)
             st.rx .+= delta
 
-            spec = Simulation.eulerheun(st)
+            spec = Simulation.eulerheun(st; gamma=gamma, temperature=0.0, dt=dt)
             for _ in 1:steps
                 Simulation.step!(st, spec, dt; compute_energy=false)
             end
@@ -345,7 +352,7 @@
             N = N, box = (boxL, boxL),
             cutoff = 1.0, skin = 0.5, cap = Int32(256), neigh_interval = 50,
             use_neighborlist = true, epsilon = 0.0, sigma = 1.0,
-            gamma = gamma, temperature = temperature, noise_corr_time = tau, dt = dt,
+            gamma = gamma, temperature = temperature, dt = dt,
             mass = mass, nonbonded = :soft_repulsive, precision = :f64,
             unwrapped_positions = true
         )
@@ -364,9 +371,8 @@
         copyto!(st.vy, zeros(Float64, N))
         NonEqSimGPU.NeighborLists.update_neighbors_inplace!(st.nbh, st.rx, st.ry; box = st.box2, step = st.step)
         Simulation.sync_unwrapped!(st)
-        Filters.set_noise_scale!(st, noise_scale)
-
-        spec = Simulation.velocityverlet(st)
+        spec = Simulation.velocityverlet(st; gamma=gamma, temperature=temperature, noise_corr_time=tau, dt=dt)
+        Filters.set_noise_scale!(spec, noise_scale)
 
         for _ in 1:burn_steps
             Simulation.step!(st, spec, dt; compute_energy = false)

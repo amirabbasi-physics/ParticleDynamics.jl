@@ -5,6 +5,7 @@ using Printf
 using StaticArrays
 using GSDFiles
 using DelimitedFiles
+using ..Simulation
 
 export InMemoryLogger, CSVWriter, XYZWriter
 export write_xyz!, write_observables_csv!
@@ -162,6 +163,83 @@ function write_observables_csv!(path::AbstractString, step::Int;
             @printf(io, "step,Etot,Kavg,Qtot\n")
         end
         @printf(io, "%d,%.7e,%.7e,%.7e\n", step, Etot, Kavg, Qtot)
+    end
+    return nothing
+end
+
+"""
+    write_observables_csv!(path, st, spec)
+
+Write observables collected through `Simulation.collect_step_observables`,
+including a compatibility `Qtot` column.
+"""
+function write_observables_csv!(path::AbstractString,
+                                st,
+                                spec)
+    obs = Simulation.collect_step_observables(st, spec)
+    hdr = !isfile(path)
+    headers = String[
+        "step", "integrator", "Etot", "Epot_total", "Ekin_total",
+        "virial_total", "dq_total", "dU_total", "Qtot",
+    ]
+    values = String[
+        string(obs.step),
+        String(obs.integrator),
+        @sprintf("%.7e", obs.Etot),
+        @sprintf("%.7e", obs.Epot_total),
+        @sprintf("%.7e", obs.Ekin_total),
+        @sprintf("%.7e", obs.virial_total),
+        @sprintf("%.7e", obs.dq_total),
+        @sprintf("%.7e", obs.dU_total),
+        @sprintf("%.7e", obs.Qtot),
+    ]
+
+    if hasproperty(obs, :extended_hamiltonian)
+        push!(headers, "extended_hamiltonian")
+        push!(values, @sprintf("%.7e", obs.extended_hamiltonian))
+    end
+    if hasproperty(obs, :thermostat_kinetic)
+        push!(headers, "thermostat_kinetic")
+        push!(values, @sprintf("%.7e", obs.thermostat_kinetic))
+    end
+    if hasproperty(obs, :thermostat_potential)
+        push!(headers, "thermostat_potential")
+        push!(values, @sprintf("%.7e", obs.thermostat_potential))
+    end
+    if hasproperty(obs, :thermostat_temperature_error)
+        push!(headers, "thermostat_temperature_error")
+        push!(values, @sprintf("%.7e", obs.thermostat_temperature_error))
+    end
+    if hasproperty(obs, :thermostat_energy)
+        push!(headers, "thermostat_energy")
+        push!(values, @sprintf("%.7e", obs.thermostat_energy))
+    end
+    if hasproperty(obs, :target_temperature)
+        push!(headers, "target_temperature")
+        push!(values, @sprintf("%.7e", obs.target_temperature))
+    end
+    if hasproperty(obs, :thermostat_timescale)
+        push!(headers, "thermostat_timescale")
+        push!(values, @sprintf("%.7e", obs.thermostat_timescale))
+    end
+    if hasproperty(obs, :chain_length)
+        push!(headers, "chain_length")
+        push!(values, string(obs.chain_length))
+    end
+    if hasproperty(obs, :chain_substeps)
+        push!(headers, "chain_substeps")
+        push!(values, string(obs.chain_substeps))
+    end
+    if hasproperty(obs, :nhc_propagator)
+        push!(headers, "nhc_propagator")
+        push!(values, string(obs.nhc_propagator))
+    end
+
+    open(path, "a") do io
+        if hdr
+            println(io, join(headers, ","))
+        end
+        println(io, join(values, ","))
     end
     return nothing
 end
@@ -504,6 +582,21 @@ end
     return M
 end
 
+function _write_particles_virial!(h, virial::AbstractMatrix{<:Real})
+    N, M = size(virial)
+    @assert M == 3 || M == 6 "particles/virial must be N×3 (2D) or N×6 (3D)"
+    A = Array{Float32}(undef, N, M)
+    @inbounds for i in 1:N, j in 1:M
+        A[i, j] = Float32(virial[i, j])
+    end
+    data = GSDFiles.rowmajor(A)
+    GSDFiles.write_chunk_raw!(h.user, "particles/virial";
+                              type_code=GSDFiles._R_FLOAT32, N=N, M=M, data)
+    GSDFiles.write_chunk_raw!(h.user, "particles/property/virial";
+                              type_code=GSDFiles._R_FLOAT32, N=N, M=M, data)
+    return nothing
+end
+
 # -- public API -----------------------------------------------------------
 
 """
@@ -608,7 +701,7 @@ function write_gsd_frame!(h, st; diameter=1.0, types_names=["A"], step::Int=0,
     end
 
     if write_virial
-        GSDFiles.write_particles_virial!(h, T.(virialM))
+        _write_particles_virial!(h, virialM)
     end
 
     if write_unwrapped

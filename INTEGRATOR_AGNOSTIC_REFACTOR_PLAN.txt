@@ -1,0 +1,483 @@
+NonEqSimGPU Integrator-Agnostic Refactoring Plan
+Version: Draft 1
+Date: 2026-04-20
+Owner: Simulation core maintainers
+Status: Planning (implementation pending review)
+
+======================================================================
+1) PURPOSE
+======================================================================
+This plan defines a clear, maintainable, and performance-conscious refactor
+of NonEqSimGPU so that:
+
+1. Integrator-independent logic is centralized and reused.
+2. Integrator-dependent logic (VV, BAOAB, Brownian, future NHC, etc.) is
+   explicitly isolated behind a stable protocol.
+3. The step pipeline has unambiguous stage names for diagnostics and future
+   debugging.
+4. Public APIs remain stable during migration via compatibility wrappers.
+5. Code duplication is reduced without sacrificing GPU specialization or speed.
+
+This is a refactor-first plan (no behavioral redesign unless explicitly noted).
+
+======================================================================
+2) SCOPE AND NON-GOALS
+======================================================================
+In scope:
+- Simulation stepping architecture in src/Simulation.jl.
+- Integrator interfaces and reusable execution pipeline.
+- Integrator workspace ownership and lifecycle.
+- Filter and writer interfaces where they currently assume Langevin-specific
+  fields.
+- Test and documentation updates needed to preserve confidence.
+
+Out of scope in this phase:
+- Adding a full Nose-Hoover Chain implementation (separate execution phase).
+- Rewriting force kernels in NonBondedForces/BondedForces.
+- Changing physics conventions unless required for API clarity.
+
+======================================================================
+3) DESIGN PRINCIPLES
+======================================================================
+P1. Explicit separation of concerns
+- Core state: particle arrays, forces, neighbors, geometry, freeze/collision.
+- Integrator state: thermostat/integration work buffers and parameters.
+- Pipeline controller: orchestration of stage order.
+
+P2. Names must encode intent
+- Functions should state what they do and at what stage.
+- Avoid generic names like update!, run_step!, or prepare! without context.
+
+P3. No hidden stage coupling
+- Stage handoffs must be explicit in method signatures.
+- Every stage should state read/write buffers and invariants.
+
+P4. Performance remains first-class
+- Keep concrete types in hot paths.
+- Avoid abstractly typed runtime objects in kernel-launch loops.
+- Preserve allocation-free stepping behavior.
+
+P5. Backward compatibility during transition
+- Existing user scripts should keep working while internals migrate.
+- Deprecations should be soft, documented, and tested.
+
+======================================================================
+4) CURRENT PAIN POINTS TO ADDRESS
+======================================================================
+A) SimulationState currently embeds Langevin-specific integrator state
+- Field vv and noise buffers are assumed globally.
+
+B) build_simulation currently initializes Langevin-only parameters
+- noise_scale = sqrt(2*gamma*T*dt) is built unconditionally.
+
+C) Step orchestration logic is duplicated across integrator methods
+- Neighbor rebuild checks, force setup, freeze/collision hooks, and finalize
+  logic are repeated in multiple step! methods.
+
+D) Filter API assumes gamma/noise-scale-backed thermostat controls
+- Works for stochastic integrators but not as-is for deterministic thermostats.
+
+E) Writer semantics include stochastic-thermostat-centric columns
+- Qtot (from dq) is meaningful for stochastic routes but not universal.
+
+======================================================================
+5) TARGET ARCHITECTURE OVERVIEW
+======================================================================
+Create three conceptual layers:
+
+Layer 1: Integrator-agnostic step pipeline (Simulation core)
+- Owns lifecycle, shared hooks, and force/collision/freeze orchestration.
+
+Layer 2: Integrator protocol and implementations
+- Each integrator provides stage-specific operations and optional diagnostics.
+
+Layer 3: Public API wrappers and compatibility
+- Existing constructors/functions map to new internals without user breakage.
+
+Suggested new source layout:
+- src/SimulationPipeline.jl          (new; generic orchestration)
+- src/IntegratorInterfaces.jl        (new; protocol types and defaults)
+- src/Simulation.jl                  (keeps state/build/export glue)
+- src/LangevinIntegrators.jl         (adapted to interface)
+- src/BrownianIntegrators.jl         (adapted to interface)
+- src/Filters.jl                     (split generic vs integrator-specific knobs)
+- src/Writers.jl                     (observable-driven generic output path)
+
+If file split is deferred, keep same files but create clearly labeled sections
+using the function names below.
+
+======================================================================
+6) PROPOSED NAMING CONVENTIONS
+======================================================================
+6.1 Step pipeline functions (integrator-agnostic)
+
+function plan_neighbor_rebuild!(st, dt)::Bool
+  Purpose: Decide whether a neighbor rebuild is needed this step.
+  Returns: rebuild_needed.
+
+function apply_neighbor_rebuild_if_needed!(st, rebuild_needed)::Nothing
+  Purpose: Perform in-place rebuild and trigger collision reinit hook.
+
+function prepare_previous_force_buffers!(st)::Nothing
+  Purpose: Swap fx/f0x (and y/z) when valid previous force exists.
+
+function ensure_reference_forces_ready!(st, compute_energy)::Nothing
+  Purpose: Guarantee force-at-stage-start buffers exist (f0 or fx by design).
+
+function evaluate_forces_at_current_positions!(st, target_force_slot, compute_energy)::Nothing
+  Purpose: Compute nonbonded + bonded + spring + virial combine at current
+  particle positions into chosen force slot (:f0 or :f).
+
+function apply_post_position_hooks!(st, stage_tag)::Nothing
+  Purpose: Run freeze-hold position correction and collision event update.
+  stage_tag examples: :after_drift, :after_midpoint, :after_final_position.
+
+function finalize_step_accounting!(st, compute_energy)::Nothing
+  Purpose: Shared bookkeeping updates (Epot/Ekin/virial accumulators as needed).
+
+function finalize_step_counter!(st, integrator_id)::Nothing
+  Purpose: Set st.last_integrator and increment st.step.
+
+6.2 Integrator protocol names (integrator-dependent)
+
+abstract type AbstractIntegratorSpec{T} end
+
+function validate_integrator_inputs!(spec, st, dt)::Nothing
+function ensure_integrator_workspace!(spec, st)::Nothing
+function execute_integrator_position_stage!(spec, st, dt)::Nothing
+function execute_integrator_force_stage!(spec, st, dt, compute_energy)::Nothing
+function execute_integrator_velocity_stage!(spec, st, dt)::Nothing
+function update_integrator_observables!(spec, st, dt)::Nothing
+function integrator_id(spec)::UInt8
+function integrator_name(spec)::Symbol
+
+For multi-stage schemes:
+- execute_integrator_stage!(spec, st, dt, ::Val{:B1})
+- execute_integrator_stage!(spec, st, dt, ::Val{:A1})
+- execute_integrator_stage!(spec, st, dt, ::Val{:O})
+- execute_integrator_stage!(spec, st, dt, ::Val{:A2})
+- execute_integrator_stage!(spec, st, dt, ::Val{:B2})
+
+Use stage labels consistently in logs and debug assertions.
+
+======================================================================
+7) DATA MODEL REFACTOR
+======================================================================
+7.1 Core simulation state cleanup
+Goal: remove thermostat-specific assumptions from SimulationState.
+
+Action:
+- Keep only universal arrays and simulation controls in SimulationState.
+- Replace hardcoded vv field with optional active-integrator handle:
+    active_integrator::Union{Nothing,AbstractIntegratorSpec{T}}
+  (or keep this out of state if dispatch always passes spec explicitly).
+
+Recommended option for performance:
+- Do NOT store abstract integrator objects in hot state.
+- Keep state integrator-neutral and pass concrete spec objects into step!.
+
+7.2 Integrator workspace ownership
+Action:
+- Move rf_x/rf_y/rf_z and ou_x/ou_y/ou_z into Langevin/Brownian spec params.
+- NHC chain variables should live only in NHC params.
+
+Benefit:
+- build_simulation no longer needs to initialize irrelevant buffers.
+- Prevents stale assumptions when switching integrators.
+
+7.3 Compatibility bridge (temporary)
+Action:
+- Keep st.vv alias temporarily via shim getters for existing scripts.
+- Deprecation warning only after migration coverage is complete.
+
+======================================================================
+8) BUILD PIPELINE REFACTOR
+======================================================================
+Current issue:
+- build_simulation currently creates Langevin-specific gamma/noise state.
+
+Target:
+- build_simulation creates only core simulation state.
+- Integrator constructor functions allocate and attach required workspace.
+
+New construction flow:
+1. st = build_simulation(... core params ...)
+2. spec = velocityverlet(st; gamma=..., temperature=..., noise_corr_time=...)
+   or spec = baoab(st; ...)
+   or spec = eulerheun(st; ...)
+   or future spec = nosehooverchain(st; ...)
+3. step!(st, spec, dt; compute_energy=...)
+
+Transition strategy:
+- Keep old build keywords accepted for now.
+- Internally route old keywords to default VV spec creation if user calls
+  step!(st, dt) without explicit spec.
+
+======================================================================
+9) STEP ORCHESTRATION REFACTOR
+======================================================================
+9.1 Introduce one shared engine
+
+function run_integrator_step!(st, spec, dt; compute_energy=true)
+  validate_integrator_inputs!(spec, st, dt)
+  rebuild_needed = plan_neighbor_rebuild!(st, dt)
+  apply_neighbor_rebuild_if_needed!(st, rebuild_needed)
+  prepare_previous_force_buffers!(st)
+  ensure_reference_forces_ready!(st, compute_energy)
+  ensure_integrator_workspace!(spec, st)
+  execute full stage sequence (integrator-defined)
+  finalize_step_counter!(st, integrator_id(spec))
+  return nothing
+end
+
+9.2 Remove repeated copies in each integrator step!
+- Existing step! overloads become thin wrappers around run_integrator_step!.
+- Integrator-specific code only defines stage behavior.
+
+9.3 Preserve existing default step!(st, dt)
+- Keep as compatibility path to "current default integrator" policy.
+- Add explicit field or policy function:
+  get_default_integrator_spec(st) -> spec.
+
+======================================================================
+10) FORCE EVALUATION API REFACTOR
+======================================================================
+Current issue:
+- repeated hand-written blocks for initial and final force setup.
+
+Target reusable functions:
+- evaluate_nonbonded_forces!(st, positions, target_forces, compute_energy)
+- evaluate_bonded_forces!(st, positions, target_forces, compute_energy)
+- apply_freeze_spring_forces!(st, positions, target_forces, compute_energy)
+- combine_virial_if_requested!(st, compute_energy)
+
+Pragmatic approach:
+- Keep existing _compute_final_nonbonded2!/3! internal kernels, but add one
+  routing function that selects dimension and target slot to avoid copy-paste.
+
+======================================================================
+11) FILTERS REFACTOR
+======================================================================
+Split Filters into two groups:
+
+Group A: integrator-agnostic particle-group tools
+- resolve/filter selection
+- assign_scalar!/assign_values!
+- freeze_particles!/unfreeze_particles!
+
+Group B: integrator-parameter controls
+- set_temperature!, set_friction!, set_corr_time!, set_noise_scale!
+
+Refactor action:
+- Group B methods must dispatch on integrator parameter object (spec.params),
+  not on SimulationState internals.
+- Keep convenience wrappers:
+  set_temperature!(st, spec, dt, ...)
+  set_friction!(st, spec, ...)
+
+This allows NHC-specific controls later:
+- set_thermostat_temperature!(nhc_spec, T)
+- set_thermostat_timescale!(nhc_spec, tau)
+
+======================================================================
+12) WRITER/OBSERVABLES REFACTOR
+======================================================================
+Current issue:
+- output assumes dq-driven Qtot is universally relevant.
+
+Target:
+- Writer accepts a generic observable dictionary:
+  collect_step_observables(st, spec) -> NamedTuple/Dict
+
+Core universal observables:
+- Epot_total, Ekin_total, virial_total, step
+
+Optional integrator observables:
+- stochastic: dq_total, dU_total
+- NHC: extended_hamiltonian, thermostat_kinetic, thermostat_potential
+
+Compatibility:
+- Keep existing CSV schema by default for current integrators.
+- Add optional extended schema mode for future-proof outputs.
+
+======================================================================
+13) DOCUMENTATION REQUIREMENTS
+======================================================================
+13.1 New architecture page
+- docs/src/manual/integrator_pipeline.md
+- Explain stage flow and extension points.
+
+13.2 Per-function docstring quality standard
+Each new public/internal-stage function must include:
+- What the function does.
+- Which buffers it reads/writes.
+- Stage preconditions and postconditions.
+- Dimension assumptions (2D/3D).
+- compute_energy behavior.
+
+13.3 Integrator authoring guide
+- How to implement a new integrator spec correctly.
+- Required methods and minimal test matrix.
+
+======================================================================
+14) TEST STRATEGY
+======================================================================
+14.1 Architectural regression tests
+- Ensure all legacy integrators still reproduce current behavior envelopes.
+- Step-by-step parity tests on small deterministic setups.
+
+14.2 Pipeline invariants
+- Neighbor rebuild decisions match prior implementation.
+- Freeze and collision hooks fire in expected stage order.
+- No allocations during steady-state stepping.
+
+14.3 API compatibility tests
+- Old build_simulation + step!(st, dt) workflows still run.
+- Old filter setter calls continue functioning (or warn and route correctly).
+
+14.4 Diagnostics tests
+- Structured stage trace (when enabled) is complete and ordered.
+- Error messages include integrator_name and stage_tag for fast debugging.
+
+======================================================================
+15) MIGRATION PHASES AND ACCEPTANCE CRITERIA
+======================================================================
+Phase 0: Baseline capture
+Tasks:
+- Freeze current behavior with additional golden tests where missing.
+Exit criteria:
+- Existing suite green; baseline metrics recorded.
+
+Phase 1: Introduce shared pipeline helpers
+Tasks:
+- Add plan_neighbor_rebuild!, apply_neighbor_rebuild_if_needed!,
+  prepare_previous_force_buffers!, ensure_reference_forces_ready!,
+  apply_post_position_hooks!, finalize_step_counter!.
+- Use helpers in current VV path first.
+Exit criteria:
+- VV behavior unchanged, reduced duplicated lines.
+
+Phase 2: Route BAOAB/BAOA/GSM through shared pipeline
+Tasks:
+- Convert these methods to shared engine + stage callbacks.
+Exit criteria:
+- All Langevin integrator tests pass with no behavior regression.
+
+Phase 3: Route Brownian and EM through shared pipeline
+Tasks:
+- Convert midpoint and EM methods.
+Exit criteria:
+- Brownian/EM tests pass; duplicate orchestration blocks removed.
+
+Phase 4: State and build decoupling
+Tasks:
+- Reduce SimulationState thermostat coupling.
+- Introduce integrator-owned workspaces.
+- Keep compatibility shims.
+Exit criteria:
+- Old examples still run; explicit integrator constructors documented.
+
+Phase 5: Filters/writers generalization
+Tasks:
+- Split generic vs integrator-specific setters.
+- Introduce observable collection interface for writers.
+Exit criteria:
+- Existing output paths intact; extensible interface validated.
+
+Phase 6: Documentation and cleanup
+Tasks:
+- Add architecture docs + extension guide.
+- Remove deprecated internal paths approved for retirement.
+Exit criteria:
+- Documentation complete and tests green.
+
+======================================================================
+16) RISK REGISTER AND MITIGATIONS
+======================================================================
+Risk 1: Hidden behavior drift from stage reordering
+Mitigation:
+- Lock stage order with explicit enums and tests.
+
+Risk 2: Performance regressions due to abstraction
+Mitigation:
+- Keep concrete spec types in hot dispatch.
+- Benchmark before/after each phase.
+
+Risk 3: Backward compatibility break in scripts
+Mitigation:
+- Keep compatibility wrappers and deprecation warnings.
+- Add integration tests based on examples.
+
+Risk 4: Increased complexity during transition
+Mitigation:
+- Complete one integrator family at a time.
+- Avoid partial protocol adoption across all methods at once.
+
+======================================================================
+17) IMPLEMENTATION STYLE GUIDELINES (FOR THIS REFACTOR)
+======================================================================
+1. Every new stage function name must include either:
+   - action + object + stage, or
+   - action + scope + condition.
+
+2. Avoid overloaded helper names that hide destination buffers.
+   Prefer:
+   - evaluate_forces_into_f0!(...)
+   - evaluate_forces_into_f!(...)
+   over ambiguous evaluate_forces!(...).
+
+3. Internal-only functions should still have short docstrings if they are
+   orchestration-critical.
+
+4. Avoid introducing new global mutable state.
+
+5. Keep all stage transitions explicit in run_integrator_step! sequence.
+
+======================================================================
+18) PROPOSED INITIAL TASK BREAKDOWN (PR-SIZED)
+======================================================================
+PR-1
+- Add shared helper functions for NL rebuild + force-buffer prep + counter end.
+- Wire default VV step to helpers.
+
+PR-2
+- Add force-evaluation wrapper functions that reduce duplicated branching.
+- Use wrappers in VV and BAOAB.
+
+PR-3
+- Migrate BAOA/GSM.
+- Add stage-order trace utility in debug mode.
+
+PR-4
+- Migrate Brownian midpoint and EM to shared pipeline.
+
+PR-5
+- Decouple build_simulation from thermostat-specific initialization.
+- Add compatibility wrappers.
+
+PR-6
+- Filters and writer generalized observable interface.
+- Documentation pass and cleanup.
+
+======================================================================
+19) REVIEW CHECKLIST FOR MAINTAINERS
+======================================================================
+Before approving implementation:
+- Are stage names explicit and semantically correct?
+- Are integrator-independent responsibilities fully isolated?
+- Does each integrator only own algorithm-specific logic?
+- Are compatibility routes documented and tested?
+- Is diagnostic traceability improved compared to current code?
+
+======================================================================
+20) DECISIONS NEEDED BEFORE IMPLEMENTATION STARTS
+======================================================================
+1. Should build_simulation keep legacy gamma/temperature keywords indefinitely,
+   or deprecate after one release cycle?
+2. Should default step!(st, dt) always use last explicitly attached integrator,
+   or lock to VV for compatibility?
+3. Should writer default CSV remain "step,Etot,Kavg,Qtot" for now, or switch to
+   an extensible schema immediately?
+4. Preferred timeline: phased PR sequence versus single consolidated refactor.
+
+End of plan.

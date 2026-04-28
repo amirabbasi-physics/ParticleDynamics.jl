@@ -54,11 +54,8 @@ st = build_simulation(N=N, box=box, cutoff=r_cut, skin=0.4f0, cap=cap,
 # ---- Initialize positions ----
 initialize_simple_cubic_lattice!(st, box)
 
-Filters.set_friction!(st, gamma; filter=Filters.All())
-Filters.set_temperature!(st, dt, temperature; filter=Filters.All())
-
 # ---- Brownian parameters ----
-eh = eulermaruyama(st)
+eh = eulermaruyama(st; gamma=gamma, temperature=temperature, dt=dt)
 
 # ---- GSD writer ----
 gsd_path = joinpath(@__DIR__, "traj3d_bd.gsd")

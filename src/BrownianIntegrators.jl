@@ -21,19 +21,33 @@ different particle groups (as in `examples/TwoT_2D_BD_EH.jl`).
 """
 struct BrownianParams{T<:AbstractFloat}
     gamma::CuArray{T,1}
+    dt::T
     noise_scale::CuArray{T,1}
     corr_time::Union{Nothing,CuArray{T,1}}
-    function BrownianParams{T}(gamma::CuArray{T,1}, noise_scale::CuArray{T,1}, corr_time::Union{Nothing,CuArray{T,1}}=nothing) where {T<:AbstractFloat}
+    ou::Union{Nothing,Definitions.OUSpectrum{T}}
+    function BrownianParams{T}(gamma::CuArray{T,1},
+                               dt::T,
+                               noise_scale::CuArray{T,1},
+                               corr_time::Union{Nothing,CuArray{T,1}}=nothing,
+                               ou::Union{Nothing,Definitions.OUSpectrum{T}}=nothing) where {T<:AbstractFloat}
         @assert length(gamma) == length(noise_scale)
         corr_time !== nothing && @assert length(corr_time) == length(gamma)
-        new{T}(gamma, noise_scale, corr_time)
+        new{T}(gamma, dt, noise_scale, corr_time, ou)
     end
 end
 
 BrownianParams(gamma::CuArray{T,1}, noise_scale::CuArray{T,1}) where {T<:AbstractFloat} =
-    BrownianParams{T}(gamma, noise_scale, nothing)
-BrownianParams(gamma::CuArray{T,1}, noise_scale::CuArray{T,1}, corr_time::Union{Nothing,CuArray{T,1}}) where {T<:AbstractFloat} =
-    BrownianParams{T}(gamma, noise_scale, corr_time)
+    BrownianParams{T}(gamma, one(T), noise_scale, nothing, nothing)
+BrownianParams(gamma::CuArray{T,1},
+               noise_scale::CuArray{T,1},
+               corr_time::Union{Nothing,CuArray{T,1}}) where {T<:AbstractFloat} =
+    BrownianParams{T}(gamma, one(T), noise_scale, corr_time, nothing)
+BrownianParams(gamma::CuArray{T,1},
+               noise_scale::CuArray{T,1},
+               corr_time::Union{Nothing,CuArray{T,1}},
+               dt::T,
+               ou::Union{Nothing,Definitions.OUSpectrum{T}}=nothing) where {T<:AbstractFloat} =
+    BrownianParams{T}(gamma, dt, noise_scale, corr_time, ou)
 
 function BrownianParams{T}(gamma::Real, temperature::Real, dt::Real, N::Integer) where {T<:AbstractFloat}
     γ = T(gamma)
@@ -42,7 +56,7 @@ function BrownianParams{T}(gamma::Real, temperature::Real, dt::Real, N::Integer)
     gamma_vec = CUDA.fill(γ, N)
     scale = sqrt(T(2) * γ * Tval * Δt)
     noise_vec = CUDA.fill(scale, N)
-    return BrownianParams{T}(gamma_vec, noise_vec, nothing)
+    return BrownianParams{T}(gamma_vec, Δt, noise_vec, nothing, nothing)
 end
 
 function BrownianParams(::Type{T}, gamma::Real, temperature::Real, dt::Real, N::Integer) where {T<:AbstractFloat}
@@ -59,17 +73,33 @@ layout as [`BrownianParams`](@ref) so utilities such as
 """
 struct EMParams{T<:AbstractFloat}
     gamma::CuArray{T,1}
+    dt::T
     noise_scale::CuArray{T,1}
     corr_time::Union{Nothing,CuArray{T,1}}
-    function EMParams{T}(gamma::CuArray{T,1}, noise_scale::CuArray{T,1}, corr_time::Union{Nothing,CuArray{T,1}}=nothing) where {T<:AbstractFloat}
+    ou::Union{Nothing,Definitions.OUSpectrum{T}}
+    function EMParams{T}(gamma::CuArray{T,1},
+                         dt::T,
+                         noise_scale::CuArray{T,1},
+                         corr_time::Union{Nothing,CuArray{T,1}}=nothing,
+                         ou::Union{Nothing,Definitions.OUSpectrum{T}}=nothing) where {T<:AbstractFloat}
         @assert length(gamma) == length(noise_scale)
         corr_time !== nothing && @assert length(corr_time) == length(gamma)
-        new{T}(gamma, noise_scale, corr_time)
+        new{T}(gamma, dt, noise_scale, corr_time, ou)
     end
 end
 
-EMParams(gamma::CuArray{T,1}, noise_scale::CuArray{T,1}) where {T<:AbstractFloat} = EMParams{T}(gamma, noise_scale, nothing)
-EMParams(gamma::CuArray{T,1}, noise_scale::CuArray{T,1}, corr_time::Union{Nothing,CuArray{T,1}}) where {T<:AbstractFloat} = EMParams{T}(gamma, noise_scale, corr_time)
+EMParams(gamma::CuArray{T,1}, noise_scale::CuArray{T,1}) where {T<:AbstractFloat} =
+    EMParams{T}(gamma, one(T), noise_scale, nothing, nothing)
+EMParams(gamma::CuArray{T,1},
+         noise_scale::CuArray{T,1},
+         corr_time::Union{Nothing,CuArray{T,1}}) where {T<:AbstractFloat} =
+    EMParams{T}(gamma, one(T), noise_scale, corr_time, nothing)
+EMParams(gamma::CuArray{T,1},
+         noise_scale::CuArray{T,1},
+         corr_time::Union{Nothing,CuArray{T,1}},
+         dt::T,
+         ou::Union{Nothing,Definitions.OUSpectrum{T}}=nothing) where {T<:AbstractFloat} =
+    EMParams{T}(gamma, dt, noise_scale, corr_time, ou)
 
 function BrownianParams(gamma::Real, temperature::Real, dt::Real, N::Integer)
     inferred = promote_type(float(typeof(gamma)), float(typeof(temperature)), float(typeof(dt)))
@@ -87,117 +117,131 @@ end
 # ---------------------------------------------
 # Noise preparation (standard normal components)
 # ---------------------------------------------
-function _noise2!(ξx::CuDeviceVector{T}, ξy::CuDeviceVector{T}) where {T<:AbstractFloat}
+function _noise2!(ξx::CuDeviceVector{T}, ξy::CuDeviceVector{T},
+                  noise_scale::CuDeviceVector{T}) where {T<:AbstractFloat}
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     N = length(ξx); if i > N; return; end
     @inbounds begin
-        ξx[i] = randn(T)
-        ξy[i] = randn(T)
+        s = noise_scale[i]
+        ξx[i] = s * randn(T)
+        ξy[i] = s * randn(T)
     end
     return
 end
 
-function _noise3!(ξx::CuDeviceVector{T}, ξy::CuDeviceVector{T}, ξz::CuDeviceVector{T}) where {T<:AbstractFloat}
+function _noise3!(ξx::CuDeviceVector{T}, ξy::CuDeviceVector{T}, ξz::CuDeviceVector{T},
+                  noise_scale::CuDeviceVector{T}) where {T<:AbstractFloat}
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     N = length(ξx); if i > N; return; end
     @inbounds begin
-        ξx[i] = randn(T)
-        ξy[i] = randn(T)
-        ξz[i] = randn(T)
+        s = noise_scale[i]
+        ξx[i] = s * randn(T)
+        ξy[i] = s * randn(T)
+        ξz[i] = s * randn(T)
     end
     return
 end
 
-function _noise2_ou!(ξx::CuDeviceVector{T}, ξy::CuDeviceVector{T},
-                     noise_scale::CuDeviceVector{T}, corr_time::CuDeviceVector{T},
-                     state_x::CuDeviceVector{T}, state_y::CuDeviceVector{T},
-                     dt::T) where {T<:AbstractFloat}
-    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
-    N = length(ξx); if i > N; return; end
-    @inbounds begin
-        τ = corr_time[i]
-        if τ <= zero(T)
-            valx = randn(T); valy = randn(T)
-            ξx[i] = valx; ξy[i] = valy
-            state_x[i] = valx; state_y[i] = valy
-        else
-            a = exp(-dt / τ)
-            b = sqrt(max(one(T) - a*a, zero(T)))
-            nx = a * state_x[i] + b * randn(T)
-            ny = a * state_y[i] + b * randn(T)
-            ξx[i] = nx; ξy[i] = ny
-            state_x[i] = nx; state_y[i] = ny
-        end
+function _apply_ou2!(ξx::CuDeviceVector{T}, ξy::CuDeviceVector{T},
+                     active_idx::CuDeviceVector{Int32},
+                     coeff_a::CuDeviceMatrix{T}, coeff_c::CuDeviceMatrix{T},
+                     state_x::CuDeviceMatrix{T}, state_y::CuDeviceMatrix{T}) where {T<:AbstractFloat}
+    j = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    K = length(active_idx); if j > K; return; end
+    i = active_idx[j]
+    M = size(coeff_a, 1)
+    sumx = zero(T)
+    sumy = zero(T)
+    @inbounds for k in 1:M
+        nx = coeff_a[k, j] * state_x[k, j] + coeff_c[k, j] * randn(T)
+        ny = coeff_a[k, j] * state_y[k, j] + coeff_c[k, j] * randn(T)
+        state_x[k, j] = nx
+        state_y[k, j] = ny
+        sumx += nx
+        sumy += ny
     end
-    return
+    @inbounds begin
+        ξx[i] = sumx
+        ξy[i] = sumy
+    end
+    return nothing
 end
 
-function _noise3_ou!(ξx::CuDeviceVector{T}, ξy::CuDeviceVector{T}, ξz::CuDeviceVector{T},
-                     noise_scale::CuDeviceVector{T}, corr_time::CuDeviceVector{T},
-                     state_x::CuDeviceVector{T}, state_y::CuDeviceVector{T}, state_z::CuDeviceVector{T},
-                     dt::T) where {T<:AbstractFloat}
-    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
-    N = length(ξx); if i > N; return; end
-    @inbounds begin
-        τ = corr_time[i]
-        if τ <= zero(T)
-            valx = randn(T); valy = randn(T); valz = randn(T)
-            ξx[i] = valx; ξy[i] = valy; ξz[i] = valz
-            state_x[i] = valx; state_y[i] = valy; state_z[i] = valz
-        else
-            a = exp(-dt / τ)
-            b = sqrt(max(one(T) - a*a, zero(T)))
-            nx = a * state_x[i] + b * randn(T)
-            ny = a * state_y[i] + b * randn(T)
-            nz = a * state_z[i] + b * randn(T)
-            ξx[i] = nx; ξy[i] = ny; ξz[i] = nz
-            state_x[i] = nx; state_y[i] = ny; state_z[i] = nz
-        end
+function _apply_ou3!(ξx::CuDeviceVector{T}, ξy::CuDeviceVector{T}, ξz::CuDeviceVector{T},
+                     active_idx::CuDeviceVector{Int32},
+                     coeff_a::CuDeviceMatrix{T}, coeff_c::CuDeviceMatrix{T},
+                     state_x::CuDeviceMatrix{T}, state_y::CuDeviceMatrix{T}, state_z::CuDeviceMatrix{T}) where {T<:AbstractFloat}
+    j = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    K = length(active_idx); if j > K; return; end
+    i = active_idx[j]
+    M = size(coeff_a, 1)
+    sumx = zero(T)
+    sumy = zero(T)
+    sumz = zero(T)
+    @inbounds for k in 1:M
+        nx = coeff_a[k, j] * state_x[k, j] + coeff_c[k, j] * randn(T)
+        ny = coeff_a[k, j] * state_y[k, j] + coeff_c[k, j] * randn(T)
+        nz = coeff_a[k, j] * state_z[k, j] + coeff_c[k, j] * randn(T)
+        state_x[k, j] = nx
+        state_y[k, j] = ny
+        state_z[k, j] = nz
+        sumx += nx
+        sumy += ny
+        sumz += nz
     end
-    return
+    @inbounds begin
+        ξx[i] = sumx
+        ξy[i] = sumy
+        ξz[i] = sumz
+    end
+    return nothing
 end
 
 function bd_prepare_noise_2d!(ξx::CuArray{T,1}, ξy::CuArray{T,1};
                               noise_scale::Union{Nothing,CuArray{T,1}}=nothing,
-                              corr_time::Union{Nothing,CuArray{T,1}}=nothing,
-                              state_x::Union{Nothing,CuArray{T,1}}=nothing,
-                              state_y::Union{Nothing,CuArray{T,1}}=nothing,
-                              dt::Union{Nothing,T}=nothing) where {T<:AbstractFloat}
+                              ou::Union{Nothing,Definitions.OUSpectrum{T}}=nothing,
+                              state_x::Union{Nothing,CuArray{T,2}}=nothing,
+                              state_y::Union{Nothing,CuArray{T,2}}=nothing) where {T<:AbstractFloat}
     @assert length(ξx) == length(ξy)
     N = length(ξx)
     threads = min(256, N)
     blocks = cld(N, threads)
-    if corr_time === nothing
-        k = CUDA.@cuda launch=false _noise2!(ξx, ξy)
-        k(ξx, ξy; threads, blocks)
-    else
-        @assert noise_scale !== nothing && state_x !== nothing && state_y !== nothing
-        @assert dt !== nothing "dt required for correlated noise"
-        k = CUDA.@cuda launch=false _noise2_ou!(ξx, ξy, noise_scale, corr_time, state_x, state_y, dt::T)
-        k(ξx, ξy, noise_scale, corr_time, state_x, state_y, dt::T; threads, blocks)
+    @assert noise_scale !== nothing
+    k = CUDA.@cuda launch=false _noise2!(ξx, ξy, noise_scale)
+    k(ξx, ξy, noise_scale; threads, blocks)
+    if ou !== nothing
+        @assert state_x !== nothing && state_y !== nothing
+        K = length(ou.active_idx)
+        K == 0 && return nothing
+        ou_threads = min(256, K)
+        ou_blocks = cld(K, ou_threads)
+        k = CUDA.@cuda launch=false _apply_ou2!(ξx, ξy, ou.active_idx, ou.coeff_a, ou.coeff_c, state_x, state_y)
+        k(ξx, ξy, ou.active_idx, ou.coeff_a, ou.coeff_c, state_x, state_y; threads=ou_threads, blocks=ou_blocks)
     end
     return nothing
 end
 
 function bd_prepare_noise_3d!(ξx::CuArray{T,1}, ξy::CuArray{T,1}, ξz::CuArray{T,1};
                               noise_scale::Union{Nothing,CuArray{T,1}}=nothing,
-                              corr_time::Union{Nothing,CuArray{T,1}}=nothing,
-                              state_x::Union{Nothing,CuArray{T,1}}=nothing,
-                              state_y::Union{Nothing,CuArray{T,1}}=nothing,
-                              state_z::Union{Nothing,CuArray{T,1}}=nothing,
-                              dt::Union{Nothing,T}=nothing) where {T<:AbstractFloat}
+                              ou::Union{Nothing,Definitions.OUSpectrum{T}}=nothing,
+                              state_x::Union{Nothing,CuArray{T,2}}=nothing,
+                              state_y::Union{Nothing,CuArray{T,2}}=nothing,
+                              state_z::Union{Nothing,CuArray{T,2}}=nothing) where {T<:AbstractFloat}
     @assert length(ξx) == length(ξy) == length(ξz)
     N = length(ξx)
     threads = min(256, N)
     blocks = cld(N, threads)
-    if corr_time === nothing
-        k = CUDA.@cuda launch=false _noise3!(ξx, ξy, ξz)
-        k(ξx, ξy, ξz; threads, blocks)
-    else
-        @assert noise_scale !== nothing && state_x !== nothing && state_y !== nothing && state_z !== nothing
-        @assert dt !== nothing "dt required for correlated noise"
-        k = CUDA.@cuda launch=false _noise3_ou!(ξx, ξy, ξz, noise_scale, corr_time, state_x, state_y, state_z, dt::T)
-        k(ξx, ξy, ξz, noise_scale, corr_time, state_x, state_y, state_z, dt::T; threads, blocks)
+    @assert noise_scale !== nothing
+    k = CUDA.@cuda launch=false _noise3!(ξx, ξy, ξz, noise_scale)
+    k(ξx, ξy, ξz, noise_scale; threads, blocks)
+    if ou !== nothing
+        @assert state_x !== nothing && state_y !== nothing && state_z !== nothing
+        K = length(ou.active_idx)
+        K == 0 && return nothing
+        ou_threads = min(256, K)
+        ou_blocks = cld(K, ou_threads)
+        k = CUDA.@cuda launch=false _apply_ou3!(ξx, ξy, ξz, ou.active_idx, ou.coeff_a, ou.coeff_c, state_x, state_y, state_z)
+        k(ξx, ξy, ξz, ou.active_idx, ou.coeff_a, ou.coeff_c, state_x, state_y, state_z; threads=ou_threads, blocks=ou_blocks)
     end
     return nothing
 end
@@ -207,7 +251,7 @@ function _mid2!(
         fx::CuDeviceVector{T}, fy::CuDeviceVector{T},
         ξx::CuDeviceVector{T}, ξy::CuDeviceVector{T},
         rxm::CuDeviceVector{T}, rym::CuDeviceVector{T},
-        gamma::CuDeviceVector{T}, noise_scale::CuDeviceVector{T},
+        gamma::CuDeviceVector{T},
         dt::T,
         Lx::T, Ly::T
         ) where {T<:AbstractFloat}
@@ -216,10 +260,9 @@ function _mid2!(
     @inbounds begin
         g = gamma[i]
         μ = 1 / g
-        sqrt2Ddt = μ * noise_scale[i]
         half = T(0.5)
-        dx = half * (μ * fx[i] * dt + sqrt2Ddt * ξx[i])
-        dy = half * (μ * fy[i] * dt + sqrt2Ddt * ξy[i])
+        dx = half * (μ * fx[i] * dt + μ * ξx[i])
+        dy = half * (μ * fy[i] * dt + μ * ξy[i])
         x = rx[i] + dx
         y = ry[i] + dy
         rxm[i] = _wrap_centered(x, Lx)
@@ -234,7 +277,7 @@ function _mid3!(
         fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, fz::CuDeviceVector{T},
         ξx::CuDeviceVector{T}, ξy::CuDeviceVector{T}, ξz::CuDeviceVector{T},
         rxm::CuDeviceVector{T}, rym::CuDeviceVector{T}, rzm::CuDeviceVector{T},
-        gamma::CuDeviceVector{T}, noise_scale::CuDeviceVector{T},
+        gamma::CuDeviceVector{T},
         dt::T,
         Lx::T, Ly::T, Lz::T
 ) where {T<:AbstractFloat}
@@ -243,11 +286,10 @@ function _mid3!(
     @inbounds begin
         g = gamma[i]
         μ = 1 / g
-        sqrt2Ddt = μ * noise_scale[i]
         half = T(0.5)
-        dx = half * (μ * fx[i] * dt + sqrt2Ddt * ξx[i])
-        dy = half * (μ * fy[i] * dt + sqrt2Ddt * ξy[i])
-        dz = half * (μ * fz[i] * dt + sqrt2Ddt * ξz[i])
+        dx = half * (μ * fx[i] * dt + μ * ξx[i])
+        dy = half * (μ * fy[i] * dt + μ * ξy[i])
+        dz = half * (μ * fz[i] * dt + μ * ξz[i])
         x = rx[i] + dx
         y = ry[i] + dy
         z = rz[i] + dz
@@ -263,7 +305,7 @@ function _fin2!(
         rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
         fxm::CuDeviceVector{T}, fym::CuDeviceVector{T},
         ξx::CuDeviceVector{T}, ξy::CuDeviceVector{T},
-        gamma::CuDeviceVector{T}, noise_scale::CuDeviceVector{T},
+        gamma::CuDeviceVector{T},
         dt::T,
         dq::CuDeviceVector{T}, dU::CuDeviceVector{T},
         Lx::T, Ly::T
@@ -273,11 +315,10 @@ function _fin2!(
     @inbounds begin
         g = gamma[i]
         μ = 1 / g
-        sqrt2Ddt = μ * noise_scale[i]
         # Propose new positions
         local x0 = rx[i]; local y0 = ry[i]
-        local Δx = μ * fxm[i] * dt + sqrt2Ddt * ξx[i]
-        local Δy = μ * fym[i] * dt + sqrt2Ddt * ξy[i]
+        local Δx = μ * fxm[i] * dt + μ * ξx[i]
+        local Δy = μ * fym[i] * dt + μ * ξy[i]
         local x = x0 + Δx
         local y = y0 + Δy
         # Wrap into box
@@ -302,7 +343,7 @@ function _fin2_unwrap!(
         rxu::CuDeviceVector{T}, ryu::CuDeviceVector{T},
         fxm::CuDeviceVector{T}, fym::CuDeviceVector{T},
         ξx::CuDeviceVector{T}, ξy::CuDeviceVector{T},
-        gamma::CuDeviceVector{T}, noise_scale::CuDeviceVector{T},
+        gamma::CuDeviceVector{T},
         dt::T,
         dq::CuDeviceVector{T}, dU::CuDeviceVector{T},
         Lx::T, Ly::T
@@ -312,10 +353,9 @@ function _fin2_unwrap!(
     @inbounds begin
         g = gamma[i]
         μ = 1 / g
-        sqrt2Ddt = μ * noise_scale[i]
         local x0 = rx[i]; local y0 = ry[i]
-        local Δx = μ * fxm[i] * dt + sqrt2Ddt * ξx[i]
-        local Δy = μ * fym[i] * dt + sqrt2Ddt * ξy[i]
+        local Δx = μ * fxm[i] * dt + μ * ξx[i]
+        local Δy = μ * fym[i] * dt + μ * ξy[i]
         rxu[i] += Δx
         ryu[i] += Δy
         local x = x0 + Δx
@@ -337,7 +377,7 @@ function _fin3!(
         rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
         fxm::CuDeviceVector{T}, fym::CuDeviceVector{T}, fzm::CuDeviceVector{T},
         ξx::CuDeviceVector{T}, ξy::CuDeviceVector{T}, ξz::CuDeviceVector{T},
-        gamma::CuDeviceVector{T}, noise_scale::CuDeviceVector{T},
+        gamma::CuDeviceVector{T},
         dt::T,
         dq::CuDeviceVector{T}, dU::CuDeviceVector{T},
         Lx::T, Ly::T, Lz::T
@@ -347,11 +387,10 @@ function _fin3!(
     @inbounds begin
         g = gamma[i]
         μ = 1 / g
-        sqrt2Ddt = μ * noise_scale[i]
         local x0 = rx[i]; local y0 = ry[i]; local z0 = rz[i]
-        local Δx = μ * fxm[i] * dt + sqrt2Ddt * ξx[i]
-        local Δy = μ * fym[i] * dt + sqrt2Ddt * ξy[i]
-        local Δz = μ * fzm[i] * dt + sqrt2Ddt * ξz[i]
+        local Δx = μ * fxm[i] * dt + μ * ξx[i]
+        local Δy = μ * fym[i] * dt + μ * ξy[i]
+        local Δz = μ * fzm[i] * dt + μ * ξz[i]
         local x = x0 + Δx
         local y = y0 + Δy
         local z = z0 + Δz
@@ -376,7 +415,7 @@ function _fin3_unwrap!(
         rxu::CuDeviceVector{T}, ryu::CuDeviceVector{T}, rzu::CuDeviceVector{T},
         fxm::CuDeviceVector{T}, fym::CuDeviceVector{T}, fzm::CuDeviceVector{T},
         ξx::CuDeviceVector{T}, ξy::CuDeviceVector{T}, ξz::CuDeviceVector{T},
-        gamma::CuDeviceVector{T}, noise_scale::CuDeviceVector{T},
+        gamma::CuDeviceVector{T},
         dt::T,
         dq::CuDeviceVector{T}, dU::CuDeviceVector{T},
         Lx::T, Ly::T, Lz::T
@@ -386,11 +425,10 @@ function _fin3_unwrap!(
     @inbounds begin
         g = gamma[i]
         μ = 1 / g
-        sqrt2Ddt = μ * noise_scale[i]
         local x0 = rx[i]; local y0 = ry[i]; local z0 = rz[i]
-        local Δx = μ * fxm[i] * dt + sqrt2Ddt * ξx[i]
-        local Δy = μ * fym[i] * dt + sqrt2Ddt * ξy[i]
-        local Δz = μ * fzm[i] * dt + sqrt2Ddt * ξz[i]
+        local Δx = μ * fxm[i] * dt + μ * ξx[i]
+        local Δy = μ * fym[i] * dt + μ * ξy[i]
+        local Δz = μ * fzm[i] * dt + μ * ξz[i]
         rxu[i] += Δx
         ryu[i] += Δy
         rzu[i] += Δz
@@ -431,8 +469,8 @@ function bd_midpoint_positions_2d!(rx, ry, fx, fy, ξx, ξy, rxm, rym,
     dtT = convert(T, dt)
     Lx = convert(T, box[1])
     Ly = convert(T, box[2])
-    k = CUDA.@cuda launch=false _mid2!(rx, ry, fx, fy, ξx, ξy, rxm, rym, gamma, noise_scale, dtT, Lx, Ly)
-    k(rx, ry, fx, fy, ξx, ξy, rxm, rym, gamma, noise_scale, dtT, Lx, Ly; threads, blocks)
+    k = CUDA.@cuda launch=false _mid2!(rx, ry, fx, fy, ξx, ξy, rxm, rym, gamma, dtT, Lx, Ly)
+    k(rx, ry, fx, fy, ξx, ξy, rxm, rym, gamma, dtT, Lx, Ly; threads, blocks)
     return nothing
 end
 
@@ -452,8 +490,8 @@ function bd_midpoint_positions_3d!(rx, ry, rz, fx, fy, fz, ξx, ξy, ξz, rxm, r
     Lx = convert(T, box[1])
     Ly = convert(T, box[2])
     Lz = convert(T, box[3])
-    k = CUDA.@cuda launch=false _mid3!(rx, ry, rz, fx, fy, fz, ξx, ξy, ξz, rxm, rym, rzm, gamma, noise_scale, dtT, Lx, Ly, Lz)
-    k(rx, ry, rz, fx, fy, fz, ξx, ξy, ξz, rxm, rym, rzm, gamma, noise_scale, dtT, Lx, Ly, Lz; threads, blocks)
+    k = CUDA.@cuda launch=false _mid3!(rx, ry, rz, fx, fy, fz, ξx, ξy, ξz, rxm, rym, rzm, gamma, dtT, Lx, Ly, Lz)
+    k(rx, ry, rz, fx, fy, fz, ξx, ξy, ξz, rxm, rym, rzm, gamma, dtT, Lx, Ly, Lz; threads, blocks)
     return nothing
 end
 
@@ -478,11 +516,11 @@ function bd_finish_step_2d!(rx, ry, fxm, fym, ξx, ξy,
     Lx = convert(T, box[1])
     Ly = convert(T, box[2])
     if unwrapped_x === nothing || unwrapped_y === nothing
-        k = CUDA.@cuda launch=false _fin2!(rx, ry, fxm, fym, ξx, ξy, gamma, noise_scale, dtT, dq, dU, Lx, Ly)
-        k(rx, ry, fxm, fym, ξx, ξy, gamma, noise_scale, dtT, dq, dU, Lx, Ly; threads, blocks)
+        k = CUDA.@cuda launch=false _fin2!(rx, ry, fxm, fym, ξx, ξy, gamma, dtT, dq, dU, Lx, Ly)
+        k(rx, ry, fxm, fym, ξx, ξy, gamma, dtT, dq, dU, Lx, Ly; threads, blocks)
     else
-        k = CUDA.@cuda launch=false _fin2_unwrap!(rx, ry, unwrapped_x, unwrapped_y, fxm, fym, ξx, ξy, gamma, noise_scale, dtT, dq, dU, Lx, Ly)
-        k(rx, ry, unwrapped_x, unwrapped_y, fxm, fym, ξx, ξy, gamma, noise_scale, dtT, dq, dU, Lx, Ly; threads, blocks)
+        k = CUDA.@cuda launch=false _fin2_unwrap!(rx, ry, unwrapped_x, unwrapped_y, fxm, fym, ξx, ξy, gamma, dtT, dq, dU, Lx, Ly)
+        k(rx, ry, unwrapped_x, unwrapped_y, fxm, fym, ξx, ξy, gamma, dtT, dq, dU, Lx, Ly; threads, blocks)
     end
     return nothing
 end
@@ -505,13 +543,13 @@ function bd_finish_step_3d!(rx, ry, rz, fxm, fym, fzm, ξx, ξy, ξz,
     Ly = convert(T, box[2])
     Lz = convert(T, box[3])
     if unwrapped_x === nothing || unwrapped_y === nothing || unwrapped_z === nothing
-        k = CUDA.@cuda launch=false _fin3!(rx, ry, rz, fxm, fym, fzm, ξx, ξy, ξz, gamma, noise_scale, dtT, dq, dU, Lx, Ly, Lz)
-        k(rx, ry, rz, fxm, fym, fzm, ξx, ξy, ξz, gamma, noise_scale, dtT, dq, dU, Lx, Ly, Lz; threads, blocks)
+        k = CUDA.@cuda launch=false _fin3!(rx, ry, rz, fxm, fym, fzm, ξx, ξy, ξz, gamma, dtT, dq, dU, Lx, Ly, Lz)
+        k(rx, ry, rz, fxm, fym, fzm, ξx, ξy, ξz, gamma, dtT, dq, dU, Lx, Ly, Lz; threads, blocks)
     else
         k = CUDA.@cuda launch=false _fin3_unwrap!(rx, ry, rz, unwrapped_x, unwrapped_y, unwrapped_z,
-                                                  fxm, fym, fzm, ξx, ξy, ξz, gamma, noise_scale, dtT, dq, dU, Lx, Ly, Lz)
+                                                  fxm, fym, fzm, ξx, ξy, ξz, gamma, dtT, dq, dU, Lx, Ly, Lz)
         k(rx, ry, rz, unwrapped_x, unwrapped_y, unwrapped_z,
-          fxm, fym, fzm, ξx, ξy, ξz, gamma, noise_scale, dtT, dq, dU, Lx, Ly, Lz; threads, blocks)
+          fxm, fym, fzm, ξx, ξy, ξz, gamma, dtT, dq, dU, Lx, Ly, Lz; threads, blocks)
     end
     return nothing
 end
@@ -667,7 +705,7 @@ end
 
 Euler–Maruyama update for overdamped dynamics using the per-particle friction
 and noise stored in `params`. Used in `examples/3D_BD.jl` via
-`eulermaruyama(st)`.
+`eulermaruyama(st; gamma=..., temperature=..., dt=...)`.
 """
 function em_step_2d!(rx::CuArray{T,1}, ry::CuArray{T,1},
                      fx::CuArray{T,1}, fy::CuArray{T,1},

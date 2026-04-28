@@ -1,6 +1,15 @@
 module Simulation
 
 using CUDA
+import ..IntegratorInterfaces
+import ..IntegratorInterfaces: AbstractIntegratorSpec,
+                               validate_integrator_inputs!,
+                               ensure_integrator_workspace!,
+                               integrator_id,
+                               integrator_name,
+                               stage_sequence,
+                               execute_integrator_stage!,
+                               collect_integrator_observables
 using ..Definitions
 using ..NeighborLists
 using ..NonBondedForces
@@ -25,7 +34,9 @@ const FREEZE_HOLD   = UInt8(1)
 const FREEZE_SPRING = UInt8(2)
 
 export SimulationState, build_simulation, step!, step_graph!, zero_forces!, sync_unwrapped!, accumulate_virial!, virial_components, virial_tensor
-export IntegratorSpec, VVSpec, BAOABSpec, BAOASpec, GSMSpec, BrownianSpec, EMSpec, velocityverlet, baoab, baoa, gsm, eulerheun, eulermaruyama
+export run_integrator_step!, collect_step_observables, thermostatted_dof, thermostatted_particle_mask
+export IntegratorSpec, VVSpec, BAOABSpec, BAOASpec, GSMSpec, BrownianSpec, EMSpec, NHCParams, NHCSpec, CSVRParams, CSVRSpec
+export velocityverlet, baoab, baoa, gsm, eulerheun, eulermaruyama, nosehooverchain, csvr
 
 # =========================
 #   Simulation state (SoA)
@@ -47,7 +58,8 @@ Key fields that user code may read or mutate:
 - `nbh`: neighbor matrix (either dense cell list or sentinel all-pairs) built
   with [`NeighborLists.build_neighbors_*`](@ref) using the requested cutoff,
   skin, and capacity.
-- `vv`: Langevin integrator parameters (`γ`, noise scale, per-particle OU state).
+- `mass`, `dt`: universal particle mass and nominal build-time timestep used by
+  deterministic integrators and by explicit stochastic spec constructors.
 - `Epot`, `Ekin`, `virial`, `dq`, `dU` plus the corresponding `*_accum` buffers:
   energy, virial, and heat observables that can be sampled directly on the GPU.
 - `virial_nonbonded`, `virial_bonded`, `virial_tensor`, `virial_tensor_accum`:
@@ -80,14 +92,6 @@ mutable struct SimulationState{T<:AbstractFloat}
     f0x::CuArray{T,1}; f0y::CuArray{T,1}
     f0z::Union{Nothing,CuArray{T,1}}
 
-    # per-step random impulse (shared between pos/vel updates)
-    rf_x::CuArray{T,1}; rf_y::CuArray{T,1}
-    rf_z::Union{Nothing,CuArray{T,1}}
-    # persistent OU noise state (used when corr_time is set)
-    ou_x::Union{Nothing,CuArray{T,1}}
-    ou_y::Union{Nothing,CuArray{T,1}}
-    ou_z::Union{Nothing,CuArray{T,1}}
-
     # per-particle type id
     typeid::CuArray{Int32,1}
 
@@ -113,8 +117,9 @@ mutable struct SimulationState{T<:AbstractFloat}
     bonds::Union{Nothing,BondedForces.BondList}
     bonding::Union{Nothing,Definitions.BondPotential{T}}
 
-    # integrator params
-    vv::LangevinIntegrators.VVParams{T}
+    # universal integration metadata
+    mass::T
+    dt::T
 
     # observables buffers
     Epot::CuArray{T,1}
@@ -133,7 +138,7 @@ mutable struct SimulationState{T<:AbstractFloat}
 
     # misc
     step::Int
-    # last integrator used: 1=Langevin, 2=Brownian, 0=unknown
+    # last integrator used: 1=Langevin, 2=Brownian, 3=NHC, 4=CSVR, 0=unknown
     last_integrator::UInt8
     nb_kind::UInt8
     softrep::Union{Nothing,Definitions.SoftRepulsiveParams{T}}
@@ -156,102 +161,735 @@ end
 # -------------------------
 # Unified integrator specs
 # -------------------------
-"""
-Marker type used to dispatch `step!(st, spec, dt)` onto specific integrators.
-"""
-abstract type IntegratorSpec{T<:AbstractFloat} end
+const IntegratorSpec = AbstractIntegratorSpec
 
 """
-Wrapper storing a reference to `st.vv` so `step!(st, velocityverlet(st), dt)`
-dispatches to the Langevin velocity-Verlet integrator (`examples/TwoT_2D_LD_VV.jl`).
+    StochasticWorkspace{T}
+
+Integrator-local scratch buffers for stochastic updates (random impulses and
+optional OU state). These buffers are carried by integrator specs so the shared
+step engine remains integrator-agnostic.
 """
-struct VVSpec{T<:AbstractFloat} <: IntegratorSpec{T}
+mutable struct StochasticWorkspace{T<:AbstractFloat}
+    rf_x::CuArray{T,1}
+    rf_y::CuArray{T,1}
+    rf_z::Union{Nothing,CuArray{T,1}}
+    ou_x::Union{Nothing,CuArray{T,2}}
+    ou_y::Union{Nothing,CuArray{T,2}}
+    ou_z::Union{Nothing,CuArray{T,2}}
+end
+
+@inline function _device_particle_buffer(::Type{T},
+                                         N::Integer,
+                                         value::Union{AbstractVector{<:Real},Real},
+                                         name::AbstractString) where {T<:AbstractFloat}
+    if value isa Real
+        return CUDA.fill(T(value), N)
+    end
+    length(value) == N ||
+        throw(ArgumentError("$(name) vector must have length $(N), got $(length(value))."))
+    return CuArray(T.(value))
+end
+
+@inline function _device_corr_time_buffer(::Type{T},
+                                          N::Integer,
+                                          value::Union{Nothing,AbstractVector{<:Real},Real}) where {T<:AbstractFloat}
+    value === nothing && return nothing
+    return _device_particle_buffer(T, N, value, "noise_corr_time")
+end
+
+@inline function _all_particle_indices(N::Integer)
+    return CuArray(Int32.(collect(1:N)))
+end
+
+@inline function _mode_vector(::Type{T},
+                              value::Union{AbstractVector{<:Real},Real},
+                              target::Int,
+                              name::AbstractString) where {T<:AbstractFloat}
+    if value isa Real
+        return fill(T(value), target)
+    end
+    vals = T.(collect(value))
+    length(vals) == target ||
+        throw(ArgumentError("$(name) must have length $(target), got $(length(vals))."))
+    return vals
+end
+
+@inline function _canonical_mode_vectors(::Type{T},
+                                         taus::Union{AbstractVector{<:Real},Real},
+                                         scales::Union{AbstractVector{<:Real},Real}) where {T<:AbstractFloat}
+    tau_vals = taus isa Real ? T[T(taus)] : T.(collect(taus))
+    scale_vals = scales isa Real ? T[T(scales)] : T.(collect(scales))
+    M = max(length(tau_vals), length(scale_vals))
+    tau_vals = _mode_vector(T, tau_vals, M, "OU taus")
+    scale_vals = _mode_vector(T, scale_vals, M, "OU scales")
+    return tau_vals, scale_vals
+end
+
+@inline function _ou_coefficients(::Type{T},
+                                  dt::T,
+                                  tau::AbstractMatrix{T},
+                                  scale::AbstractMatrix{T}) where {T<:AbstractFloat}
+    coeff_a = Matrix{T}(undef, size(tau))
+    coeff_c = Matrix{T}(undef, size(scale))
+    @inbounds for j in axes(tau, 2), i in axes(tau, 1)
+        τ = tau[i, j]
+        s = scale[i, j]
+        if τ <= zero(T)
+            coeff_a[i, j] = zero(T)
+            coeff_c[i, j] = s
+        else
+            a = exp(-dt / τ)
+            coeff_a[i, j] = a
+            coeff_c[i, j] = s * sqrt(max(one(T) - a * a, zero(T)))
+        end
+    end
+    return CuArray(coeff_a), CuArray(coeff_c)
+end
+
+function _build_single_mode_ou(::Type{T},
+                               noise_scale::CuArray{T,1},
+                               corr::CuArray{T,1},
+                               dt::Real) where {T<:AbstractFloat}
+    corr_host = Array(corr)
+    idx_host = findall(!iszero, corr_host)
+    isempty(idx_host) && return nothing
+
+    scale_host = Array(noise_scale)
+    tau_mat = reshape(T.(corr_host[idx_host]), 1, :)
+    scale_mat = reshape(T.(scale_host[idx_host]), 1, :)
+    active_idx = CuArray(Int32.(idx_host))
+    coeff_a, coeff_c = _ou_coefficients(T, T(dt), tau_mat, scale_mat)
+    return Definitions.OUSpectrum{T}(T(dt), active_idx, CuArray(tau_mat), CuArray(scale_mat), coeff_a, coeff_c)
+end
+
+function _build_mode_ou(::Type{T},
+                        active_idx::CuArray{Int32,1},
+                        taus::Union{AbstractVector{<:Real},Real},
+                        scales::Union{AbstractVector{<:Real},Real},
+                        dt::Real) where {T<:AbstractFloat}
+    K = length(active_idx)
+    K == 0 && return nothing
+    tau_vals, scale_vals = _canonical_mode_vectors(T, taus, scales)
+    tau_mat = repeat(reshape(tau_vals, :, 1), 1, K)
+    scale_mat = repeat(reshape(scale_vals, :, 1), 1, K)
+    coeff_a, coeff_c = _ou_coefficients(T, T(dt), tau_mat, scale_mat)
+    return Definitions.OUSpectrum{T}(T(dt), active_idx, CuArray(tau_mat), CuArray(scale_mat), coeff_a, coeff_c)
+end
+
+@inline function _compat_corr_time(::Type{T},
+                                   N::Integer,
+                                   taus::AbstractVector{T},
+                                   scales::AbstractVector{T}) where {T<:AbstractFloat}
+    length(taus) == 1 && length(scales) == 1 || return nothing
+    return CUDA.fill(taus[1], N)
+end
+
+function _refresh_ou_coefficients!(ou::Definitions.OUSpectrum{T}, dt::T) where {T<:AbstractFloat}
+    ou.dt == dt && return ou
+    coeff_a, coeff_c = _ou_coefficients(T, dt, Array(ou.tau), Array(ou.scale))
+    copyto!(ou.coeff_a, coeff_a)
+    copyto!(ou.coeff_c, coeff_c)
+    ou.dt = dt
+    return ou
+end
+
+function _build_vv_params(st::SimulationState{T};
+                          gamma::Union{AbstractVector{<:Real},Real},
+                          temperature::Union{AbstractVector{<:Real},Real},
+                          noise_corr_time::Union{Nothing,AbstractVector{<:Real},Real}=nothing,
+                          ou_scales::Union{Nothing,AbstractVector{<:Real},Real}=nothing,
+                          mass::Real=st.mass,
+                          dt::Real=st.dt) where {T<:AbstractFloat}
+    N = length(st.rx)
+    γ = _device_particle_buffer(T, N, gamma, "gamma")
+    Tbuf = _device_particle_buffer(T, N, temperature, "temperature")
+    noise = CuArray(sqrt.(T(2) .* γ .* Tbuf .* T(dt)))
+    corr = nothing
+    ou = nothing
+    if ou_scales !== nothing
+        noise_corr_time === nothing &&
+            throw(ArgumentError("`ou_scales` requires `noise_corr_time` to be provided as OU mode correlation times."))
+        ou = _build_mode_ou(T, _all_particle_indices(N), noise_corr_time, ou_scales, dt)
+        tau_vals, scale_vals = _canonical_mode_vectors(T, noise_corr_time, ou_scales)
+        corr = _compat_corr_time(T, N, tau_vals, scale_vals)
+    elseif noise_corr_time !== nothing
+        if noise_corr_time isa AbstractVector && length(noise_corr_time) != N
+            throw(ArgumentError("Vector `noise_corr_time` without `ou_scales` is interpreted as legacy per-particle single-mode OU and must have length $(N). Pass `ou_scales` as well for a multi-mode spectrum."))
+        end
+        corr = _device_corr_time_buffer(T, N, noise_corr_time)
+        ou = _build_single_mode_ou(T, noise, corr, dt)
+    end
+    return LangevinIntegrators.VVParams{T}(γ, T(mass), noise; dt=T(dt), corr_time=corr, ou=ou)
+end
+
+function _build_baoab_params(st::SimulationState{T};
+                             gamma::Union{AbstractVector{<:Real},Real},
+                             temperature::Union{AbstractVector{<:Real},Real},
+                             noise_corr_time::Union{Nothing,AbstractVector{<:Real},Real}=nothing,
+                             ou_scales::Union{Nothing,AbstractVector{<:Real},Real}=nothing,
+                             mass::Real=st.mass,
+                             dt::Real=st.dt) where {T<:AbstractFloat}
+    vv = _build_vv_params(st; gamma=gamma, temperature=temperature,
+                          noise_corr_time=noise_corr_time,
+                          ou_scales=ou_scales,
+                          mass=mass, dt=dt)
+    return LangevinIntegrators.BAOABParams{T}(vv.gamma, vv.mass, vv.noise_scale; dt=vv.dt, corr_time=vv.corr_time, ou=vv.ou)
+end
+
+function _build_brownian_params(st::SimulationState{T};
+                                gamma::Union{AbstractVector{<:Real},Real},
+                                temperature::Union{AbstractVector{<:Real},Real},
+                                noise_corr_time::Union{Nothing,AbstractVector{<:Real},Real}=nothing,
+                                ou_scales::Union{Nothing,AbstractVector{<:Real},Real}=nothing,
+                                dt::Real=st.dt) where {T<:AbstractFloat}
+    N = length(st.rx)
+    γ = _device_particle_buffer(T, N, gamma, "gamma")
+    Tbuf = _device_particle_buffer(T, N, temperature, "temperature")
+    noise = CuArray(sqrt.(T(2) .* γ .* Tbuf .* T(dt)))
+    corr = nothing
+    ou = nothing
+    if ou_scales !== nothing
+        noise_corr_time === nothing &&
+            throw(ArgumentError("`ou_scales` requires `noise_corr_time` to be provided as OU mode correlation times."))
+        ou = _build_mode_ou(T, _all_particle_indices(N), noise_corr_time, ou_scales, dt)
+        tau_vals, scale_vals = _canonical_mode_vectors(T, noise_corr_time, ou_scales)
+        corr = _compat_corr_time(T, N, tau_vals, scale_vals)
+    elseif noise_corr_time !== nothing
+        if noise_corr_time isa AbstractVector && length(noise_corr_time) != N
+            throw(ArgumentError("Vector `noise_corr_time` without `ou_scales` is interpreted as legacy per-particle single-mode OU and must have length $(N). Pass `ou_scales` as well for a multi-mode spectrum."))
+        end
+        corr = _device_corr_time_buffer(T, N, noise_corr_time)
+        ou = _build_single_mode_ou(T, noise, corr, dt)
+    end
+    return BrownianIntegrators.BrownianParams{T}(γ, T(dt), noise, corr, ou)
+end
+
+function _build_em_params(st::SimulationState{T};
+                          gamma::Union{AbstractVector{<:Real},Real},
+                          temperature::Union{AbstractVector{<:Real},Real},
+                          noise_corr_time::Union{Nothing,AbstractVector{<:Real},Real}=nothing,
+                          ou_scales::Union{Nothing,AbstractVector{<:Real},Real}=nothing,
+                          dt::Real=st.dt) where {T<:AbstractFloat}
+    bp = _build_brownian_params(st; gamma=gamma, temperature=temperature,
+                                noise_corr_time=noise_corr_time, ou_scales=ou_scales, dt=dt)
+    return BrownianIntegrators.EMParams{T}(bp.gamma, bp.dt, bp.noise_scale, bp.corr_time, bp.ou)
+end
+
+"""
+Concrete spec for the package's Langevin/GJF `velocityverlet` path.
+"""
+mutable struct VVSpec{T<:AbstractFloat} <: IntegratorSpec{T}
     params::LangevinIntegrators.VVParams{T}
+    workspace::StochasticWorkspace{T}
 end
 
 """
 BAOAB splitting spec used in `examples/TwoT_2D_LD_BAOAB.jl`.
 """
-struct BAOABSpec{T<:AbstractFloat} <: IntegratorSpec{T}
+mutable struct BAOABSpec{T<:AbstractFloat} <: IntegratorSpec{T}
     params::LangevinIntegrators.BAOABParams{T}
+    workspace::StochasticWorkspace{T}
 end
 
 """
 BAOA splitting (no trailing B) for legacy scripts.
 """
-struct BAOASpec{T<:AbstractFloat} <: IntegratorSpec{T}
+mutable struct BAOASpec{T<:AbstractFloat} <: IntegratorSpec{T}
     params::LangevinIntegrators.BAOABParams{T}
+    workspace::StochasticWorkspace{T}
 end
 
 """
 Generalized simulation scheme (GSM) spec, which reuses the BAOAB parameter type.
 """
-struct GSMSpec{T<:AbstractFloat} <: IntegratorSpec{T}
+mutable struct GSMSpec{T<:AbstractFloat} <: IntegratorSpec{T}
     params::LangevinIntegrators.BAOABParams{T}
+    workspace::StochasticWorkspace{T}
 end
 
 """
 Midpoint Brownian integrator spec created by [`eulerheun`](@ref).
 """
-struct BrownianSpec{T<:AbstractFloat} <: IntegratorSpec{T}
+mutable struct BrownianSpec{T<:AbstractFloat} <: IntegratorSpec{T}
     params::BrownianIntegrators.BrownianParams{T}
+    workspace::StochasticWorkspace{T}
 end
 
 """
 Euler–Maruyama overdamped spec created by [`eulermaruyama`](@ref).
 """
-struct EMSpec{T<:AbstractFloat} <: IntegratorSpec{T}
+mutable struct EMSpec{T<:AbstractFloat} <: IntegratorSpec{T}
     params::BrownianIntegrators.EMParams{T}
+    workspace::StochasticWorkspace{T}
 end
 
 """
-    velocityverlet(st) -> VVSpec
+    NHCParams{T}
 
-Convenience wrapper so `step!(st, velocityverlet(st), dt)` selects the GJF/Langevin
-velocity-Verlet path.
+Parameter container for deterministic Nose-Hoover Chain (NHC) thermostatting.
+`chain_masses` stores the thermostat inertia values `Q_j`.
 """
-velocityverlet(st::SimulationState{T}) where {T<:AbstractFloat} = VVSpec{T}(st.vv)
-"""
-    baoab(st) -> BAOABSpec
+mutable struct NHCParams{T<:AbstractFloat}
+    mass::T
+    target_temperature::Vector{T}
+    tau::Vector{T}
+    substeps::Int
+    chain_length::Int
+    chain_masses::Matrix{T}
+    propagator::UInt8
+end
 
-Return a BAOAB spec built from `st.vv` buffers (gamma/noise_scale). Used in
-`examples/TwoT_2D_LD_BAOAB.jl`.
 """
-baoab(st::SimulationState{T}) where {T<:AbstractFloat} = BAOABSpec{T}(LangevinIntegrators.BAOABParams{T}(st.vv.gamma, st.vv.mass, st.vv.noise_scale, st.vv.corr_time))
+    NHCWorkspace{T}
+
+Integrator-local Nose-Hoover Chain state (`xi`, `eta`) and reusable scratch
+buffers for chain-force evaluation.
 """
-    baoa(st) -> BAOASpec
+mutable struct NHCWorkspace{T<:AbstractFloat}
+    xi::CuArray{T,2}
+    eta::CuArray{T,2}
+    chain_force::CuArray{T,2}
+    chain_masses::CuArray{T,2}
+    target_temperature::CuArray{T,1}
+    particle_bath_id::CuArray{Int32,1}
+    bath_counts::CuArray{Int32,1}
+    dof_per_bath::CuArray{T,1}
+    kinetic_total_per_bath::CuArray{T,1}
+    thermostat_kinetic_per_bath::CuArray{T,1}
+    thermostat_potential_per_bath::CuArray{T,1}
+    last_velocity_scale_per_bath::CuArray{T,1}
+    chain_masses_signature::UInt64
+    dof_dirty::Bool
+    kinetic_initialized::Bool
+end
+
+"""
+    NHCSpec{T}
+
+Concrete integrator specification for NVT dynamics with a Nose-Hoover Chain
+thermostat.
+"""
+mutable struct NHCSpec{T<:AbstractFloat} <: IntegratorSpec{T}
+    params::NHCParams{T}
+    workspace::NHCWorkspace{T}
+end
+
+"""
+    CSVRParams{T}
+
+Parameter container for the canonical-sampling-through-velocity-rescaling
+(CSVR/Bussi) thermostat. The thermostat acts on the kinetic energy of each
+assigned bath with target temperature `target_temperature[b]` and response time
+`tau[b]`.
+"""
+mutable struct CSVRParams{T<:AbstractFloat}
+    mass::T
+    target_temperature::Vector{T}
+    tau::Vector{T}
+end
+
+"""
+    CSVRWorkspace{T}
+
+Integrator-local buffers for fully GPU CSVR thermostatting. The thermostat is
+global within each bath, so the workspace stores per-bath reductions and the
+cumulative energy exchanged with the coupling reservoir.
+"""
+mutable struct CSVRWorkspace{T<:AbstractFloat}
+    target_temperature::CuArray{T,1}
+    tau::CuArray{T,1}
+    particle_bath_id::CuArray{Int32,1}
+    bath_counts::CuArray{Int32,1}
+    dof_per_bath::CuArray{T,1}
+    kinetic_total_per_bath::CuArray{T,1}
+    cumulative_energy_exchange_per_bath::CuArray{T,1}
+    last_velocity_scale_per_bath::CuArray{T,1}
+    dof_dirty::Bool
+    kinetic_initialized::Bool
+end
+
+"""
+    CSVRSpec{T}
+
+Concrete integrator specification for deterministic NVT dynamics with a
+stochastic global Bussi/CSVR thermostat.
+"""
+mutable struct CSVRSpec{T<:AbstractFloat} <: IntegratorSpec{T}
+    params::CSVRParams{T}
+    workspace::CSVRWorkspace{T}
+end
+
+const NHC_PROPAGATOR_LEGACY  = UInt8(1)
+const NHC_PROPAGATOR_GROMACS = UInt8(2)
+const NHC_PROPAGATOR_LAMMPS  = UInt8(3)
+
+@inline function _nhc_propagator_id(propagator::Symbol)
+    if propagator === :legacy
+        return NHC_PROPAGATOR_LEGACY
+    elseif propagator === :gromacs
+        return NHC_PROPAGATOR_GROMACS
+    elseif propagator === :lammps
+        return NHC_PROPAGATOR_LAMMPS
+    end
+    throw(ArgumentError("Unsupported NHC propagator $(propagator). Expected :legacy, :gromacs, or :lammps."))
+end
+
+@inline function _nhc_propagator_name(propagator::UInt8)
+    if propagator == NHC_PROPAGATOR_LEGACY
+        return :legacy
+    elseif propagator == NHC_PROPAGATOR_GROMACS
+        return :gromacs
+    elseif propagator == NHC_PROPAGATOR_LAMMPS
+        return :lammps
+    end
+    return :unknown
+end
+
+NHCParams{T}(mass::T,
+             target_temperature::Vector{T},
+             tau::Vector{T},
+             substeps::Int,
+             chain_length::Int,
+             chain_masses::Matrix{T}) where {T<:AbstractFloat} =
+    NHCParams{T}(mass,
+                 target_temperature,
+                 tau,
+                 substeps,
+                 chain_length,
+                 chain_masses,
+                 NHC_PROPAGATOR_GROMACS)
+
+NHCParams(mass::T,
+          target_temperature::Vector{T},
+          tau::Vector{T},
+          substeps::Int,
+          chain_length::Int,
+          chain_masses::Matrix{T}) where {T<:AbstractFloat} =
+    NHCParams{T}(mass,
+                 target_temperature,
+                 tau,
+                 substeps,
+                 chain_length,
+                 chain_masses)
+
+@inline function _default_nhc_chain_masses(::Type{T},
+                                           dof::Int,
+                                           target_temperature::T,
+                                           tau::T,
+                                           chain_length::Int) where {T<:AbstractFloat}
+    @assert chain_length >= 1
+    base = target_temperature * tau * tau
+    masses = Vector{T}(undef, chain_length)
+    masses[1] = max(one(T), T(dof)) * base
+    @inbounds for j in 2:chain_length
+        masses[j] = base
+    end
+    return masses
+end
+
+@inline function _nhc_chain_masses_signature(masses::AbstractArray{T}) where {T<:AbstractFloat}
+    sig = hash(size(masses))
+    @inbounds for q in masses
+        sig = hash(q, sig)
+    end
+    return sig
+end
+
+@inline function _new_nhc_workspace(::Type{T},
+                                    chain_length::Int,
+                                    nbaths::Int,
+                                    nparticles::Int) where {T<:AbstractFloat}
+    return NHCWorkspace{T}(CUDA.zeros(T, chain_length, nbaths),
+                           CUDA.zeros(T, chain_length, nbaths),
+                           CUDA.zeros(T, chain_length, nbaths),
+                           CUDA.zeros(T, chain_length, nbaths),
+                           CUDA.zeros(T, nbaths),
+                           CUDA.fill(Int32(1), nparticles),
+                           CUDA.zeros(Int32, nbaths),
+                           CUDA.zeros(T, nbaths),
+                           CUDA.zeros(T, nbaths),
+                           CUDA.zeros(T, nbaths),
+                           CUDA.zeros(T, nbaths),
+                           CUDA.fill(one(T), nbaths),
+                           UInt64(0),
+                           true,
+                           false)
+end
+
+@inline function _new_csvr_workspace(::Type{T},
+                                     nbaths::Int,
+                                     nparticles::Int) where {T<:AbstractFloat}
+    return CSVRWorkspace{T}(CUDA.zeros(T, nbaths),
+                            CUDA.zeros(T, nbaths),
+                            CUDA.fill(Int32(1), nparticles),
+                            CUDA.zeros(Int32, nbaths),
+                            CUDA.zeros(T, nbaths),
+                            CUDA.zeros(T, nbaths),
+                            CUDA.zeros(T, nbaths),
+                            CUDA.fill(one(T), nbaths),
+                            true,
+                            false)
+end
+
+"""
+    velocityverlet(st; gamma, temperature, noise_corr_time=nothing, ou_scales=nothing,
+                   mass=st.mass, dt=st.dt) -> VVSpec
+
+Construct a GJF/Langevin velocity-Verlet spec with integrator-owned stochastic
+buffers.
+"""
+function velocityverlet(st::SimulationState{T};
+                        gamma::Union{AbstractVector{<:Real},Real},
+                        temperature::Union{AbstractVector{<:Real},Real},
+                        noise_corr_time::Union{Nothing,AbstractVector{<:Real},Real}=nothing,
+                        ou_scales::Union{Nothing,AbstractVector{<:Real},Real}=nothing,
+                        mass::Real=st.mass,
+                        dt::Real=st.dt) where {T<:AbstractFloat}
+    return VVSpec(_build_vv_params(st; gamma=gamma, temperature=temperature,
+                                   noise_corr_time=noise_corr_time,
+                                   ou_scales=ou_scales,
+                                   mass=mass, dt=dt))
+end
+"""
+    baoab(st; gamma, temperature, noise_corr_time=nothing, ou_scales=nothing,
+          mass=st.mass, dt=st.dt) -> BAOABSpec
+
+Construct a BAOAB Langevin spec with integrator-owned stochastic buffers.
+"""
+function baoab(st::SimulationState{T};
+               gamma::Union{AbstractVector{<:Real},Real},
+               temperature::Union{AbstractVector{<:Real},Real},
+               noise_corr_time::Union{Nothing,AbstractVector{<:Real},Real}=nothing,
+               ou_scales::Union{Nothing,AbstractVector{<:Real},Real}=nothing,
+               mass::Real=st.mass,
+               dt::Real=st.dt) where {T<:AbstractFloat}
+    return BAOABSpec(_build_baoab_params(st; gamma=gamma, temperature=temperature,
+                                         noise_corr_time=noise_corr_time,
+                                         ou_scales=ou_scales,
+                                         mass=mass, dt=dt))
+end
+"""
+    baoa(st; gamma, temperature, noise_corr_time=nothing, ou_scales=nothing,
+         mass=st.mass, dt=st.dt) -> BAOASpec
 
 Legacy BAOA variant (no final B kick).
 """
-baoa(st::SimulationState{T}) where {T<:AbstractFloat} = BAOASpec{T}(LangevinIntegrators.BAOABParams{T}(st.vv.gamma, st.vv.mass, st.vv.noise_scale, st.vv.corr_time))
+function baoa(st::SimulationState{T};
+              gamma::Union{AbstractVector{<:Real},Real},
+              temperature::Union{AbstractVector{<:Real},Real},
+              noise_corr_time::Union{Nothing,AbstractVector{<:Real},Real}=nothing,
+              ou_scales::Union{Nothing,AbstractVector{<:Real},Real}=nothing,
+              mass::Real=st.mass,
+              dt::Real=st.dt) where {T<:AbstractFloat}
+    return BAOASpec(_build_baoab_params(st; gamma=gamma, temperature=temperature,
+                                        noise_corr_time=noise_corr_time,
+                                        ou_scales=ou_scales,
+                                        mass=mass, dt=dt))
+end
 """
-    gsm(st) -> GSMSpec
+    gsm(st; gamma, temperature, noise_corr_time=nothing, ou_scales=nothing,
+        mass=st.mass, dt=st.dt) -> GSMSpec
 
 Construct a GSM spec (used by `examples/TwoT_2D_LD_GSM.jl`).
 """
-gsm(st::SimulationState{T})  where {T<:AbstractFloat} = GSMSpec{T}(LangevinIntegrators.BAOABParams{T}(st.vv.gamma, st.vv.mass, st.vv.noise_scale, st.vv.corr_time))
+function gsm(st::SimulationState{T};
+             gamma::Union{AbstractVector{<:Real},Real},
+             temperature::Union{AbstractVector{<:Real},Real},
+             noise_corr_time::Union{Nothing,AbstractVector{<:Real},Real}=nothing,
+             ou_scales::Union{Nothing,AbstractVector{<:Real},Real}=nothing,
+             mass::Real=st.mass,
+             dt::Real=st.dt) where {T<:AbstractFloat}
+    return GSMSpec(_build_baoab_params(st; gamma=gamma, temperature=temperature,
+                                       noise_corr_time=noise_corr_time,
+                                       ou_scales=ou_scales,
+                                       mass=mass, dt=dt))
+end
 """
-    eulerheun(st) -> BrownianSpec
+    eulerheun(st; gamma, temperature, noise_corr_time=nothing, ou_scales=nothing,
+              dt=st.dt) -> BrownianSpec
 
-Build a midpoint Brownian spec sharing `st.vv`'s gamma/noise-scale buffers.
+Build a midpoint Brownian spec with integrator-owned stochastic buffers.
 """
-eulerheun(st::SimulationState{T}) where {T<:AbstractFloat} = BrownianSpec{T}(BrownianIntegrators.BrownianParams(st))
+function eulerheun(st::SimulationState{T};
+                   gamma::Union{AbstractVector{<:Real},Real},
+                   temperature::Union{AbstractVector{<:Real},Real},
+                   noise_corr_time::Union{Nothing,AbstractVector{<:Real},Real}=nothing,
+                   ou_scales::Union{Nothing,AbstractVector{<:Real},Real}=nothing,
+                   dt::Real=st.dt) where {T<:AbstractFloat}
+    return BrownianSpec(_build_brownian_params(st; gamma=gamma, temperature=temperature,
+                                               noise_corr_time=noise_corr_time,
+                                               ou_scales=ou_scales, dt=dt))
+end
 """
-    eulermaruyama(st) -> EMSpec
+    eulermaruyama(st; gamma, temperature, noise_corr_time=nothing, ou_scales=nothing,
+                  dt=st.dt) -> EMSpec
 
 Return an Euler–Maruyama spec for overdamped dynamics (`examples/3D_BD.jl`).
 """
-eulermaruyama(st::SimulationState{T}) where {T<:AbstractFloat} = EMSpec{T}(BrownianIntegrators.EMParams(st.vv.gamma, st.vv.noise_scale, st.vv.corr_time))
-"""
-BrownianIntegrators.BrownianParams(st)
-
-Build a Brownian parameter container reusing the simulation's current
-`gamma` and `noise_scale` buffers. Keeps element type `T` consistent.
-"""
-function BrownianIntegrators.BrownianParams(st::SimulationState{T}) where {T<:AbstractFloat}
-    return BrownianIntegrators.BrownianParams{T}(st.vv.gamma, st.vv.noise_scale, st.vv.corr_time)
+function eulermaruyama(st::SimulationState{T};
+                       gamma::Union{AbstractVector{<:Real},Real},
+                       temperature::Union{AbstractVector{<:Real},Real},
+                       noise_corr_time::Union{Nothing,AbstractVector{<:Real},Real}=nothing,
+                       ou_scales::Union{Nothing,AbstractVector{<:Real},Real}=nothing,
+                       dt::Real=st.dt) where {T<:AbstractFloat}
+    return EMSpec(_build_em_params(st; gamma=gamma, temperature=temperature,
+                                   noise_corr_time=noise_corr_time,
+                                   ou_scales=ou_scales, dt=dt))
 end
 
+"""
+    nosehooverchain(st; temperature=1, tau=1, chain_length=5, substeps=5,
+                    mass=st.mass, chain_masses=nothing, propagator=:gromacs) -> NHCSpec
+
+Create a deterministic NVT integrator specification using a Nose-Hoover Chain.
+When `chain_masses` is omitted, masses are initialized from `(dof, T, tau)`
+using the standard `Q₁ = g T τ²`, `Qⱼ = T τ² (j>1)` rule. `propagator`
+selects the chain update scheme: `:gromacs` is the package default and uses
+a GPU port of the reversible Suzuki-Yoshida propagator used by GROMACS,
+`:lammps` uses a GPU port of the reversible `tloop` chain update used by
+LAMMPS, and `:legacy` preserves the original package implementation. For
+`propagator=:gromacs`, `substeps=5` matches the default fifth-order outer
+repetition used there; for `propagator=:lammps`, `substeps` corresponds to
+LAMMPS `tloop` and `substeps=1` matches the LAMMPS default.
+"""
+function nosehooverchain(st::SimulationState{T};
+                         temperature::Union{Nothing,Real}=nothing,
+                         tau::Union{Nothing,Real}=nothing,
+                         temperatures::Union{Nothing,AbstractVector{<:Real}}=nothing,
+                         taus::Union{Nothing,AbstractVector{<:Real}}=nothing,
+                         chain_length::Integer=5,
+                         substeps::Integer=5,
+                         mass::Real=st.mass,
+                         chain_masses::Union{Nothing,AbstractVector{<:Real},AbstractMatrix{<:Real}}=nothing,
+                         propagator::Symbol=:gromacs) where {T<:AbstractFloat}
+    chain_length >= 1 || throw(ArgumentError("chain_length must be >= 1, got $(chain_length)."))
+    substeps >= 1 || throw(ArgumentError("substeps must be >= 1, got $(substeps)."))
+    massT = T(mass)
+    massT > zero(T) || throw(ArgumentError("NHC mass must be > 0."))
+    propagator_id = _nhc_propagator_id(propagator)
+
+    if temperatures !== nothing && temperature !== nothing
+        throw(ArgumentError("Provide either `temperature` or `temperatures`, not both."))
+    end
+    if taus !== nothing && tau !== nothing
+        throw(ArgumentError("Provide either `tau` or `taus`, not both."))
+    end
+
+    temp_vec = if temperatures === nothing
+        [T(something(temperature, one(T)))]
+    else
+        T.(temperatures)
+    end
+    tau_vec = if taus === nothing
+        [T(something(tau, one(T)))]
+    else
+        T.(taus)
+    end
+
+    length(temp_vec) == length(tau_vec) ||
+        throw(ArgumentError("temperatures and taus must have identical lengths."))
+    nbaths = length(temp_vec)
+    nbaths >= 1 || throw(ArgumentError("NHC requires at least one bath."))
+
+    @inbounds for (b, Tb) in pairs(temp_vec)
+        Tb > zero(T) || throw(ArgumentError("NHC target temperature for bath $(b) must be > 0."))
+    end
+    @inbounds for (b, τb) in pairs(tau_vec)
+        τb > zero(T) || throw(ArgumentError("NHC tau for bath $(b) must be > 0."))
+    end
+
+    dof_total = (_is_3d(st) ? 3 : 2) * length(st.rx)
+    dof_guess = max(1, cld(dof_total, nbaths))
+
+    masses = if chain_masses === nothing
+        out = Matrix{T}(undef, Int(chain_length), nbaths)
+        @inbounds for b in 1:nbaths
+            col = _default_nhc_chain_masses(T, dof_guess, temp_vec[b], tau_vec[b], Int(chain_length))
+            out[:, b] = col
+        end
+        out
+    else
+        if chain_masses isa AbstractVector
+            length(chain_masses) == chain_length ||
+                throw(ArgumentError("Vector chain_masses length must equal chain_length ($(chain_length))."))
+            v = T.(chain_masses)
+            repeat(reshape(v, Int(chain_length), 1), 1, nbaths)
+        else
+            cm = T.(chain_masses)
+            size(cm, 1) == chain_length ||
+                throw(ArgumentError("Matrix chain_masses first dimension must equal chain_length ($(chain_length))."))
+            size(cm, 2) == nbaths ||
+                throw(ArgumentError("Matrix chain_masses second dimension must equal number of baths ($(nbaths))."))
+            cm
+        end
+    end
+    @inbounds for j in axes(masses, 1), b in axes(masses, 2)
+        masses[j, b] > zero(T) ||
+            throw(ArgumentError("NHC chain mass Q[$(j), bath=$(b)] must be > 0."))
+    end
+
+    params = NHCParams{T}(massT,
+                          temp_vec,
+                          tau_vec,
+                          Int(substeps),
+                          Int(chain_length),
+                          masses,
+                          propagator_id)
+    return NHCSpec{T}(params, _new_nhc_workspace(T, Int(chain_length), nbaths, length(st.rx)))
+end
+
+"""
+    csvr(st; temperature=1, tau=1, mass=st.mass) -> CSVRSpec
+    csvr(st; temperatures, taus, mass=st.mass) -> CSVRSpec
+
+Create a deterministic MD integrator using the Bussi canonical-sampling through
+velocity rescaling (CSVR) thermostat. The thermostat acts on one or more baths
+defined by filter assignments, with one global velocity-rescaling factor drawn
+per bath and per timestep.
+"""
+function csvr(st::SimulationState{T};
+              temperature::Union{Nothing,Real}=nothing,
+              tau::Union{Nothing,Real}=nothing,
+              temperatures::Union{Nothing,AbstractVector{<:Real}}=nothing,
+              taus::Union{Nothing,AbstractVector{<:Real}}=nothing,
+              mass::Real=st.mass) where {T<:AbstractFloat}
+    if temperatures !== nothing && temperature !== nothing
+        throw(ArgumentError("Provide either `temperature` or `temperatures`, not both."))
+    end
+    if taus !== nothing && tau !== nothing
+        throw(ArgumentError("Provide either `tau` or `taus`, not both."))
+    end
+
+    massT = T(mass)
+    massT > zero(T) || throw(ArgumentError("CSVR mass must be > 0."))
+
+    temp_vec = if temperatures === nothing
+        [T(something(temperature, one(T)))]
+    else
+        T.(temperatures)
+    end
+    tau_vec = if taus === nothing
+        [T(something(tau, one(T)))]
+    else
+        T.(taus)
+    end
+
+    length(temp_vec) == length(tau_vec) ||
+        throw(ArgumentError("temperatures and taus must have identical lengths."))
+    nbaths = length(temp_vec)
+    nbaths >= 1 || throw(ArgumentError("CSVR requires at least one bath."))
+
+    @inbounds for (b, Tb) in pairs(temp_vec)
+        Tb > zero(T) || throw(ArgumentError("CSVR target temperature for bath $(b) must be > 0."))
+    end
+    @inbounds for (b, τb) in pairs(tau_vec)
+        τb > zero(T) || throw(ArgumentError("CSVR tau for bath $(b) must be > 0."))
+    end
+
+    params = CSVRParams{T}(massT, temp_vec, tau_vec)
+    return CSVRSpec{T}(params, _new_csvr_workspace(T, nbaths, length(st.rx)))
+end
 """
     zero_forces!(st)
 
@@ -279,27 +917,6 @@ function sync_unwrapped!(st::SimulationState{T}) where {T<:AbstractFloat}
         copyto!(st.rz_unwrap, st.rz)
     end
     return st
-end
-
-# Ensure OU state buffers exist when correlated noise is requested.
-function _ensure_ou_state!(st::SimulationState{T},
-                           corr_time::Union{Nothing,CuArray{T,1}}=st.vv.corr_time) where {T<:AbstractFloat}
-    corr_time === nothing && return
-    if st.ou_x === nothing
-        st.ou_x = CUDA.CuArray{T}(undef, length(st.rx))
-        st.ou_y = CUDA.CuArray{T}(undef, length(st.ry))
-        fill!(st.ou_x, zero(T)); fill!(st.ou_y, zero(T))
-        if st.rz === nothing
-            st.ou_z = nothing
-        else
-            st.ou_z = CUDA.CuArray{T}(undef, length(st.rz))
-            fill!(st.ou_z, zero(T))
-        end
-    elseif st.rz !== nothing && st.ou_z === nothing
-        st.ou_z = CUDA.CuArray{T}(undef, length(st.rz))
-        fill!(st.ou_z, zero(T))
-    end
-    return
 end
 
 @inline function _require_positive_gamma!(gamma::CuArray{T,1}, integrator::AbstractString) where {T<:AbstractFloat}
@@ -951,9 +1568,10 @@ Key behaviors:
 - For `nonbonded = :wca` the neighbor cutoff is forced to the physical WCA
   value `r_c = 2^(1/6) σ` even if a larger `cutoff` was passed, guaranteeing
   that kernels reuse the validated parameter sets from the packaged examples.
-- `gamma`, `temperature`, and `noise_corr_time` accept either scalars or
-  length-`N` vectors. Scalars are broadcast on the GPU using the chosen
-  floating-point precision (`:f32` or `:f64`).
+- `temperature` accepts either a scalar or length-`N` vector and is used to
+  initialize velocities. Stochastic integrator parameters are constructed
+  later via explicit specs such as [`velocityverlet`](@ref) and
+  [`eulermaruyama`](@ref).
 - Initial velocities are drawn from a Maxwell–Boltzmann distribution at
   `temperature` and then centered to remove center-of-mass drift.
 - When `unwrapped_positions=true`, additional `rx_unwrap`/`ry_unwrap`/`rz_unwrap`
@@ -968,11 +1586,13 @@ st = build_simulation(N=4096, box=(250f0, 250f0),
                       epsilon=1f4, sigma=1f0,
                       gamma=615f0, temperature=10f0,
                       dt=1f-5, nonbonded=:wca, precision=:f32)
-step!(st, 1f-5; compute_energy=false)
+vv = velocityverlet(st; gamma=615f0, temperature=10f0, dt=1f-5)
+step!(st, vv, 1f-5; compute_energy=false)
 ```
 
-Returns a fully initialized `SimulationState` ready for stepping with the
-Langevin (Velocity Verlet / BAOAB / GSM) or Brownian integrators.
+Returns a fully initialized `SimulationState`. Stochastic controls such as
+`noise_corr_time` now belong to the explicit integrator spec rather than the
+core simulation state.
 """
 function build_simulation(;N::Int,
                            box,
@@ -983,7 +1603,7 @@ function build_simulation(;N::Int,
                            use_neighborlist::Bool=true,
                            epsilon::Real=1,
                            sigma::Real=1,
-                           gamma::Union{AbstractVector{<:Real},Real}=1,
+                           gamma::Union{AbstractVector{<:Real},Real,Nothing}=1,
                            temperature::Union{AbstractVector{<:Real},Real}=1,
                            noise_corr_time::Union{AbstractVector{<:Real},Real,Nothing}=nothing,
                            dt::Real=0.001,
@@ -1026,39 +1646,14 @@ function build_simulation(;N::Int,
     f0y = CUDA.CuArray{T}(undef, N)
     f0z = nothing
 
-    # Optional per-particle exponential correlation time (τ); if not provided, noise is white
-    local corr_time_vec::Union{Nothing,CuArray{T,1}}
-    if noise_corr_time === nothing
-        corr_time_vec = nothing
-    elseif noise_corr_time isa Real
-        corr_time_vec = CUDA.fill(T(noise_corr_time), N)
-    else
-        @assert length(noise_corr_time) == N "noise_corr_time vector must have length N"
-        corr_time_vec = CuArray(T.(noise_corr_time))
-    end
-
-    # per-step random impulse
-    rf_x = CUDA.CuArray{T}(undef, N)
-    rf_y = CUDA.CuArray{T}(undef, N)
-    rf_z = nothing
-    ou_x = nothing
-    ou_y = nothing
-    ou_z = nothing
-
     if D == 3
         rz  = CUDA.CuArray{T}(undef, N)
         vz  = CUDA.CuArray{T}(undef, N)
         fz  = CUDA.CuArray{T}(undef, N)
         f0z = CUDA.CuArray{T}(undef, N)
-        rf_z = CUDA.CuArray{T}(undef, N)
-        ou_z = corr_time_vec === nothing ? nothing : CUDA.CuArray{T}(undef, N)
         if unwrapped_positions
             rz_unwrap = CUDA.CuArray{T}(undef, N)
         end
-    end
-    if corr_time_vec !== nothing
-        ou_x = CUDA.CuArray{T}(undef, N)
-        ou_y = CUDA.CuArray{T}(undef, N)
     end
 
     fill!(rx, zero(T)); fill!(ry, zero(T))
@@ -1069,15 +1664,9 @@ function build_simulation(;N::Int,
 
     fill!(fx, zero(T)); fill!(fy, zero(T)); fz === nothing || fill!(fz, zero(T))
     fill!(f0x, zero(T)); fill!(f0y, zero(T)); f0z === nothing || fill!(f0z, zero(T))
-    fill!(rf_x, zero(T)); fill!(rf_y, zero(T)); rf_z === nothing || fill!(rf_z, zero(T))
-    ou_x === nothing || fill!(ou_x, zero(T)); ou_y === nothing || fill!(ou_y, zero(T)); ou_z === nothing || fill!(ou_z, zero(T))
 
     # Maxwell-Boltzmann initial velocities on GPU
-    if temperature isa Real
-        temperature_vec = CUDA.fill(T(temperature), N)
-    else
-        temperature_vec = CuArray(T.(temperature))
-    end
+    temperature_vec = _device_particle_buffer(T, N, temperature, "temperature")
 
     if D == 2
         _init_vel2!(vx, vy, temperature_vec)
@@ -1115,16 +1704,8 @@ function build_simulation(;N::Int,
     end
 
     lj = Definitions.LJParams{T}(epsilonT, sigmaT, nb_cutoff)
-
-    if gamma isa Real
-        gamma_vec = CUDA.fill(T(gamma), N)
-    else
-        gamma_vec = CuArray(T.(gamma))
-    end
-
-    noise_scale = CuArray(sqrt.(T(2) .* gamma_vec .* temperature_vec .* T(dt)))
-
-    vv = LangevinIntegrators.VVParams{T}(gamma_vec, T(mass), noise_scale, corr_time_vec)
+    noise_corr_time === nothing ||
+        throw(ArgumentError("build_simulation no longer accepts `noise_corr_time`; pass it to an explicit integrator constructor such as velocityverlet(st; gamma=..., temperature=..., noise_corr_time=..., dt=...)."))
 
     Epot = CUDA.CuArray{T}(undef, N); fill!(Epot, zero(T))
     dq   = CUDA.CuArray{T}(undef, N); fill!(dq, zero(T))
@@ -1185,8 +1766,6 @@ function build_simulation(;N::Int,
     # Construct with boxes set to nothing; assign after
     st = SimulationState(rx, ry, rz, rx_unwrap, ry_unwrap, rz_unwrap, vx, vy, vz, fx, fy, fz,
                          f0x, f0y, f0z,
-                         rf_x, rf_y, rf_z,
-                         ou_x, ou_y, ou_z,
                          typeid,
                          nothing,   # box2
                          nothing,   # box3
@@ -1194,7 +1773,7 @@ function build_simulation(;N::Int,
                          nothing, rcut_factor,
                          nothing, nothing, nothing,
                          bondlist, bond_spec,
-                         vv,
+                         T(mass), T(dt),
                          Epot, dq, dU, Ekin, virial, virial_nonbonded, virial_bonded, virial_tensor,
                          Epot_accum, Ekin_accum, virial_accum, virial_tensor_accum,
                          0, UInt8(0), nb_tag, srp,
@@ -1400,1624 +1979,2301 @@ function accumulate_virial!(st::SimulationState{T}) where {T<:AbstractFloat}
 end
 
 # =========================
-#   One integrator step
+#   Stage-driven stepping
 # =========================
+
+const INTEGRATOR_ID_UNKNOWN  = UInt8(0)
+const INTEGRATOR_ID_LANGEVIN = UInt8(1)
+const INTEGRATOR_ID_BROWNIAN = UInt8(2)
+const INTEGRATOR_ID_NHC      = UInt8(3)
+const INTEGRATOR_ID_CSVR     = UInt8(4)
+
 """
-    step!(st, dt; compute_energy=true)
-    step!(st, spec::IntegratorSpec, dt; compute_energy=true)
+    _empty_workspace(T)
 
-Advance [`SimulationState`](@ref) by one time step. The default method reuses
-the last integrator attached to `st` (Langevin VV or Brownian), while the
-variant accepting an [`IntegratorSpec`](@ref) lets scripts such as
-`examples/TwoT_2D_LD_BAOAB.jl` switch to BAOAB/GSM/Euler–Heun explicitly.
-
-Pipeline overview:
-1. Every `st.neigh_interval` steps call [`NeighborLists.update_needed!`](@ref)
-   to test whether the displacement-based skin criterion was violated; rebuild
-   in place (and reset collision state) when needed.
-2. Swap the cached force buffers so the previous-step forces become `f₀`, or
-   compute them from scratch if this is the first step.
-3. Prepare correlated or white noise via `LangevinIntegrators.vv_prepare_noise!`
-   (or the Brownian noise helpers) and advance positions on the GPU.
-4. Optionally update collision statistics right after the position move.
-5. Recompute nonbonded/bonded forces at `t + Δt` and update velocities;
-   per-particle energy/heat accumulators are updated when `compute_energy=true`.
-
-Pass `compute_energy=false` for production runs where observables are sampled
-only every few thousand steps. All overloads reuse the same neighbor-list and
-collision infrastructure, so switching integrators mid-run is inexpensive.
-
-Examples mirroring `examples/2D_example.jl` and `examples/3D_example.jl`:
-
-```julia
-st2d = build_simulation(N=8192, box=(250f0, 250f0), cutoff=Float32(2^(1/6)),
-                        skin=Float32(2^(1/6))/2, cap=Int32(250),
-                        epsilon=1f4, sigma=1f0,
-                        gamma=615f0, temperature=10f0,
-                        dt=1f-5, nonbonded=:wca, precision=:f32)
-step!(st2d, 1f-5; compute_energy=false)
-
-st3d = build_simulation(N=4096, box=(250f0, 250f0, 250f0),
-                        cutoff=Float32(2^(1/6)), skin=0.4f0,
-                        cap=Int32(100), epsilon=10f0, sigma=1f0,
-                        gamma=10f0, temperature=1f0, dt=5f-5)
-step!(st3d, 5f-5; compute_energy=true)
-```
+Construct a zero-length stochastic workspace used by compatibility constructors
+that receive parameter objects without a simulation state.
 """
-function step!(st::SimulationState{T}, dt::Real; compute_energy::Bool=true) where {T<:AbstractFloat}
-    # Pipeline order: check/rebuild neighbor list → swap previous forces →
-    # Langevin noise prep and position update → collision update hook →
-    # new nonbonded/bonded forces → velocity update and optional energy accumulation.
-    # Ensure the time step matches the simulation precision
-    dtT = T(dt)
-    freeze_active = _freeze_active!(st)
-    freeze_hold = freeze_active && st.freeze_mode == FREEZE_HOLD
-    freeze_spring = freeze_active && st.freeze_mode == FREEZE_SPRING
-    st.last_integrator = UInt8(1)
-    D = st.rz === nothing ? 2 : 3
+function _empty_workspace(::Type{T}) where {T<:AbstractFloat}
+    return StochasticWorkspace{T}(CUDA.zeros(T, 0), CUDA.zeros(T, 0), nothing, nothing, nothing, nothing)
+end
 
-    # NL rebuild policy using new displacement-based algorithm only
-    do_check = (st.step % st.neigh_interval == 0)
-    rebuild_needed = false
-    if do_check
-        rebuild_needed = if D == 2
-            NeighborLists.update_needed!(st.nbh, st.rx, st.ry;
-                                        skin=st.nbh.skin,
-                                        Lx=st.box2[1], Ly=st.box2[2],
-                                        step=st.step)
-        else
-            NeighborLists.update_needed!(st.nbh, st.rx, st.ry, st.rz;
-                                        skin=st.nbh.skin,
-                                        Lx=st.box3[1], Ly=st.box3[2], Lz=st.box3[3],
-                                        step=st.step)
-        end
+VVSpec(params::LangevinIntegrators.VVParams{T}) where {T<:AbstractFloat} = VVSpec{T}(params, _empty_workspace(T))
+BAOABSpec(params::LangevinIntegrators.BAOABParams{T}) where {T<:AbstractFloat} = BAOABSpec{T}(params, _empty_workspace(T))
+BAOASpec(params::LangevinIntegrators.BAOABParams{T}) where {T<:AbstractFloat} = BAOASpec{T}(params, _empty_workspace(T))
+GSMSpec(params::LangevinIntegrators.BAOABParams{T}) where {T<:AbstractFloat} = GSMSpec{T}(params, _empty_workspace(T))
+BrownianSpec(params::BrownianIntegrators.BrownianParams{T}) where {T<:AbstractFloat} = BrownianSpec{T}(params, _empty_workspace(T))
+EMSpec(params::BrownianIntegrators.EMParams{T}) where {T<:AbstractFloat} = EMSpec{T}(params, _empty_workspace(T))
+NHCSpec(params::NHCParams{T}) where {T<:AbstractFloat} =
+    NHCSpec{T}(params,
+               _new_nhc_workspace(T,
+                                  params.chain_length,
+                                  length(params.target_temperature),
+                                  0))
+CSVRSpec(params::CSVRParams{T}) where {T<:AbstractFloat} =
+    CSVRSpec{T}(params,
+                _new_csvr_workspace(T,
+                                    length(params.target_temperature),
+                                    0))
+
+@inline _is_3d(st::SimulationState) = st.rz !== nothing
+
+@inline function _stage_tracing_enabled()
+    flag = lowercase(get(ENV, "NEQSIMGPU_STAGE_TRACE", "0"))
+    return flag == "1" || flag == "true" || flag == "yes" || flag == "on"
+end
+
+"""
+    _trace_integrator_stage!(st, spec, stage_tag; force_evaluated=false,
+                             rebuild_applied=false)
+
+Emit an optional per-stage trace line for debugging and diagnostics. Tracing is
+controlled by `ENV["NEQSIMGPU_STAGE_TRACE"]` and is disabled by default.
+"""
+function _trace_integrator_stage!(st::SimulationState,
+                                  spec::IntegratorSpec,
+                                  stage_tag::Symbol;
+                                  force_evaluated::Bool=false,
+                                  rebuild_applied::Bool=false)
+    _stage_tracing_enabled() || return nothing
+    @info "integrator stage" integrator=integrator_name(spec) stage=stage_tag step=st.step force_evaluated rebuild_applied
+    return nothing
+end
+
+"""
+    _ensure_workspace_buffers!(workspace, st; require_ou)
+
+Ensure integrator-local stochastic buffers are allocated with the correct shape
+for the current simulation state.
+"""
+function _ensure_workspace_buffers!(workspace::StochasticWorkspace{T},
+                                    st::SimulationState{T};
+                                    ou::Union{Nothing,Definitions.OUSpectrum{T}}=nothing) where {T<:AbstractFloat}
+    N = length(st.rx)
+
+    if length(workspace.rf_x) != N
+        workspace.rf_x = CUDA.CuArray{T}(undef, N)
+        fill!(workspace.rf_x, zero(T))
     end
-    
-    if rebuild_needed
-        if D == 2
-            NeighborLists.update_neighbors_inplace!(st.nbh, st.rx, st.ry; box = st.box2, step=st.step)
-            # Reset collision contact state on rebuild
-            _collisions_reinit_on_rebuild!(st)
-        else
-            NeighborLists.update_neighbors_inplace!(st.nbh, st.rx, st.ry, st.rz; box = st.box3, step=st.step)
-            _collisions_reinit_on_rebuild!(st)
-        end
+    if length(workspace.rf_y) != N
+        workspace.rf_y = CUDA.CuArray{T}(undef, N)
+        fill!(workspace.rf_y, zero(T))
     end
 
-    # Prepare forces at t (f0*): reuse last step's fx,* via buffer swap when available
-    if st.step > 1
-        st.f0x, st.fx = st.fx, st.f0x
-        st.f0y, st.fy = st.fy, st.f0y
-        if D == 3; st.f0z, st.fz = st.fz, st.f0z; end
+    if _is_3d(st)
+        if workspace.rf_z === nothing || length(workspace.rf_z) != N
+            workspace.rf_z = CUDA.CuArray{T}(undef, N)
+            fill!(workspace.rf_z, zero(T))
+        end
     else
-        if D == 2
-            if st.nb_kind == NB_KIND_LJ
-                if st.sigma_particle === nothing
-                    if compute_energy
-                        if st.bonds === nothing
-                            NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.f0x, st.f0y, st.Epot,
-                                                           st.nbh, st.box2::Definitions.Box2, st.pair_lj)
-                        else
-                            NonBondedForces.lj_forces_soa_excl!(st.rx, st.ry, st.f0x, st.f0y, st.Epot,
-                                                                st.nbh, st.bonds, st.box2::Definitions.Box2, st.pair_lj)
-                        end
-                    else
-                        if st.bonds === nothing
-                            NonBondedForces.lj_forces_soa_noE!(st.rx, st.ry, st.f0x, st.f0y,
-                                                               st.nbh, st.box2::Definitions.Box2, st.pair_lj)
-                        else
-                            NonBondedForces.lj_forces_soa_noE_excl!(st.rx, st.ry, st.f0x, st.f0y,
-                                                                    st.nbh, st.bonds, st.box2::Definitions.Box2, st.pair_lj)
-                        end
-                    end
-                else
-                    if compute_energy
-                        NonBondedForces.lj_forces_soa_mixed!(st.rx, st.ry, st.f0x, st.f0y, st.Epot,
-                                                              st.nbh, st.box2::Definitions.Box2,
-                                                              st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
-                    else
-                        NonBondedForces.lj_forces_soa_noE_mixed!(st.rx, st.ry, st.f0x, st.f0y,
-                                                                   st.nbh, st.box2::Definitions.Box2,
-                                                                   st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
-                    end
-                end
-            elseif st.nb_kind == NB_KIND_WCA
-                if st.sigma_pair !== nothing
-                    if compute_energy
-                        NonBondedForces.wca_forces_soa_pairs!(st.rx, st.ry, st.f0x, st.f0y, st.Epot,
-                                                             st.nbh, st.box2::Definitions.Box2,
-                                                             st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
-                    else
-                        NonBondedForces.wca_forces_soa_noE_pairs!(st.rx, st.ry, st.f0x, st.f0y,
-                                                                 st.nbh, st.box2::Definitions.Box2,
-                                                                 st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
-                    end
-                elseif st.sigma_particle !== nothing
-                    if compute_energy
-                        NonBondedForces.wca_forces_soa_mixed!(st.rx, st.ry, st.f0x, st.f0y, st.Epot,
-                                                             st.nbh, st.box2::Definitions.Box2,
-                                                             st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
-                    else
-                        NonBondedForces.wca_forces_soa_noE_mixed!(st.rx, st.ry, st.f0x, st.f0y,
-                                                                 st.nbh, st.box2::Definitions.Box2,
-                                                                 st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
-                    end
-                else
-                    if compute_energy
-                        if st.bonds === nothing
-                            NonBondedForces.wca_forces_soa!(st.rx, st.ry, st.f0x, st.f0y, st.Epot,
-                                                            st.nbh, st.box2::Definitions.Box2, st.pair_lj)
-                        else
-                            NonBondedForces.wca_forces_soa_excl!(st.rx, st.ry, st.f0x, st.f0y, st.Epot,
-                                                                 st.nbh, st.bonds, st.box2::Definitions.Box2, st.pair_lj)
-                        end
-                    else
-                        if st.bonds === nothing
-                            NonBondedForces.wca_forces_soa_noE!(st.rx, st.ry, st.f0x, st.f0y,
-                                                                st.nbh, st.box2::Definitions.Box2, st.pair_lj)
-                        else
-                            NonBondedForces.wca_forces_soa_noE_excl!(st.rx, st.ry, st.f0x, st.f0y,
-                                                                      st.nbh, st.bonds, st.box2::Definitions.Box2, st.pair_lj)
-                        end
-                    end
-                end
-            else # NB_KIND_SOFTREP
-                @assert st.softrep !== nothing "softrep params missing"
-                if compute_energy
-                    if st.bonds === nothing
-                        NonBondedForces.harmonic_rep_forces_soa!(st.rx, st.ry, st.f0x, st.f0y, st.Epot,
-                                                                  st.nbh, st.box2::Definitions.Box2, st.softrep)
-                    else
-                        NonBondedForces.harmonic_rep_forces_soa_excl!(st.rx, st.ry, st.f0x, st.f0y, st.Epot,
-                                                                       st.nbh, st.bonds, st.box2::Definitions.Box2, st.softrep)
-                    end
-                else
-                    if st.bonds === nothing
-                        NonBondedForces.harmonic_rep_forces_soa_noE!(st.rx, st.ry, st.f0x, st.f0y,
-                                                                      st.nbh, st.box2::Definitions.Box2, st.softrep)
-                    else
-                        NonBondedForces.harmonic_rep_forces_soa_noE_excl!(st.rx, st.ry, st.f0x, st.f0y,
-                                                                          st.nbh, st.bonds, st.box2::Definitions.Box2, st.softrep)
-                    end
-                end
-            end
-            # bonded contributions at t
-            _apply_bonds2!(st, st.f0x, st.f0y, compute_energy ? st.Epot : nothing, compute_energy)
-            if freeze_spring
-                _apply_freeze_spring!(st, st.rx, st.ry, st.f0x, st.f0y,
-                                      compute_energy ? st.Epot : nothing, compute_energy)
+        workspace.rf_z = nothing
+    end
+
+    if ou !== nothing
+        M, K = size(ou.coeff_a)
+        if workspace.ou_x === nothing || size(workspace.ou_x) != (M, K)
+            workspace.ou_x = CUDA.zeros(T, M, K)
+        end
+        if workspace.ou_y === nothing || size(workspace.ou_y) != (M, K)
+            workspace.ou_y = CUDA.zeros(T, M, K)
+        end
+        if _is_3d(st)
+            if workspace.ou_z === nothing || size(workspace.ou_z) != (M, K)
+                workspace.ou_z = CUDA.zeros(T, M, K)
             end
         else
-            if st.nb_kind == NB_KIND_LJ
-                if st.sigma_particle === nothing
-                    if compute_energy
-                        if st.bonds === nothing
-                            NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.Epot,
-                                                           st.nbh, st.box3::Definitions.Box3, st.pair_lj)
-                        else
-                            NonBondedForces.lj_forces_soa_excl!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.Epot,
-                                                                st.nbh, st.bonds, st.box3::Definitions.Box3, st.pair_lj)
-                        end
-                    else
-                        if st.bonds === nothing
-                            NonBondedForces.lj_forces_soa_noE!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
-                                                               st.nbh, st.box3::Definitions.Box3, st.pair_lj)
-                        else
-                            NonBondedForces.lj_forces_soa_noE_excl!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
-                                                                    st.nbh, st.bonds, st.box3::Definitions.Box3, st.pair_lj)
-                        end
-                    end
-                else
-                    if compute_energy
-                        NonBondedForces.lj_forces_soa_mixed!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.Epot,
-                                                              st.nbh, st.box3::Definitions.Box3,
-                                                              st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
-                    else
-                        NonBondedForces.lj_forces_soa_noE_mixed!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
-                                                                   st.nbh, st.box3::Definitions.Box3,
-                                                                   st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
-                    end
-                end
-            elseif st.nb_kind == NB_KIND_WCA
-                if st.sigma_pair !== nothing
-                    if compute_energy
-                        NonBondedForces.wca_forces_soa_pairs!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.Epot,
-                                                             st.nbh, st.box3::Definitions.Box3,
-                                                             st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
-                    else
-                        NonBondedForces.wca_forces_soa_noE_pairs!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
-                                                                 st.nbh, st.box3::Definitions.Box3,
-                                                                 st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
-                    end
-                elseif st.sigma_particle !== nothing
-                    if compute_energy
-                        NonBondedForces.wca_forces_soa_mixed!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.Epot,
-                                                             st.nbh, st.box3::Definitions.Box3,
-                                                             st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
-                    else
-                        NonBondedForces.wca_forces_soa_noE_mixed!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
-                                                                 st.nbh, st.box3::Definitions.Box3,
-                                                                 st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
-                    end
-                else
-                    if compute_energy
-                        if st.bonds === nothing
-                            NonBondedForces.wca_forces_soa!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.Epot,
-                                                            st.nbh, st.box3::Definitions.Box3, st.pair_lj)
-                        else
-                            NonBondedForces.wca_forces_soa_excl!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.Epot,
-                                                                 st.nbh, st.bonds, st.box3::Definitions.Box3, st.pair_lj)
-                        end
-                    else
-                        if st.bonds === nothing
-                            NonBondedForces.wca_forces_soa_noE!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
-                                                                st.nbh, st.box3::Definitions.Box3, st.pair_lj)
-                        else
-                            NonBondedForces.wca_forces_soa_noE_excl!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
-                                                                      st.nbh, st.bonds, st.box3::Definitions.Box3, st.pair_lj)
-                        end
-                    end
-                end
-            else
-                @assert st.softrep !== nothing "softrep params missing"
-                if compute_energy
-                    if st.bonds === nothing
-                        NonBondedForces.harmonic_rep_forces_soa!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.Epot,
-                                                                  st.nbh, st.box3::Definitions.Box3, st.softrep)
-                    else
-                        NonBondedForces.harmonic_rep_forces_soa_excl!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.Epot,
-                                                                       st.nbh, st.bonds, st.box3::Definitions.Box3, st.softrep)
-                    end
-                else
-                    if st.bonds === nothing
-                        NonBondedForces.harmonic_rep_forces_soa_noE!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
-                                                                      st.nbh, st.box3::Definitions.Box3, st.softrep)
-                    else
-                        NonBondedForces.harmonic_rep_forces_soa_noE_excl!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
-                                                                          st.nbh, st.bonds, st.box3::Definitions.Box3, st.softrep)
-                    end
-                end
-            end
-            # bonded contributions at t
-            _apply_bonds3!(st, st.f0x, st.f0y, st.f0z, compute_energy ? st.Epot : nothing, compute_energy)
-            if freeze_spring
-                _apply_freeze_spring!(st, st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
-                                      compute_energy ? st.Epot : nothing, compute_energy)
-            end
+            workspace.ou_z = nothing
         end
+    else
+        workspace.ou_x = nothing
+        workspace.ou_y = nothing
+        workspace.ou_z = nothing
     end
 
-    # Prepare noise ONCE for the step and reuse in both updates
-    _ensure_ou_state!(st)
-    if D == 2
-        LangevinIntegrators.vv_prepare_noise!(st.rf_x, st.rf_y, st.vv.noise_scale;
-                                              beta_z=nothing,
-                                              corr_time=st.vv.corr_time,
-                                              state_x=st.ou_x, state_y=st.ou_y, state_z=nothing,
-                                              dt=dtT)
-        LangevinIntegrators.vv_positions_soa!(st.rx, st.ry, st.vx, st.vy, st.f0x, st.f0y,
-                                              st.rf_x, st.rf_y, st.vv, dtT, st.box2::Definitions.Box2;
-                                              unwrapped_x=st.rx_unwrap, unwrapped_y=st.ry_unwrap)
-        if freeze_hold
-            _apply_freeze_hold_positions!(st)
-        end
-        _collisions_update_after_positions!(st)
-    else
-        LangevinIntegrators.vv_prepare_noise!(st.rf_x, st.rf_y, st.vv.noise_scale;
-                                              beta_z=st.rf_z,
-                                              corr_time=st.vv.corr_time,
-                                              state_x=st.ou_x, state_y=st.ou_y, state_z=st.ou_z,
-                                              dt=dtT)
-        LangevinIntegrators.vv_positions_soa!(st.rx, st.ry, st.rz, st.vx, st.vy, st.vz,
-                                              st.f0x, st.f0y, st.f0z,
-                                              st.rf_x, st.rf_y, st.rf_z, st.vv, dtT, st.box3::Definitions.Box3;
-                                              unwrapped_x=st.rx_unwrap, unwrapped_y=st.ry_unwrap, unwrapped_z=st.rz_unwrap)
-        if freeze_hold
-            _apply_freeze_hold_positions!(st)
-        end
-        _collisions_update_after_positions!(st)
-    end
+    return nothing
+end
 
-    # Forces at t + dt (write into fx,fy[,fz])
-    if D == 2
-        _compute_final_nonbonded2!(st, compute_energy)
-        _finalize_force_eval2!(st, compute_energy, freeze_spring)
-        LangevinIntegrators.vv_velocities_soa!(st.vx, st.vy, st.f0x, st.f0y, st.fx, st.fy,
-                                               st.rf_x, st.rf_y, st.dq, st.dU, st.Ekin, st.vv, dtT)
-    else
+"""
+    _swap_force_slots!(st)
+
+Swap the active force slot (`f`) and reference force slot (`f0`).
+"""
+function _swap_force_slots!(st::SimulationState)
+    st.f0x, st.fx = st.fx, st.f0x
+    st.f0y, st.fy = st.fy, st.f0y
+    if _is_3d(st)
+        st.f0z, st.fz = st.fz, st.f0z
+    end
+    return nothing
+end
+
+"""
+    _swap_midpoint_position_slots!(st)
+
+Swap physical coordinates (`r`) with midpoint scratch coordinates (`v`) used by
+Brownian midpoint-style integrators.
+"""
+function _swap_midpoint_position_slots!(st::SimulationState)
+    st.rx, st.vx = st.vx, st.rx
+    st.ry, st.vy = st.vy, st.ry
+    if _is_3d(st)
+        st.rz, st.vz = st.vz, st.rz
+    end
+    return nothing
+end
+
+"""
+    evaluate_forces_into_f!(st, compute_energy; freeze_spring=false)
+
+Evaluate nonbonded + bonded + optional freeze-spring contributions into the
+active force slot (`f`).
+"""
+function evaluate_forces_into_f!(st::SimulationState{T},
+                                 compute_energy::Bool;
+                                 freeze_spring::Bool=false) where {T<:AbstractFloat}
+    if _is_3d(st)
         _compute_final_nonbonded3!(st, compute_energy)
         _finalize_force_eval3!(st, compute_energy, freeze_spring)
-        LangevinIntegrators.vv_velocities_soa!(st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z,
-                                               st.fx, st.fy, st.fz,
-                                               st.rf_x, st.rf_y, st.rf_z,
-                                               st.dq, st.dU, st.Ekin, st.vv, dtT)
+    else
+        _compute_final_nonbonded2!(st, compute_energy)
+        _finalize_force_eval2!(st, compute_energy, freeze_spring)
     end
-
-    st.step += 1
     return nothing
 end
 
 """
-    step_graph!(st, dt; compute_energy=true)
+    evaluate_forces_into_f0!(st, compute_energy; freeze_spring=false)
 
-Execute a single integrator step using a CUDA Graph-captured sequence for the steady
-kernel chain (forces → noise → positions → forces → velocities). NL checks and rebuilds
-are executed outside the graph when needed. The executable graph is cached and reused
-across calls.
+Evaluate forces into the reference force slot (`f0`) without changing the
+external slot ownership.
 """
-function step_graph!(st::SimulationState{T}, dt::Real; compute_energy::Bool=true) where {T<:AbstractFloat}
-    freeze_active = _freeze_active!(st)
-    if freeze_active
-        return step!(st, dt; compute_energy)
-    end
-    freeze_spring = freeze_active && st.freeze_mode == FREEZE_SPRING
-    dtT = T(dt)
-    D = st.rz === nothing ? 2 : 3
-
-    # NL rebuild decision outside graph
-    do_check = (st.step % st.neigh_interval == 0)
-    if do_check
-        rebuild_needed = if D == 2
-            NeighborLists.update_needed!(st.nbh, st.rx, st.ry;
-                                        skin=st.nbh.skin,
-                                        Lx=st.box2[1], Ly=st.box2[2],
-                                        step=st.step)
-        else
-            NeighborLists.update_needed!(st.nbh, st.rx, st.ry, st.rz;
-                                        skin=st.nbh.skin,
-                                        Lx=st.box3[1], Ly=st.box3[2], Lz=st.box3[3],
-                                        step=st.step)
-        end
-        if rebuild_needed
-            if D == 2
-                NeighborLists.update_neighbors_inplace!(st.nbh, st.rx, st.ry; box = st.box2, step=st.step)
-                _collisions_reinit_on_rebuild!(st)
-            else
-                NeighborLists.update_neighbors_inplace!(st.nbh, st.rx, st.ry, st.rz; box = st.box3, step=st.step)
-                _collisions_reinit_on_rebuild!(st)
-            end
-        end
-    end
-
-    # Set f0 from previous fx via buffer swap if available; otherwise compute once before capture
-    if st.step > 1
-        st.f0x, st.fx = st.fx, st.f0x
-        st.f0y, st.fy = st.fy, st.f0y
-        if D == 3; st.f0z, st.fz = st.fz, st.f0z; end
-    else
-        if D == 2
-            if st.nb_kind == NB_KIND_LJ
-                if compute_energy
-                    NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.f0x, st.f0y, st.Epot,
-                                                   st.nbh, st.box2::Definitions.Box2, st.pair_lj)
-                else
-                    NonBondedForces.lj_forces_soa_noE!(st.rx, st.ry, st.f0x, st.f0y,
-                                                       st.nbh, st.box2::Definitions.Box2, st.pair_lj)
-                end
-            elseif st.nb_kind == NB_KIND_WCA
-                if st.sigma_pair !== nothing
-                    if compute_energy
-                        NonBondedForces.wca_forces_soa_pairs!(st.rx, st.ry, st.f0x, st.f0y, st.Epot,
-                                                             st.nbh, st.box2::Definitions.Box2,
-                                                             st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
-                    else
-                        NonBondedForces.wca_forces_soa_noE_pairs!(st.rx, st.ry, st.f0x, st.f0y,
-                                                                 st.nbh, st.box2::Definitions.Box2,
-                                                                 st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
-                    end
-                elseif st.sigma_particle !== nothing
-                    if compute_energy
-                        NonBondedForces.wca_forces_soa_mixed!(st.rx, st.ry, st.f0x, st.f0y, st.Epot,
-                                                             st.nbh, st.box2::Definitions.Box2,
-                                                             st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
-                    else
-                        NonBondedForces.wca_forces_soa_noE_mixed!(st.rx, st.ry, st.f0x, st.f0y,
-                                                                 st.nbh, st.box2::Definitions.Box2,
-                                                                 st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
-                    end
-                else
-                    if compute_energy
-                        NonBondedForces.wca_forces_soa!(st.rx, st.ry, st.f0x, st.f0y, st.Epot,
-                                                        st.nbh, st.box2::Definitions.Box2, st.pair_lj)
-                    else
-                        NonBondedForces.wca_forces_soa_noE!(st.rx, st.ry, st.f0x, st.f0y,
-                                                             st.nbh, st.box2::Definitions.Box2, st.pair_lj)
-                    end
-                end
-            else
-                @assert st.softrep !== nothing "softrep params missing"
-                if compute_energy
-                    NonBondedForces.harmonic_rep_forces_soa!(st.rx, st.ry, st.f0x, st.f0y, st.Epot,
-                                                              st.nbh, st.box2::Definitions.Box2, st.softrep)
-                else
-                    NonBondedForces.harmonic_rep_forces_soa_noE!(st.rx, st.ry, st.f0x, st.f0y,
-                                                                  st.nbh, st.box2::Definitions.Box2, st.softrep)
-                end
-            end
-        else
-            if st.nb_kind == NB_KIND_LJ
-                if compute_energy
-                    NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.Epot,
-                                                   st.nbh, st.box3::Definitions.Box3, st.pair_lj)
-                else
-                    NonBondedForces.lj_forces_soa_noE!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
-                                                       st.nbh, st.box3::Definitions.Box3, st.pair_lj)
-                end
-            elseif st.nb_kind == NB_KIND_WCA
-                if st.sigma_pair !== nothing
-                    if compute_energy
-                        NonBondedForces.wca_forces_soa_pairs!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.Epot,
-                                                             st.nbh, st.box3::Definitions.Box3,
-                                                             st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
-                    else
-                        NonBondedForces.wca_forces_soa_noE_pairs!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
-                                                                 st.nbh, st.box3::Definitions.Box3,
-                                                                 st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
-                    end
-                elseif st.sigma_particle !== nothing
-                    if compute_energy
-                        NonBondedForces.wca_forces_soa_mixed!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.Epot,
-                                                             st.nbh, st.box3::Definitions.Box3,
-                                                             st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
-                    else
-                        NonBondedForces.wca_forces_soa_noE_mixed!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
-                                                                 st.nbh, st.box3::Definitions.Box3,
-                                                                 st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
-                    end
-                else
-                    if compute_energy
-                        NonBondedForces.wca_forces_soa!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.Epot,
-                                                        st.nbh, st.box3::Definitions.Box3, st.pair_lj)
-                    else
-                        NonBondedForces.wca_forces_soa_noE!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
-                                                             st.nbh, st.box3::Definitions.Box3, st.pair_lj)
-                    end
-                end
-            else
-                @assert st.softrep !== nothing "softrep params missing"
-                if compute_energy
-                    NonBondedForces.harmonic_rep_forces_soa!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.Epot,
-                                                              st.nbh, st.box3::Definitions.Box3, st.softrep)
-                else
-                    NonBondedForces.harmonic_rep_forces_soa_noE!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
-                                                                  st.nbh, st.box3::Definitions.Box3, st.softrep)
-                end
-            end
-            if freeze_spring
-                _apply_freeze_spring!(st, st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
-                                      compute_energy ? st.Epot : nothing, compute_energy)
-            end
-        end
-    end
-
-    _ensure_ou_state!(st)
-    if D == 2
-        CUDA.@captured begin
-            LangevinIntegrators.vv_prepare_noise!(st.rf_x, st.rf_y, st.vv.noise_scale;
-                                                  beta_z=nothing,
-                                                  corr_time=st.vv.corr_time,
-                                                  state_x=st.ou_x, state_y=st.ou_y, state_z=nothing,
-                                                  dt=dtT)
-        LangevinIntegrators.vv_positions_soa!(st.rx, st.ry, st.vx, st.vy, st.f0x, st.f0y,
-                                              st.rf_x, st.rf_y, st.vv, dtT, st.box2::Definitions.Box2;
-                                              unwrapped_x=st.rx_unwrap, unwrapped_y=st.ry_unwrap)
-        _collisions_update_after_positions!(st)
-            _compute_final_nonbonded2!(st, compute_energy)
-            _finalize_force_eval2!(st, compute_energy, freeze_spring)
-            LangevinIntegrators.vv_velocities_soa!(st.vx, st.vy, st.f0x, st.f0y, st.fx, st.fy,
-                                                   st.rf_x, st.rf_y, st.dq, st.dU, st.Ekin, st.vv, dtT)
-        end
-    else
-        CUDA.@captured begin
-            LangevinIntegrators.vv_prepare_noise!(st.rf_x, st.rf_y, st.vv.noise_scale;
-                                                  beta_z=st.rf_z,
-                                                  corr_time=st.vv.corr_time,
-                                                  state_x=st.ou_x, state_y=st.ou_y, state_z=st.ou_z,
-                                                  dt=dtT)
-        LangevinIntegrators.vv_positions_soa!(st.rx, st.ry, st.rz, st.vx, st.vy, st.vz,
-                                              st.f0x, st.f0y, st.f0z,
-                                              st.rf_x, st.rf_y, st.rf_z, st.vv, dtT, st.box3::Definitions.Box3;
-                                              unwrapped_x=st.rx_unwrap, unwrapped_y=st.ry_unwrap, unwrapped_z=st.rz_unwrap)
-        _collisions_update_after_positions!(st)
-            _compute_final_nonbonded3!(st, compute_energy)
-            _finalize_force_eval3!(st, compute_energy, freeze_spring)
-            LangevinIntegrators.vv_velocities_soa!(st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z,
-                                                   st.fx, st.fy, st.fz,
-                                                   st.rf_x, st.rf_y, st.rf_z,
-                                                   st.dq, st.dU, st.Ekin, st.vv, dtT)
-        end
-    end
-
-    st.step += 1
-    return nothing
-end
-
-"""
-    step!(st, vv::LangevinIntegrators.VVParams{T}, dt; compute_energy=true)
-
-Run one Langevin (GJF/Velocity-Verlet style) step using the provided integrator
-parameters instead of `st.vv`. This allows passing different noise scales or
-parameters without rebuilding the simulation.
-"""
-function step!(st::SimulationState{T}, vv::LangevinIntegrators.VVParams{T}, dt::Real; compute_energy::Bool=true) where {T<:AbstractFloat}
-    dtT = T(dt)
-    old = st.vv
-    st.vv = vv
+function evaluate_forces_into_f0!(st::SimulationState{T},
+                                  compute_energy::Bool;
+                                  freeze_spring::Bool=false) where {T<:AbstractFloat}
+    _swap_force_slots!(st)
     try
-        return step!(st, dtT; compute_energy)
+        evaluate_forces_into_f!(st, compute_energy; freeze_spring=freeze_spring)
     finally
-        st.vv = old
+        _swap_force_slots!(st)
     end
-end
-
-# IntegratorSpec dispatch convenience
-function step!(st::SimulationState{T}, spec::VVSpec{T}, dt::Real; compute_energy::Bool=true) where {T<:AbstractFloat}
-    return step!(st, spec.params, dt; compute_energy)
-end
-
-function step!(st::SimulationState{T}, spec::BAOABSpec{T}, dt::Real; compute_energy::Bool=true) where {T<:AbstractFloat}
-    return step!(st, spec.params, dt; compute_energy)
-end
-
-function step!(st::SimulationState{T}, spec::BAOASpec{T}, dt::Real; compute_energy::Bool=true) where {T<:AbstractFloat}
-    # BAOA: B(1) → A(1/2) → O(1) → A(1/2)
-    dtT = T(dt)
-    freeze_active = _freeze_active!(st)
-    freeze_hold = freeze_active && st.freeze_mode == FREEZE_HOLD
-    freeze_spring = freeze_active && st.freeze_mode == FREEZE_SPRING
-    st.last_integrator = UInt8(1)
-    D = st.rz === nothing ? 2 : 3
-
-    # Neighbor rebuild check
-    do_check = (st.step % st.neigh_interval == 0)
-    if do_check
-        rebuild_needed = if D == 2
-            NeighborLists.update_needed!(st.nbh, st.rx, st.ry;
-                                        skin=st.nbh.skin,
-                                        Lx=st.box2[1], Ly=st.box2[2],
-                                        step=st.step)
-        else
-            NeighborLists.update_needed!(st.nbh, st.rx, st.ry, st.rz;
-                                        skin=st.nbh.skin,
-                                        Lx=st.box3[1], Ly=st.box3[2], Lz=st.box3[3],
-                                        step=st.step)
-        end
-        if rebuild_needed
-            if D == 2
-                NeighborLists.update_neighbors_inplace!(st.nbh, st.rx, st.ry; box = st.box2, step=st.step)
-                _collisions_reinit_on_rebuild!(st)
-            else
-                NeighborLists.update_neighbors_inplace!(st.nbh, st.rx, st.ry, st.rz; box = st.box3, step=st.step)
-                _collisions_reinit_on_rebuild!(st)
-            end
-        end
-    end
-
-    # Prepare forces at t in f0*
-    if st.step > 1
-        st.f0x, st.fx = st.fx, st.f0x
-        st.f0y, st.fy = st.fy, st.f0y
-        if D == 3; st.f0z, st.fz = st.fz, st.f0z; end
-    else
-        if D == 2
-            if st.nb_kind == NB_KIND_LJ
-                if st.sigma_particle === nothing
-                    if compute_energy
-                        if st.bonds === nothing
-                            NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.f0x, st.f0y, st.Epot,
-                                                           st.nbh, st.box2::Definitions.Box2, st.pair_lj)
-                        else
-                            NonBondedForces.lj_forces_soa_excl!(st.rx, st.ry, st.f0x, st.f0y, st.Epot,
-                                                                st.nbh, st.bonds, st.box2::Definitions.Box2, st.pair_lj)
-                        end
-                    else
-                        if st.bonds === nothing
-                            NonBondedForces.lj_forces_soa_noE!(st.rx, st.ry, st.f0x, st.f0y,
-                                                               st.nbh, st.box2::Definitions.Box2, st.pair_lj)
-                        else
-                            NonBondedForces.lj_forces_soa_noE_excl!(st.rx, st.ry, st.f0x, st.f0y,
-                                                                    st.nbh, st.bonds, st.box2::Definitions.Box2, st.pair_lj)
-                        end
-                    end
-                else
-                    if compute_energy
-                        NonBondedForces.lj_forces_soa_mixed!(st.rx, st.ry, st.f0x, st.f0y, st.Epot,
-                                                              st.nbh, st.box2::Definitions.Box2,
-                                                              st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
-                    else
-                        NonBondedForces.lj_forces_soa_noE_mixed!(st.rx, st.ry, st.f0x, st.f0y,
-                                                                   st.nbh, st.box2::Definitions.Box2,
-                                                                   st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
-                    end
-                end
-            elseif st.nb_kind == NB_KIND_WCA
-                if st.sigma_pair !== nothing
-                    if compute_energy
-                        NonBondedForces.wca_forces_soa_pairs!(st.rx, st.ry, st.f0x, st.f0y, st.Epot,
-                                                             st.nbh, st.box2::Definitions.Box2,
-                                                             st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
-                    else
-                        NonBondedForces.wca_forces_soa_noE_pairs!(st.rx, st.ry, st.f0x, st.f0y,
-                                                                 st.nbh, st.box2::Definitions.Box2,
-                                                                 st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
-                    end
-                elseif st.sigma_particle !== nothing
-                    if compute_energy
-                        NonBondedForces.wca_forces_soa_mixed!(st.rx, st.ry, st.f0x, st.f0y, st.Epot,
-                                                             st.nbh, st.box2::Definitions.Box2,
-                                                             st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
-                    else
-                        NonBondedForces.wca_forces_soa_noE_mixed!(st.rx, st.ry, st.f0x, st.f0y,
-                                                                 st.nbh, st.box2::Definitions.Box2,
-                                                                 st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
-                    end
-                else
-                    if compute_energy
-                        if st.bonds === nothing
-                            NonBondedForces.wca_forces_soa!(st.rx, st.ry, st.f0x, st.f0y, st.Epot,
-                                                            st.nbh, st.box2::Definitions.Box2, st.pair_lj)
-                        else
-                            NonBondedForces.wca_forces_soa_excl!(st.rx, st.ry, st.f0x, st.f0y, st.Epot,
-                                                                 st.nbh, st.bonds, st.box2::Definitions.Box2, st.pair_lj)
-                        end
-                    else
-                        if st.bonds === nothing
-                            NonBondedForces.wca_forces_soa_noE!(st.rx, st.ry, st.f0x, st.f0y,
-                                                                st.nbh, st.box2::Definitions.Box2, st.pair_lj)
-                        else
-                            NonBondedForces.wca_forces_soa_noE_excl!(st.rx, st.ry, st.f0x, st.f0y,
-                                                                      st.nbh, st.bonds, st.box2::Definitions.Box2, st.pair_lj)
-                        end
-                    end
-                end
-            else # NB_KIND_SOFTREP
-                @assert st.softrep !== nothing "softrep params missing"
-                if compute_energy
-                    if st.bonds === nothing
-                        NonBondedForces.harmonic_rep_forces_soa!(st.rx, st.ry, st.f0x, st.f0y, st.Epot,
-                                                                  st.nbh, st.box2::Definitions.Box2, st.softrep)
-                    else
-                        NonBondedForces.harmonic_rep_forces_soa_excl!(st.rx, st.ry, st.f0x, st.f0y, st.Epot,
-                                                                       st.nbh, st.bonds, st.box2::Definitions.Box2, st.softrep)
-                    end
-                else
-                    if st.bonds === nothing
-                        NonBondedForces.harmonic_rep_forces_soa_noE!(st.rx, st.ry, st.f0x, st.f0y,
-                                                                      st.nbh, st.box2::Definitions.Box2, st.softrep)
-                    else
-                        NonBondedForces.harmonic_rep_forces_soa_noE_excl!(st.rx, st.ry, st.f0x, st.f0y,
-                                                                          st.nbh, st.bonds, st.box2::Definitions.Box2, st.softrep)
-                    end
-                end
-            end
-            # bonded contributions at t
-            _apply_bonds2!(st, st.f0x, st.f0y, compute_energy ? st.Epot : nothing, compute_energy)
-            if freeze_spring
-                _apply_freeze_spring!(st, st.rx, st.ry, st.f0x, st.f0y,
-                                      compute_energy ? st.Epot : nothing, compute_energy)
-            end
-        else
-            if st.nb_kind == NB_KIND_LJ
-                if st.sigma_particle === nothing
-                    if compute_energy
-                        if st.bonds === nothing
-                            NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.Epot,
-                                                           st.nbh, st.box3::Definitions.Box3, st.pair_lj)
-                        else
-                            NonBondedForces.lj_forces_soa_excl!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.Epot,
-                                                                st.nbh, st.bonds, st.box3::Definitions.Box3, st.pair_lj)
-                        end
-                    else
-                        if st.bonds === nothing
-                            NonBondedForces.lj_forces_soa_noE!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
-                                                               st.nbh, st.box3::Definitions.Box3, st.pair_lj)
-                        else
-                            NonBondedForces.lj_forces_soa_noE_excl!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
-                                                                    st.nbh, st.bonds, st.box3::Definitions.Box3, st.pair_lj)
-                        end
-                    end
-                else
-                    if compute_energy
-                        NonBondedForces.lj_forces_soa_mixed!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.Epot,
-                                                              st.nbh, st.box3::Definitions.Box3,
-                                                              st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
-                    else
-                        NonBondedForces.lj_forces_soa_noE_mixed!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
-                                                                   st.nbh, st.box3::Definitions.Box3,
-                                                                   st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
-                    end
-                end
-            elseif st.nb_kind == NB_KIND_WCA
-                if st.sigma_pair !== nothing
-                    if compute_energy
-                        NonBondedForces.wca_forces_soa_pairs!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.Epot,
-                                                             st.nbh, st.box3::Definitions.Box3,
-                                                             st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
-                    else
-                        NonBondedForces.wca_forces_soa_noE_pairs!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
-                                                                 st.nbh, st.box3::Definitions.Box3,
-                                                                 st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
-                    end
-                elseif st.sigma_particle !== nothing
-                    if compute_energy
-                        NonBondedForces.wca_forces_soa_mixed!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.Epot,
-                                                             st.nbh, st.box3::Definitions.Box3,
-                                                             st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
-                    else
-                        NonBondedForces.wca_forces_soa_noE_mixed!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
-                                                                 st.nbh, st.box3::Definitions.Box3,
-                                                                 st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
-                    end
-                else
-                    if compute_energy
-                        if st.bonds === nothing
-                            NonBondedForces.wca_forces_soa!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.Epot,
-                                                            st.nbh, st.box3::Definitions.Box3, st.pair_lj)
-                        else
-                            NonBondedForces.wca_forces_soa_excl!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.Epot,
-                                                                 st.nbh, st.bonds, st.box3::Definitions.Box3, st.pair_lj)
-                        end
-                    else
-                        if st.bonds === nothing
-                            NonBondedForces.wca_forces_soa_noE!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
-                                                                st.nbh, st.box3::Definitions.Box3, st.pair_lj)
-                        else
-                            NonBondedForces.wca_forces_soa_noE_excl!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
-                                                                      st.nbh, st.bonds, st.box3::Definitions.Box3, st.pair_lj)
-                        end
-                    end
-                end
-            else
-                @assert st.softrep !== nothing "softrep params missing"
-                if compute_energy
-                    if st.bonds === nothing
-                        NonBondedForces.harmonic_rep_forces_soa!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.Epot,
-                                                                  st.nbh, st.box3::Definitions.Box3, st.softrep)
-                    else
-                        NonBondedForces.harmonic_rep_forces_soa_excl!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.Epot,
-                                                                       st.nbh, st.bonds, st.box3::Definitions.Box3, st.softrep)
-                    end
-                else
-                    if st.bonds === nothing
-                        NonBondedForces.harmonic_rep_forces_soa_noE!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
-                                                                      st.nbh, st.box3::Definitions.Box3, st.softrep)
-                    else
-                        NonBondedForces.harmonic_rep_forces_soa_noE_excl!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
-                                                                          st.nbh, st.bonds, st.box3::Definitions.Box3, st.softrep)
-                    end
-                end
-            end
-            _apply_bonds3!(st, st.f0x, st.f0y, st.f0z, compute_energy ? st.Epot : nothing, compute_energy)
-            if freeze_spring
-                _apply_freeze_spring!(st, st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
-                                      compute_energy ? st.Epot : nothing, compute_energy)
-            end
-        end
-    end
-
-    _ensure_ou_state!(st, spec.params.corr_time)
-    if D == 2
-        # B(1): full kick using f(t)
-        LangevinIntegrators.baoab_B_2d!(st.vx, st.vy, st.f0x, st.f0y, spec.params, T(2)*dtT, st.Ekin, st.dU)
-        # A(1/2)
-        LangevinIntegrators.baoab_A_2d!(st.rx, st.ry, st.vx, st.vy, dtT, st.box2::Definitions.Box2;
-                                        unwrapped_x=st.rx_unwrap, unwrapped_y=st.ry_unwrap)
-        if freeze_hold
-            _apply_freeze_hold_positions!(st)
-        end
-        _collisions_update_after_positions!(st)
-        # O(1): OU using pre-generated noise (reuse VV noise draw)
-        LangevinIntegrators.vv_prepare_noise!(st.rf_x, st.rf_y, spec.params.noise_scale;
-                                              corr_time=spec.params.corr_time,
-                                              state_x=st.ou_x, state_y=st.ou_y, state_z=nothing,
-                                              dt=dtT)
-        LangevinIntegrators.baoab_OU_2d!(st.vx, st.vy, st.rf_x, st.rf_y, spec.params, dtT, st.dq)
-        # A(1/2)
-        LangevinIntegrators.baoab_A_2d!(st.rx, st.ry, st.vx, st.vy, dtT, st.box2::Definitions.Box2;
-                                        unwrapped_x=st.rx_unwrap, unwrapped_y=st.ry_unwrap)
-        if freeze_hold
-            _apply_freeze_hold_positions!(st)
-        end
-        _collisions_update_after_positions!(st)
-
-        _compute_final_nonbonded2!(st, compute_energy)
-        _finalize_force_eval2!(st, compute_energy, freeze_spring)
-
-        # Conservative power like VV at end of step (BAOA has no final B)
-        LangevinIntegrators.cons_power_2d!(st.vx, st.vy, st.fx, st.fy, st.dU)
-
-        # Update Ekin at end (no extra B)
-        LangevinIntegrators.baoab_B_2d!(st.vx, st.vy, st.fx, st.fy, spec.params, T(0), st.Ekin, st.dU)
-    else
-        # 3D variant
-        LangevinIntegrators.baoab_B_3d!(st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z, spec.params, T(2)*dtT, st.Ekin, st.dU)
-        LangevinIntegrators.baoab_A_3d!(st.rx, st.ry, st.rz, st.vx, st.vy, st.vz, dtT, st.box3::Definitions.Box3;
-                                        unwrapped_x=st.rx_unwrap, unwrapped_y=st.ry_unwrap, unwrapped_z=st.rz_unwrap)
-        if freeze_hold
-            _apply_freeze_hold_positions!(st)
-        end
-        _collisions_update_after_positions!(st)
-        LangevinIntegrators.vv_prepare_noise!(st.rf_x, st.rf_y, spec.params.noise_scale;
-                                              beta_z=st.rf_z,
-                                              corr_time=spec.params.corr_time,
-                                              state_x=st.ou_x, state_y=st.ou_y, state_z=st.ou_z,
-                                              dt=dtT)
-        LangevinIntegrators.baoab_OU_3d!(st.vx, st.vy, st.vz, st.rf_x, st.rf_y, st.rf_z, spec.params, dtT, st.dq)
-        LangevinIntegrators.baoab_A_3d!(st.rx, st.ry, st.rz, st.vx, st.vy, st.vz, dtT, st.box3::Definitions.Box3;
-                                        unwrapped_x=st.rx_unwrap, unwrapped_y=st.ry_unwrap, unwrapped_z=st.rz_unwrap)
-        if freeze_hold
-            _apply_freeze_hold_positions!(st)
-        end
-        _collisions_update_after_positions!(st)
-
-        _compute_final_nonbonded3!(st, compute_energy)
-        _finalize_force_eval3!(st, compute_energy, freeze_spring)
-
-        # Conservative power like VV at end of step (BAOA has no final B)
-        LangevinIntegrators.cons_power_3d!(st.vx, st.vy, st.vz, st.fx, st.fy, st.fz, st.dU)
-        
-        LangevinIntegrators.baoab_B_3d!(st.vx, st.vy, st.vz, st.fx, st.fy, st.fz, spec.params, T(0), st.Ekin, st.dU)
-    end
-
-    st.step += 1
     return nothing
 end
 
-function step!(st::SimulationState{T}, spec::GSMSpec{T}, dt::Real; compute_energy::Bool=true) where {T<:AbstractFloat}
-    # GSM uses VV-middle (identical sequence to BAOAB in this implementation)
-    return step!(st, spec.params, dt; compute_energy)
-end
+"""
+    evaluate_midpoint_forces_into_f0!(st; freeze_spring=false)
 
-function step!(st::SimulationState{T}, spec::BrownianSpec{T}, dt::Real; compute_energy::Bool=true) where {T<:AbstractFloat}
-    return step!(st, spec.params, dt; compute_energy)
+Evaluate forces at midpoint coordinates (stored in `vx,vy[,vz]`) into the
+reference force slot (`f0`). This helper is used by Brownian midpoint / EM.
+"""
+function evaluate_midpoint_forces_into_f0!(st::SimulationState{T};
+                                           freeze_spring::Bool=false) where {T<:AbstractFloat}
+    _swap_midpoint_position_slots!(st)
+    _swap_force_slots!(st)
+    try
+        evaluate_forces_into_f!(st, false; freeze_spring=freeze_spring)
+    finally
+        _swap_force_slots!(st)
+        _swap_midpoint_position_slots!(st)
+    end
+    return nothing
 end
-
-function step!(st::SimulationState{T}, spec::EMSpec{T}, dt::Real; compute_energy::Bool=true) where {T<:AbstractFloat}
-    return step!(st, spec.params, dt; compute_energy)
-end
-
 
 """
-    step!(st, bao::LangevinIntegrators.BAOABParams{T}, dt; compute_energy=true)
+    plan_neighbor_rebuild!(st, dt) -> Bool
 
-BAOAB Langevin integrator: B(1/2) → A(1/2) → O(Δt) → A(1/2) → B(1/2).
-Uses forces at t for the first half-kick, then forces at t+dt for the final half-kick.
+Determine whether neighbor lists should be rebuilt on this step.
 """
-function step!(st::SimulationState{T}, bao::LangevinIntegrators.BAOABParams{T}, dt::Real; compute_energy::Bool=true) where {T<:AbstractFloat}
-    dtT = T(dt)
-    _require_positive_gamma!(bao.gamma, "BAOAB")
-    freeze_active = _freeze_active!(st)
-    freeze_hold = freeze_active && st.freeze_mode == FREEZE_HOLD
-    freeze_spring = freeze_active && st.freeze_mode == FREEZE_SPRING
-    st.last_integrator = UInt8(1)
-    D = st.rz === nothing ? 2 : 3
-
-    # Neighbor rebuild check
+function plan_neighbor_rebuild!(st::SimulationState{T}, dt::T) where {T<:AbstractFloat}
     do_check = (st.step % st.neigh_interval == 0)
-    if do_check
-        rebuild_needed = if D == 2
-            NeighborLists.update_needed!(st.nbh, st.rx, st.ry;
+    do_check || return false
+    if _is_3d(st)
+        return NeighborLists.update_needed!(st.nbh, st.rx, st.ry, st.rz;
+                                            skin=st.nbh.skin,
+                                            Lx=st.box3[1], Ly=st.box3[2], Lz=st.box3[3],
+                                            step=st.step)
+    end
+    return NeighborLists.update_needed!(st.nbh, st.rx, st.ry;
                                         skin=st.nbh.skin,
                                         Lx=st.box2[1], Ly=st.box2[2],
                                         step=st.step)
-        else
-            NeighborLists.update_needed!(st.nbh, st.rx, st.ry, st.rz;
-                                        skin=st.nbh.skin,
-                                        Lx=st.box3[1], Ly=st.box3[2], Lz=st.box3[3],
-                                        step=st.step)
-        end
-        if rebuild_needed
-            if D == 2
-                NeighborLists.update_neighbors_inplace!(st.nbh, st.rx, st.ry; box = st.box2, step=st.step)
-            else
-                NeighborLists.update_neighbors_inplace!(st.nbh, st.rx, st.ry, st.rz; box = st.box3, step=st.step)
-            end
-        end
-    end
+end
 
-    # Prepare forces at t in f0*
+"""
+    apply_neighbor_rebuild_if_needed!(st, rebuild_needed)
+
+Apply neighbor-list rebuild and integrator-independent post-rebuild hooks.
+"""
+function apply_neighbor_rebuild_if_needed!(st::SimulationState,
+                                           rebuild_needed::Bool)
+    rebuild_needed || return nothing
+    if _is_3d(st)
+        NeighborLists.update_neighbors_inplace!(st.nbh, st.rx, st.ry, st.rz; box=st.box3, step=st.step)
+    else
+        NeighborLists.update_neighbors_inplace!(st.nbh, st.rx, st.ry; box=st.box2, step=st.step)
+    end
+    _collisions_reinit_on_rebuild!(st)
+    return nothing
+end
+
+"""
+    prepare_previous_force_buffers!(st, spec)
+
+Prepare any force-buffer reuse needed before stage execution.
+"""
+function prepare_previous_force_buffers!(st::SimulationState,
+                                         spec::IntegratorSpec)
+    return nothing
+end
+
+function prepare_previous_force_buffers!(st::SimulationState,
+                                         spec::Union{VVSpec,BAOABSpec,BAOASpec,GSMSpec,NHCSpec,CSVRSpec})
     if st.step > 1
-        st.f0x, st.fx = st.fx, st.f0x
-        st.f0y, st.fy = st.fy, st.f0y
-        if D == 3; st.f0z, st.fz = st.fz, st.f0z; end
-    else
-        if D == 2
-            if st.nb_kind == NB_KIND_LJ
-                if st.sigma_particle === nothing
-                    if compute_energy
-                        if st.bonds === nothing
-                            NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.f0x, st.f0y, st.Epot,
-                                                           st.nbh, st.box2::Definitions.Box2, st.pair_lj)
-                        else
-                            NonBondedForces.lj_forces_soa_excl!(st.rx, st.ry, st.f0x, st.f0y, st.Epot,
-                                                                st.nbh, st.bonds, st.box2::Definitions.Box2, st.pair_lj)
-                        end
-                    else
-                        if st.bonds === nothing
-                            NonBondedForces.lj_forces_soa_noE!(st.rx, st.ry, st.f0x, st.f0y,
-                                                               st.nbh, st.box2::Definitions.Box2, st.pair_lj)
-                        else
-                            NonBondedForces.lj_forces_soa_noE_excl!(st.rx, st.ry, st.f0x, st.f0y,
-                                                                    st.nbh, st.bonds, st.box2::Definitions.Box2, st.pair_lj)
-                        end
-                    end
-                else
-                    if compute_energy
-                        NonBondedForces.lj_forces_soa_mixed!(st.rx, st.ry, st.f0x, st.f0y, st.Epot,
-                                                              st.nbh, st.box2::Definitions.Box2,
-                                                              st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
-                    else
-                        NonBondedForces.lj_forces_soa_noE_mixed!(st.rx, st.ry, st.f0x, st.f0y,
-                                                                   st.nbh, st.box2::Definitions.Box2,
-                                                                   st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
-                    end
-                end
-            elseif st.nb_kind == NB_KIND_WCA
-                if st.sigma_pair !== nothing
-                    if compute_energy
-                        NonBondedForces.wca_forces_soa_pairs!(st.rx, st.ry, st.f0x, st.f0y, st.Epot,
-                                                             st.nbh, st.box2::Definitions.Box2,
-                                                             st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
-                    else
-                        NonBondedForces.wca_forces_soa_noE_pairs!(st.rx, st.ry, st.f0x, st.f0y,
-                                                                 st.nbh, st.box2::Definitions.Box2,
-                                                                 st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
-                    end
-                elseif st.sigma_particle !== nothing
-                    if compute_energy
-                        NonBondedForces.wca_forces_soa_mixed!(st.rx, st.ry, st.f0x, st.f0y, st.Epot,
-                                                             st.nbh, st.box2::Definitions.Box2,
-                                                             st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
-                    else
-                        NonBondedForces.wca_forces_soa_noE_mixed!(st.rx, st.ry, st.f0x, st.f0y,
-                                                                 st.nbh, st.box2::Definitions.Box2,
-                                                                 st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
-                    end
-                else
-                    if compute_energy
-                        if st.bonds === nothing
-                            NonBondedForces.wca_forces_soa!(st.rx, st.ry, st.f0x, st.f0y, st.Epot,
-                                                            st.nbh, st.box2::Definitions.Box2, st.pair_lj)
-                        else
-                            NonBondedForces.wca_forces_soa_excl!(st.rx, st.ry, st.f0x, st.f0y, st.Epot,
-                                                                 st.nbh, st.bonds, st.box2::Definitions.Box2, st.pair_lj)
-                        end
-                    else
-                        if st.bonds === nothing
-                            NonBondedForces.wca_forces_soa_noE!(st.rx, st.ry, st.f0x, st.f0y,
-                                                                st.nbh, st.box2::Definitions.Box2, st.pair_lj)
-                        else
-                            NonBondedForces.wca_forces_soa_noE_excl!(st.rx, st.ry, st.f0x, st.f0y,
-                                                                      st.nbh, st.bonds, st.box2::Definitions.Box2, st.pair_lj)
-                        end
-                    end
-                end
-            else
-                @assert st.softrep !== nothing "softrep params missing"
-                if compute_energy
-                    NonBondedForces.harmonic_rep_forces_soa!(st.rx, st.ry, st.f0x, st.f0y, st.Epot,
-                                                              st.nbh, st.box2::Definitions.Box2, st.softrep)
-                else
-                    NonBondedForces.harmonic_rep_forces_soa_noE!(st.rx, st.ry, st.f0x, st.f0y,
-                                                                  st.nbh, st.box2::Definitions.Box2, st.softrep)
-                end
-            end
-            if st.bonds !== nothing
-                _apply_bonds2!(st, st.f0x, st.f0y, compute_energy ? st.Epot : nothing, compute_energy)
-            end
-            if freeze_spring
-                _apply_freeze_spring!(st, st.rx, st.ry, st.f0x, st.f0y,
-                                      compute_energy ? st.Epot : nothing, compute_energy)
-            end
-        else
-            if st.nb_kind == NB_KIND_LJ
-                if st.sigma_particle === nothing
-                    if compute_energy
-                        NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.Epot,
-                                                       st.nbh, st.box3::Definitions.Box3, st.pair_lj)
-                    else
-                        NonBondedForces.lj_forces_soa_noE!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
-                                                           st.nbh, st.box3::Definitions.Box3, st.pair_lj)
-                    end
-                else
-                    if compute_energy
-                        NonBondedForces.lj_forces_soa_mixed!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.Epot,
-                                                              st.nbh, st.box3::Definitions.Box3,
-                                                              st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
-                    else
-                        NonBondedForces.lj_forces_soa_noE_mixed!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
-                                                                   st.nbh, st.box3::Definitions.Box3,
-                                                                   st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
-                    end
-                end
-            elseif st.nb_kind == NB_KIND_WCA
-                if st.sigma_pair !== nothing
-                    if compute_energy
-                        NonBondedForces.wca_forces_soa_pairs!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.Epot,
-                                                             st.nbh, st.box3::Definitions.Box3,
-                                                             st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
-                    else
-                        NonBondedForces.wca_forces_soa_noE_pairs!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
-                                                                 st.nbh, st.box3::Definitions.Box3,
-                                                                 st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
-                    end
-                elseif st.sigma_particle !== nothing
-                    if compute_energy
-                        NonBondedForces.wca_forces_soa_mixed!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.Epot,
-                                                             st.nbh, st.box3::Definitions.Box3,
-                                                             st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
-                    else
-                        NonBondedForces.wca_forces_soa_noE_mixed!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
-                                                                 st.nbh, st.box3::Definitions.Box3,
-                                                                 st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
-                    end
-                else
-                    if compute_energy
-                        NonBondedForces.wca_forces_soa!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.Epot,
-                                                        st.nbh, st.box3::Definitions.Box3, st.pair_lj)
-                    else
-                        NonBondedForces.wca_forces_soa_noE!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
-                                                             st.nbh, st.box3::Definitions.Box3, st.pair_lj)
-                    end
-                end
-            else
-                @assert st.softrep !== nothing "softrep params missing"
-                if compute_energy
-                    NonBondedForces.harmonic_rep_forces_soa!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z, st.Epot,
-                                                              st.nbh, st.box3::Definitions.Box3, st.softrep)
-                else
-                    NonBondedForces.harmonic_rep_forces_soa_noE!(st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
-                                                                  st.nbh, st.box3::Definitions.Box3, st.softrep)
-                end
-            end
-        end
+        _swap_force_slots!(st)
     end
+    return nothing
+end
 
-    # BAOAB sequence
-    _ensure_ou_state!(st, bao.corr_time)
-    if D == 2
-        LangevinIntegrators.baoab_BA_2d!(st.rx, st.ry, st.vx, st.vy, st.f0x, st.f0y, bao, dtT, st.box2::Definitions.Box2;
-                                         unwrapped_x=st.rx_unwrap, unwrapped_y=st.ry_unwrap)
-        if freeze_hold
-            _apply_freeze_hold_positions!(st)
-        end
-        # Prepare OU noise using the same generator as VV (β = s * N(0,1))
-        LangevinIntegrators.vv_prepare_noise!(st.rf_x, st.rf_y, bao.noise_scale;
-                                              corr_time=bao.corr_time,
-                                              state_x=st.ou_x, state_y=st.ou_y, state_z=nothing,
-                                              dt=dtT)
-        LangevinIntegrators.baoab_OU_2d!(st.vx, st.vy, st.rf_x, st.rf_y, bao, dtT, st.dq)
-        LangevinIntegrators.baoab_A_2d!(st.rx, st.ry, st.vx, st.vy, dtT, st.box2::Definitions.Box2;
-                                        unwrapped_x=st.rx_unwrap, unwrapped_y=st.ry_unwrap)
-        if freeze_hold
-            _apply_freeze_hold_positions!(st)
-        end
+"""
+    ensure_reference_forces_ready!(st, spec, compute_energy, freeze_spring)
 
-        _compute_final_nonbonded2!(st, compute_energy)
-        _finalize_force_eval2!(st, compute_energy, freeze_spring)
-        LangevinIntegrators.baoab_B_2d!(st.vx, st.vy, st.fx, st.fy, bao, dtT, st.Ekin, st.dU)
-    else
-        LangevinIntegrators.baoab_BA_3d!(st.rx, st.ry, st.rz, st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z, bao, dtT, st.box3::Definitions.Box3;
-                                         unwrapped_x=st.rx_unwrap, unwrapped_y=st.ry_unwrap, unwrapped_z=st.rz_unwrap)
-        if freeze_hold
-            _apply_freeze_hold_positions!(st)
-        end
-        LangevinIntegrators.vv_prepare_noise!(st.rf_x, st.rf_y, bao.noise_scale;
-                                              beta_z=st.rf_z,
-                                              corr_time=bao.corr_time,
-                                              state_x=st.ou_x, state_y=st.ou_y, state_z=st.ou_z,
-                                              dt=dtT)
-        LangevinIntegrators.baoab_OU_3d!(st.vx, st.vy, st.vz, st.rf_x, st.rf_y, st.rf_z, bao, dtT, st.dq)
-        LangevinIntegrators.baoab_A_3d!(st.rx, st.ry, st.rz, st.vx, st.vy, st.vz, dtT, st.box3::Definitions.Box3;
-                                        unwrapped_x=st.rx_unwrap, unwrapped_y=st.ry_unwrap, unwrapped_z=st.rz_unwrap)
-        if freeze_hold
-            _apply_freeze_hold_positions!(st)
-        end
+Ensure the required reference force buffers for the selected integrator are
+initialized before stage execution.
+"""
+function ensure_reference_forces_ready!(st::SimulationState,
+                                        spec::IntegratorSpec,
+                                        compute_energy::Bool,
+                                        freeze_spring::Bool)
+    return nothing
+end
 
-        _compute_final_nonbonded3!(st, compute_energy)
-        _finalize_force_eval3!(st, compute_energy, freeze_spring)
-        LangevinIntegrators.baoab_B_3d!(st.vx, st.vy, st.vz, st.fx, st.fy, st.fz, bao, dtT, st.Ekin, st.dU)
+function ensure_reference_forces_ready!(st::SimulationState,
+                                        spec::Union{VVSpec,BAOABSpec,BAOASpec,GSMSpec,NHCSpec,CSVRSpec},
+                                        compute_energy::Bool,
+                                        freeze_spring::Bool)
+    if st.step <= 1
+        evaluate_forces_into_f0!(st, compute_energy; freeze_spring=freeze_spring)
     end
+    return nothing
+end
 
+function ensure_reference_forces_ready!(st::SimulationState,
+                                        spec::Union{BrownianSpec,EMSpec},
+                                        compute_energy::Bool,
+                                        freeze_spring::Bool)
+    if st.step == 0
+        evaluate_forces_into_f!(st, compute_energy; freeze_spring=freeze_spring)
+    end
+    return nothing
+end
+
+"""
+    apply_post_position_hooks!(st, stage_tag; freeze_hold=false)
+
+Apply integrator-independent post-position hooks after a position-changing
+stage.
+"""
+function apply_post_position_hooks!(st::SimulationState,
+                                    stage_tag::Symbol;
+                                    freeze_hold::Bool=false)
+    if freeze_hold
+        _apply_freeze_hold_positions!(st)
+    end
+    _collisions_update_after_positions!(st)
+    return nothing
+end
+
+"""
+    finalize_step_accounting!(st, spec, compute_energy)
+
+Perform integrator-independent end-of-step bookkeeping.
+"""
+function finalize_step_accounting!(st::SimulationState,
+                                   spec::IntegratorSpec,
+                                   compute_energy::Bool)
+    return nothing
+end
+
+function finalize_step_accounting!(st::SimulationState{T},
+                                   spec::Union{NHCSpec{T},CSVRSpec{T}},
+                                   compute_energy::Bool) where {T<:AbstractFloat}
+    # Deterministic thermostatted MD paths do not define per-particle
+    # stochastic heat/work channels.
+    fill!(st.dq, zero(T))
+    fill!(st.dU, zero(T))
+    return nothing
+end
+
+"""
+    finalize_step_counter!(st, integrator_id)
+
+Finalize step counters shared across integrators.
+"""
+function finalize_step_counter!(st::SimulationState,
+                                id::UInt8)
+    st.last_integrator = id
     st.step += 1
     return nothing
 end
 
 """
-    step!(st, bao::LangevinIntegrators.BAOABParams{T}, dt; compute_energy=true)
+    _prepare_langevin_noise!(spec, st, dt)
+
+Draw Langevin stochastic impulses into the spec workspace.
 """
-
+function _prepare_langevin_noise!(params::Union{LangevinIntegrators.VVParams{T},LangevinIntegrators.BAOABParams{T}},
+                                  workspace::StochasticWorkspace{T},
+                                  st::SimulationState{T},
+                                  dt::T) where {T<:AbstractFloat}
+    params.ou !== nothing && _refresh_ou_coefficients!(params.ou, dt)
+    if _is_3d(st)
+        LangevinIntegrators.vv_prepare_noise!(workspace.rf_x, workspace.rf_y, params.noise_scale;
+                                              beta_z=workspace.rf_z,
+                                              ou=params.ou,
+                                              state_x=workspace.ou_x,
+                                              state_y=workspace.ou_y,
+                                              state_z=workspace.ou_z)
+    else
+        LangevinIntegrators.vv_prepare_noise!(workspace.rf_x, workspace.rf_y, params.noise_scale;
+                                              beta_z=nothing,
+                                              ou=params.ou,
+                                              state_x=workspace.ou_x,
+                                              state_y=workspace.ou_y,
+                                              state_z=nothing)
+    end
+    return nothing
+end
 
 """
-    step!(st, bp::BrownianIntegrators.BrownianParams{T}, dt; compute_energy=true)
+    _prepare_brownian_noise!(params, workspace, st, dt)
 
-Brownian dynamics (overdamped) Euler–Maruyama midpoint step with Sekimoto heat.
-This uses positions-only dynamics (no kinetic energy). Velocities buffers in the
-state are reused as temporary storage for midpoint positions.
+Draw Brownian noise into the spec workspace.
 """
-function step!(st::SimulationState{T}, bp::BrownianIntegrators.BrownianParams{T}, dt::Real; compute_energy::Bool=true
-    ) where {T<:AbstractFloat}
-    dtT = T(dt)
-    _require_positive_gamma!(bp.gamma, "Brownian midpoint")
-    freeze_active = _freeze_active!(st)
-    freeze_hold = freeze_active && st.freeze_mode == FREEZE_HOLD
-    freeze_spring = freeze_active && st.freeze_mode == FREEZE_SPRING
-    st.last_integrator = UInt8(2)
-    D = st.rz === nothing ? 2 : 3
-    _ensure_ou_state!(st, bp.corr_time)
+function _prepare_brownian_noise!(params::Union{BrownianIntegrators.BrownianParams{T},BrownianIntegrators.EMParams{T}},
+                                  workspace::StochasticWorkspace{T},
+                                  st::SimulationState{T},
+                                  dt::T) where {T<:AbstractFloat}
+    params.ou !== nothing && _refresh_ou_coefficients!(params.ou, dt)
+    if _is_3d(st)
+        BrownianIntegrators.bd_prepare_noise_3d!(workspace.rf_x, workspace.rf_y, workspace.rf_z;
+                                                 noise_scale=params.noise_scale,
+                                                 ou=params.ou,
+                                                 state_x=workspace.ou_x,
+                                                 state_y=workspace.ou_y,
+                                                 state_z=workspace.ou_z)
+    else
+        BrownianIntegrators.bd_prepare_noise_2d!(workspace.rf_x, workspace.rf_y;
+                                                 noise_scale=params.noise_scale,
+                                                 ou=params.ou,
+                                                 state_x=workspace.ou_x,
+                                                 state_y=workspace.ou_y)
+    end
+    return nothing
+end
 
-    do_check = (st.step % st.neigh_interval == 0)
-    if do_check
-        rebuild_needed = if D == 2
-            NeighborLists.update_needed!(st.nbh, st.rx, st.ry; skin=st.nbh.skin, Lx=st.box2[1], Ly=st.box2[2], step=st.step)
-        else
-            NeighborLists.update_needed!(st.nbh, st.rx, st.ry, st.rz; skin=st.nbh.skin, Lx=st.box3[1], Ly=st.box3[2], Lz=st.box3[3], step=st.step)
-        end
-        if rebuild_needed
-            if D == 2
-                NeighborLists.update_neighbors_inplace!(st.nbh, st.rx, st.ry; box=st.box2, step=st.step)
-                _collisions_reinit_on_rebuild!(st)
-            else
-                NeighborLists.update_neighbors_inplace!(st.nbh, st.rx, st.ry, st.rz; box=st.box3, step=st.step)
-                _collisions_reinit_on_rebuild!(st)
+"""
+    _refresh_kinetic_buffer!(st, mass)
+
+Refresh the per-particle kinetic-energy buffer `st.Ekin` from the current
+velocity field.
+"""
+function _refresh_kinetic_buffer!(st::SimulationState{T}, mass::T) where {T<:AbstractFloat}
+    if _is_3d(st)
+        @. st.Ekin = T(0.5) * mass * (st.vx * st.vx + st.vy * st.vy + st.vz * st.vz)
+    else
+        @. st.Ekin = T(0.5) * mass * (st.vx * st.vx + st.vy * st.vy)
+    end
+    return nothing
+end
+
+"""
+    _refresh_kinetic_energy!(st, mass) -> T
+
+Compatibility helper that refreshes `st.Ekin` and returns its total on host.
+"""
+function _refresh_kinetic_energy!(st::SimulationState{T}, mass::T) where {T<:AbstractFloat}
+    _refresh_kinetic_buffer!(st, mass)
+    return T(CUDA.sum(st.Ekin))
+end
+
+function _sum_into_scalar_kernel!(out::CuDeviceVector{T},
+                                  src::CuDeviceVector{T}) where {T<:AbstractFloat}
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    if i <= length(src)
+        @inbounds CUDA.@atomic out[1] += src[i]
+    end
+    return nothing
+end
+
+"""
+    _reduce_sum_to_device!(out, src)
+
+Reduce `src` into the one-element device buffer `out` without host transfers.
+"""
+function _reduce_sum_to_device!(out::CuArray{T,1},
+                                src::CuArray{T,1}) where {T<:AbstractFloat}
+    fill!(out, zero(T))
+    N = length(src)
+    N == 0 && return nothing
+    threads = min(256, N)
+    blocks = cld(N, threads)
+    k = CUDA.@cuda launch=false _sum_into_scalar_kernel!(out, src)
+    k(out, src; threads, blocks)
+    return nothing
+end
+
+function _nhc_active_bath_counts_kernel!(bath_counts::CuDeviceVector{Int32},
+                                         particle_bath_id::CuDeviceVector{Int32})
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    if i <= length(particle_bath_id)
+        @inbounds begin
+            b = Int(particle_bath_id[i])
+            if 1 <= b <= length(bath_counts)
+                CUDA.@atomic bath_counts[b] += Int32(1)
             end
         end
+    end
+    return nothing
+end
+
+function _nhc_active_bath_counts_with_freeze_kernel!(bath_counts::CuDeviceVector{Int32},
+                                                     particle_bath_id::CuDeviceVector{Int32},
+                                                     freeze_mask::CuDeviceVector{UInt8})
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    if i <= length(particle_bath_id)
+        @inbounds begin
+            if freeze_mask[i] == UInt8(0)
+                b = Int(particle_bath_id[i])
+                if 1 <= b <= length(bath_counts)
+                    CUDA.@atomic bath_counts[b] += Int32(1)
+                end
+            end
+        end
+    end
+    return nothing
+end
+
+function _nhc_finalize_dof_kernel!(dof_per_bath::CuDeviceVector{T},
+                                   bath_counts::CuDeviceVector{Int32},
+                                   dim::T) where {T<:AbstractFloat}
+    b = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    if b <= length(dof_per_bath)
+        @inbounds dof_per_bath[b] = dim * T(bath_counts[b])
+    end
+    return nothing
+end
+
+function _update_bath_dof!(bath_counts::CuArray{Int32,1},
+                           dof_per_bath::CuArray{T,1},
+                           particle_bath_id::CuArray{Int32,1},
+                           st::SimulationState{T}) where {T<:AbstractFloat}
+    fill!(bath_counts, Int32(0))
+    fill!(dof_per_bath, zero(T))
+
+    N = length(particle_bath_id)
+    if N > 0
+        threads = min(256, N)
+        blocks = cld(N, threads)
+        if st.freeze_mode != FREEZE_NONE && st.freeze_mask !== nothing
+            k = CUDA.@cuda launch=false _nhc_active_bath_counts_with_freeze_kernel!(bath_counts, particle_bath_id, st.freeze_mask::CuArray{UInt8,1})
+            k(bath_counts, particle_bath_id, st.freeze_mask::CuArray{UInt8,1}; threads, blocks)
+        else
+            k = CUDA.@cuda launch=false _nhc_active_bath_counts_kernel!(bath_counts, particle_bath_id)
+            k(bath_counts, particle_bath_id; threads, blocks)
+        end
+    end
+
+    B = length(dof_per_bath)
+    if B > 0
+        threads = min(256, B)
+        blocks = cld(B, threads)
+        dim = T(_is_3d(st) ? 3 : 2)
+        k = CUDA.@cuda launch=false _nhc_finalize_dof_kernel!(dof_per_bath, bath_counts, dim)
+        k(dof_per_bath, bath_counts, dim; threads, blocks)
+    end
+    return nothing
+end
+
+function _nhc_update_dof_per_bath!(spec::NHCSpec{T},
+                                   st::SimulationState{T}) where {T<:AbstractFloat}
+    ws = spec.workspace
+    _update_bath_dof!(ws.bath_counts, ws.dof_per_bath, ws.particle_bath_id, st)
+    ws.dof_dirty = false
+    return nothing
+end
+
+function _csvr_update_dof_per_bath!(spec::CSVRSpec{T},
+                                    st::SimulationState{T}) where {T<:AbstractFloat}
+    ws = spec.workspace
+    _update_bath_dof!(ws.bath_counts, ws.dof_per_bath, ws.particle_bath_id, st)
+    ws.dof_dirty = false
+    return nothing
+end
+
+function _nhc_reduce_kinetic_by_bath_kernel!(kinetic_total_per_bath::CuDeviceVector{T},
+                                             Ekin::CuDeviceVector{T},
+                                             particle_bath_id::CuDeviceVector{Int32}) where {T<:AbstractFloat}
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    if i <= length(Ekin)
+        @inbounds begin
+            b = Int(particle_bath_id[i])
+            if 1 <= b <= length(kinetic_total_per_bath)
+                CUDA.@atomic kinetic_total_per_bath[b] += Ekin[i]
+            end
+        end
+    end
+    return nothing
+end
+
+function _nhc_reduce_kinetic_by_bath!(kinetic_total_per_bath::CuArray{T,1},
+                                      Ekin::CuArray{T,1},
+                                      particle_bath_id::CuArray{Int32,1}) where {T<:AbstractFloat}
+    fill!(kinetic_total_per_bath, zero(T))
+    N = length(Ekin)
+    N == 0 && return nothing
+    threads = min(256, N)
+    blocks = cld(N, threads)
+    k = CUDA.@cuda launch=false _nhc_reduce_kinetic_by_bath_kernel!(kinetic_total_per_bath, Ekin, particle_bath_id)
+    k(kinetic_total_per_bath, Ekin, particle_bath_id; threads, blocks)
+    return nothing
+end
+
+"""
+    _ensure_nhc_kinetic_initialized!(spec, st)
+
+Initialize per-bath kinetic totals and `st.Ekin` once before the first NHC
+thermostat stage if no prior kick/thermostat stage has populated them.
+"""
+function _ensure_nhc_kinetic_initialized!(spec::NHCSpec{T},
+                                          st::SimulationState{T}) where {T<:AbstractFloat}
+    ws = spec.workspace
+    if !ws.kinetic_initialized
+        _refresh_kinetic_buffer!(st, spec.params.mass)
+        _nhc_reduce_kinetic_by_bath!(ws.kinetic_total_per_bath, st.Ekin, ws.particle_bath_id)
+        ws.kinetic_initialized = true
+    end
+    return nothing
+end
+
+function _ensure_csvr_kinetic_initialized!(spec::CSVRSpec{T},
+                                           st::SimulationState{T}) where {T<:AbstractFloat}
+    ws = spec.workspace
+    if !ws.kinetic_initialized
+        _refresh_kinetic_buffer!(st, spec.params.mass)
+        _nhc_reduce_kinetic_by_bath!(ws.kinetic_total_per_bath, st.Ekin, ws.particle_bath_id)
+        ws.kinetic_initialized = true
+    end
+    return nothing
+end
+
+function _nhc_apply_stage_scale2_by_bath_kernel!(vx::CuDeviceVector{T},
+                                                 vy::CuDeviceVector{T},
+                                                 Ekin::CuDeviceVector{T},
+                                                 stage_scale_per_bath::CuDeviceVector{T},
+                                                 particle_bath_id::CuDeviceVector{Int32}) where {T<:AbstractFloat}
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    if i <= length(vx)
+        @inbounds begin
+            b = Int(particle_bath_id[i])
+            if 1 <= b <= length(stage_scale_per_bath)
+                s = stage_scale_per_bath[b]
+                s2 = s * s
+                vx[i] *= s
+                vy[i] *= s
+                Ekin[i] *= s2
+            end
+        end
+    end
+    return nothing
+end
+
+function _nhc_apply_stage_scale3_by_bath_kernel!(vx::CuDeviceVector{T},
+                                                 vy::CuDeviceVector{T},
+                                                 vz::CuDeviceVector{T},
+                                                 Ekin::CuDeviceVector{T},
+                                                 stage_scale_per_bath::CuDeviceVector{T},
+                                                 particle_bath_id::CuDeviceVector{Int32}) where {T<:AbstractFloat}
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    if i <= length(vx)
+        @inbounds begin
+            b = Int(particle_bath_id[i])
+            if 1 <= b <= length(stage_scale_per_bath)
+                s = stage_scale_per_bath[b]
+                s2 = s * s
+                vx[i] *= s
+                vy[i] *= s
+                vz[i] *= s
+                Ekin[i] *= s2
+            end
+        end
+    end
+    return nothing
+end
+
+"""
+    _nhc_apply_stage_scale!(st, stage_scale_per_bath, particle_bath_id)
+
+Apply the net thermostat scale per bath for one NHC stage to velocities and to
+`st.Ekin` in a single GPU pass.
+"""
+function _nhc_apply_stage_scale!(st::SimulationState{T},
+                                 stage_scale_per_bath::CuArray{T,1},
+                                 particle_bath_id::CuArray{Int32,1}) where {T<:AbstractFloat}
+    N = length(st.vx)
+    N == 0 && return nothing
+    threads = min(256, N)
+    blocks = cld(N, threads)
+    if _is_3d(st)
+        k = CUDA.@cuda launch=false _nhc_apply_stage_scale3_by_bath_kernel!(st.vx, st.vy, st.vz::CuArray{T,1}, st.Ekin, stage_scale_per_bath, particle_bath_id)
+        k(st.vx, st.vy, st.vz::CuArray{T,1}, st.Ekin, stage_scale_per_bath, particle_bath_id; threads, blocks)
+    else
+        k = CUDA.@cuda launch=false _nhc_apply_stage_scale2_by_bath_kernel!(st.vx, st.vy, st.Ekin, stage_scale_per_bath, particle_bath_id)
+        k(st.vx, st.vy, st.Ekin, stage_scale_per_bath, particle_bath_id; threads, blocks)
+    end
+    return nothing
+end
+
+@inline function _csvr_gamma_sample(shape::T) where {T<:AbstractFloat}
+    shape > zero(T) || return zero(T)
+    if shape < one(T)
+        u = max(rand(T), eps(T))
+        return _csvr_gamma_sample(shape + one(T)) * u^(inv(shape))
+    end
+
+    d = shape - T(1) / T(3)
+    c = inv(sqrt(T(9) * d))
+    while true
+        x = randn(T)
+        v = one(T) + c * x
+        v <= zero(T) && continue
+        v3 = v * v * v
+        u = rand(T)
+        x2 = x * x
+        if u < one(T) - T(0.0331) * x2 * x2
+            return d * v3
+        end
+        if log(max(u, eps(T))) < T(0.5) * x2 + d * (one(T) - v3 + log(v3))
+            return d * v3
+        end
+    end
+end
+
+@inline function _csvr_chisq(::Type{T}, dof::Int) where {T<:AbstractFloat}
+    dof <= 0 && return zero(T)
+    return T(2) * _csvr_gamma_sample(T(dof) / T(2))
+end
+
+function _csvr_thermostat_stage_kernel!(kinetic_total_per_bath::CuDeviceVector{T},
+                                        cumulative_energy_exchange_per_bath::CuDeviceVector{T},
+                                        last_velocity_scale_per_bath::CuDeviceVector{T},
+                                        dof_per_bath::CuDeviceVector{T},
+                                        target_temperature::CuDeviceVector{T},
+                                        tau::CuDeviceVector{T},
+                                        stage_dt::T) where {T<:AbstractFloat}
+    b = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    nbaths = length(kinetic_total_per_bath)
+    if b <= nbaths
+        @inbounds begin
+            dof = dof_per_bath[b]
+            if dof <= zero(T)
+                kinetic_total_per_bath[b] = zero(T)
+                last_velocity_scale_per_bath[b] = one(T)
+                return nothing
+            end
+
+            Kold = kinetic_total_per_bath[b]
+            Ttarget = target_temperature[b]
+            τ = tau[b]
+            if !(Kold > eps(T)) || !(Ttarget > zero(T)) || !(τ > zero(T))
+                last_velocity_scale_per_bath[b] = one(T)
+                return nothing
+            end
+
+            ndof = max(1, Int(floor(dof + T(0.5))))
+            Kbar = T(0.5) * dof * Ttarget
+            c1 = exp(-stage_dt / τ)
+            c2 = ((one(T) - c1) * Kbar) / (Kold * T(ndof))
+            r1 = randn(T)
+            r2 = _csvr_chisq(T, ndof - 1)
+            cross = sqrt(max(c1 * c2, zero(T)))
+            scale2 = c1 + c2 * (r1 * r1 + r2) + T(2) * r1 * cross
+            scale2 = max(scale2, zero(T))
+            scale = sqrt(scale2)
+            Knew = Kold * scale2
+
+            kinetic_total_per_bath[b] = Knew
+            cumulative_energy_exchange_per_bath[b] += Kold - Knew
+            last_velocity_scale_per_bath[b] = scale
+        end
+    end
+    return nothing
+end
+
+function _run_csvr_thermostat_stage!(spec::CSVRSpec{T},
+                                     stage_dt::T) where {T<:AbstractFloat}
+    ws = spec.workspace
+    B = length(ws.kinetic_total_per_bath)
+    B == 0 && return nothing
+    threads = min(256, B)
+    blocks = cld(B, threads)
+    k = CUDA.@cuda launch=false _csvr_thermostat_stage_kernel!(ws.kinetic_total_per_bath,
+                                                               ws.cumulative_energy_exchange_per_bath,
+                                                               ws.last_velocity_scale_per_bath,
+                                                               ws.dof_per_bath,
+                                                               ws.target_temperature,
+                                                               ws.tau,
+                                                               stage_dt)
+    k(ws.kinetic_total_per_bath,
+      ws.cumulative_energy_exchange_per_bath,
+      ws.last_velocity_scale_per_bath,
+      ws.dof_per_bath,
+      ws.target_temperature,
+      ws.tau,
+      stage_dt;
+      threads,
+      blocks)
+    return nothing
+end
+
+function _apply_csvr_thermostat_stage!(spec::CSVRSpec{T},
+                                       st::SimulationState{T},
+                                       stage_dt::T) where {T<:AbstractFloat}
+    ws = spec.workspace
+    _csvr_update_dof_per_bath!(spec, st)
+    _ensure_csvr_kinetic_initialized!(spec, st)
+    _run_csvr_thermostat_stage!(spec, stage_dt)
+    _nhc_apply_stage_scale!(st, ws.last_velocity_scale_per_bath, ws.particle_bath_id)
+    return nothing
+end
+
+function _nhc_half_kick2_by_bath_kernel!(vx::CuDeviceVector{T},
+                                         vy::CuDeviceVector{T},
+                                         fx::CuDeviceVector{T},
+                                         fy::CuDeviceVector{T},
+                                         Ekin::CuDeviceVector{T},
+                                         kinetic_total_per_bath::CuDeviceVector{T},
+                                         particle_bath_id::CuDeviceVector{Int32},
+                                         coef::T,
+                                         mass::T) where {T<:AbstractFloat}
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    if i <= length(vx)
+        @inbounds begin
+            vx_new = vx[i] + coef * fx[i]
+            vy_new = vy[i] + coef * fy[i]
+            ek = T(0.5) * mass * (vx_new * vx_new + vy_new * vy_new)
+            vx[i] = vx_new
+            vy[i] = vy_new
+            Ekin[i] = ek
+            b = Int(particle_bath_id[i])
+            if 1 <= b <= length(kinetic_total_per_bath)
+                CUDA.@atomic kinetic_total_per_bath[b] += ek
+            end
+        end
+    end
+    return nothing
+end
+
+function _nhc_half_kick3_by_bath_kernel!(vx::CuDeviceVector{T},
+                                         vy::CuDeviceVector{T},
+                                         vz::CuDeviceVector{T},
+                                         fx::CuDeviceVector{T},
+                                         fy::CuDeviceVector{T},
+                                         fz::CuDeviceVector{T},
+                                         Ekin::CuDeviceVector{T},
+                                         kinetic_total_per_bath::CuDeviceVector{T},
+                                         particle_bath_id::CuDeviceVector{Int32},
+                                         coef::T,
+                                         mass::T) where {T<:AbstractFloat}
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    if i <= length(vx)
+        @inbounds begin
+            vx_new = vx[i] + coef * fx[i]
+            vy_new = vy[i] + coef * fy[i]
+            vz_new = vz[i] + coef * fz[i]
+            ek = T(0.5) * mass * (vx_new * vx_new + vy_new * vy_new + vz_new * vz_new)
+            vx[i] = vx_new
+            vy[i] = vy_new
+            vz[i] = vz_new
+            Ekin[i] = ek
+            b = Int(particle_bath_id[i])
+            if 1 <= b <= length(kinetic_total_per_bath)
+                CUDA.@atomic kinetic_total_per_bath[b] += ek
+            end
+        end
+    end
+    return nothing
+end
+
+"""
+    _nhc_apply_half_kick!(st, fx, fy, fz, dt, mass, kinetic_total_per_bath, particle_bath_id)
+
+Apply a deterministic half-force kick `v <- v + (dt / (2m)) f`, refresh
+`st.Ekin`, and reduce per-bath kinetic energies into `kinetic_total_per_bath`.
+"""
+function _nhc_apply_half_kick!(st::SimulationState{T},
+                               fx::CuArray{T,1},
+                               fy::CuArray{T,1},
+                               fz::Union{Nothing,CuArray{T,1}},
+                               dt::T,
+                               mass::T,
+                               kinetic_total_per_bath::CuArray{T,1},
+                               particle_bath_id::CuArray{Int32,1}) where {T<:AbstractFloat}
+    fill!(kinetic_total_per_bath, zero(T))
+    N = length(st.vx)
+    N == 0 && return nothing
+    coef = dt / (T(2) * mass)
+    threads = min(256, N)
+    blocks = cld(N, threads)
+    if _is_3d(st)
+        k = CUDA.@cuda launch=false _nhc_half_kick3_by_bath_kernel!(st.vx, st.vy, st.vz::CuArray{T,1},
+                                                                     fx, fy, fz::CuArray{T,1},
+                                                                     st.Ekin, kinetic_total_per_bath,
+                                                                     particle_bath_id,
+                                                                     coef, mass)
+        k(st.vx, st.vy, st.vz::CuArray{T,1},
+          fx, fy, fz::CuArray{T,1},
+          st.Ekin, kinetic_total_per_bath,
+          particle_bath_id,
+          coef, mass; threads, blocks)
+    else
+        k = CUDA.@cuda launch=false _nhc_half_kick2_by_bath_kernel!(st.vx, st.vy,
+                                                                     fx, fy,
+                                                                     st.Ekin, kinetic_total_per_bath,
+                                                                     particle_bath_id,
+                                                                     coef, mass)
+        k(st.vx, st.vy,
+          fx, fy,
+          st.Ekin, kinetic_total_per_bath,
+          particle_bath_id,
+          coef, mass; threads, blocks)
+    end
+    return nothing
+end
+
+"""
+    _nhc_drift_positions!(st, dt)
+
+Advance positions by one full deterministic drift under periodic boundaries.
+Implemented through the existing BAOAB A-kernel using `2dt` so the effective
+drift is exactly `dt`.
+"""
+function _nhc_drift_positions!(st::SimulationState{T}, dt::T) where {T<:AbstractFloat}
+    drift_dt = T(2) * dt
+    if _is_3d(st)
+        LangevinIntegrators.baoab_A_3d!(st.rx, st.ry, st.rz,
+                                        st.vx, st.vy, st.vz,
+                                        drift_dt, st.box3::Definitions.Box3;
+                                        unwrapped_x=st.rx_unwrap,
+                                        unwrapped_y=st.ry_unwrap,
+                                        unwrapped_z=st.rz_unwrap)
+    else
+        LangevinIntegrators.baoab_A_2d!(st.rx, st.ry,
+                                        st.vx, st.vy,
+                                        drift_dt, st.box2::Definitions.Box2;
+                                        unwrapped_x=st.rx_unwrap,
+                                        unwrapped_y=st.ry_unwrap)
+    end
+    return nothing
+end
+
+@inline function _nhc_gromacs_sy_weight(::Type{T}, idx::Int32) where {T<:AbstractFloat}
+    if idx == Int32(3)
+        return T(-0.186929716880426)
+    elseif idx >= Int32(1) && idx <= Int32(5)
+        return T(0.2967324292201065)
+    end
+    return zero(T)
+end
+
+function _nhc_chain_stage_legacy_kernel!(xi::CuDeviceMatrix{T},
+                                         eta::CuDeviceMatrix{T},
+                                         chain_force::CuDeviceMatrix{T},
+                                         chain_masses::CuDeviceMatrix{T},
+                                         kinetic_total_per_bath::CuDeviceVector{T},
+                                         thermostat_kinetic_per_bath::CuDeviceVector{T},
+                                         thermostat_potential_per_bath::CuDeviceVector{T},
+                                         last_velocity_scale_per_bath::CuDeviceVector{T},
+                                         dof_per_bath::CuDeviceVector{T},
+                                         target_temperature::CuDeviceVector{T},
+                                         stage_dt::T,
+                                         substeps::Int32) where {T<:AbstractFloat}
+    b = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    nbaths = length(kinetic_total_per_bath)
+    if b <= nbaths
+        @inbounds begin
+            dof = dof_per_bath[b]
+            if dof <= zero(T)
+                kinetic_total_per_bath[b] = zero(T)
+                thermostat_kinetic_per_bath[b] = zero(T)
+                thermostat_potential_per_bath[b] = zero(T)
+                last_velocity_scale_per_bath[b] = one(T)
+                return nothing
+            end
+
+            M = size(xi, 1)
+            ns = Int(substeps)
+            h = stage_dt / T(ns)
+            half_h = h / T(2)
+            Ttarget = target_temperature[b]
+            K = kinetic_total_per_bath[b]
+            total_scale = one(T)
+
+            for _ in 1:ns
+                if M == 1
+                    g1 = (T(2) * K - dof * Ttarget) / chain_masses[1, b]
+                    xi[1, b] += half_h * g1
+                else
+                    chain_force[1, b] = (T(2) * K - dof * Ttarget) / chain_masses[1, b] - xi[1, b] * xi[2, b]
+                    for j in 2:(M - 1)
+                        chain_force[j, b] = (chain_masses[j - 1, b] * xi[j - 1, b] * xi[j - 1, b] - Ttarget) / chain_masses[j, b] - xi[j, b] * xi[j + 1, b]
+                    end
+                    chain_force[M, b] = (chain_masses[M - 1, b] * xi[M - 1, b] * xi[M - 1, b] - Ttarget) / chain_masses[M, b]
+                    for j in 1:M
+                        xi[j, b] += half_h * chain_force[j, b]
+                    end
+                end
+
+                scale = exp(-h * xi[1, b])
+                total_scale *= scale
+                K *= scale * scale
+
+                if M == 1
+                    g1 = (T(2) * K - dof * Ttarget) / chain_masses[1, b]
+                    xi[1, b] += half_h * g1
+                else
+                    chain_force[1, b] = (T(2) * K - dof * Ttarget) / chain_masses[1, b] - xi[1, b] * xi[2, b]
+                    for j in 2:(M - 1)
+                        chain_force[j, b] = (chain_masses[j - 1, b] * xi[j - 1, b] * xi[j - 1, b] - Ttarget) / chain_masses[j, b] - xi[j, b] * xi[j + 1, b]
+                    end
+                    chain_force[M, b] = (chain_masses[M - 1, b] * xi[M - 1, b] * xi[M - 1, b] - Ttarget) / chain_masses[M, b]
+                    for j in 1:M
+                        xi[j, b] += half_h * chain_force[j, b]
+                    end
+                end
+
+                for j in 1:M
+                    eta[j, b] += h * xi[j, b]
+                end
+            end
+
+            kinetic_total_per_bath[b] = K
+            last_velocity_scale_per_bath[b] = total_scale
+
+            therm_kin = zero(T)
+            for j in 1:M
+                therm_kin += T(0.5) * chain_masses[j, b] * xi[j, b] * xi[j, b]
+            end
+            thermostat_kinetic_per_bath[b] = therm_kin
+
+            therm_pot = dof * Ttarget * eta[1, b]
+            for j in 2:M
+                therm_pot += Ttarget * eta[j, b]
+            end
+            thermostat_potential_per_bath[b] = therm_pot
+        end
+    end
+    return nothing
+end
+
+function _nhc_chain_stage_gromacs_kernel!(xi::CuDeviceMatrix{T},
+                                          eta::CuDeviceMatrix{T},
+                                          chain_masses::CuDeviceMatrix{T},
+                                          kinetic_total_per_bath::CuDeviceVector{T},
+                                          thermostat_kinetic_per_bath::CuDeviceVector{T},
+                                          thermostat_potential_per_bath::CuDeviceVector{T},
+                                          last_velocity_scale_per_bath::CuDeviceVector{T},
+                                          dof_per_bath::CuDeviceVector{T},
+                                          target_temperature::CuDeviceVector{T},
+                                          stage_dt::T,
+                                          substeps::Int32) where {T<:AbstractFloat}
+    b = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    nbaths = length(kinetic_total_per_bath)
+    if b <= nbaths
+        @inbounds begin
+            dof = dof_per_bath[b]
+            if dof <= zero(T)
+                kinetic_total_per_bath[b] = zero(T)
+                thermostat_kinetic_per_bath[b] = zero(T)
+                thermostat_potential_per_bath[b] = zero(T)
+                last_velocity_scale_per_bath[b] = one(T)
+                return nothing
+            end
+
+            M = size(xi, 1)
+            ns = Int(substeps)
+            Ttarget = target_temperature[b]
+            K = kinetic_total_per_bath[b]
+            total_scale = one(T)
+
+            for _ in 1:ns
+                for sy_idx in Int32(1):Int32(5)
+                    time_step = stage_dt * _nhc_gromacs_sy_weight(T, sy_idx) / T(ns)
+
+                    for j in M:-1:1
+                        kinetic2 = if j == 1
+                            T(2) * K
+                        else
+                            chain_masses[j - 1, b] * xi[j - 1, b] * xi[j - 1, b]
+                        end
+                        num_dof = j == 1 ? dof : one(T)
+                        xi_accel = (kinetic2 - num_dof * Ttarget) / chain_masses[j, b]
+                        local_scale = if j < M
+                            exp(-T(0.25) * time_step * xi[j + 1, b])
+                        else
+                            one(T)
+                        end
+                        xi[j, b] = local_scale * (xi[j, b] * local_scale + T(0.5) * time_step * xi_accel)
+                    end
+
+                    system_scale = exp(-time_step * xi[1, b])
+                    total_scale *= system_scale
+                    K *= system_scale * system_scale
+
+                    for j in 1:M
+                        eta[j, b] += time_step * xi[j, b]
+
+                        kinetic2 = if j == 1
+                            T(2) * K
+                        else
+                            chain_masses[j - 1, b] * xi[j - 1, b] * xi[j - 1, b]
+                        end
+                        num_dof = j == 1 ? dof : one(T)
+                        xi_accel = (kinetic2 - num_dof * Ttarget) / chain_masses[j, b]
+                        local_scale = if j < M
+                            exp(-T(0.25) * time_step * xi[j + 1, b])
+                        else
+                            one(T)
+                        end
+                        xi[j, b] = local_scale * (xi[j, b] * local_scale + T(0.5) * time_step * xi_accel)
+                    end
+                end
+            end
+
+            kinetic_total_per_bath[b] = K
+            last_velocity_scale_per_bath[b] = total_scale
+
+            therm_kin = zero(T)
+            for j in 1:M
+                therm_kin += T(0.5) * chain_masses[j, b] * xi[j, b] * xi[j, b]
+            end
+            thermostat_kinetic_per_bath[b] = therm_kin
+
+            therm_pot = dof * Ttarget * eta[1, b]
+            for j in 2:M
+                therm_pot += Ttarget * eta[j, b]
+            end
+            thermostat_potential_per_bath[b] = therm_pot
+        end
+    end
+    return nothing
+end
+
+function _nhc_chain_stage_lammps_kernel!(xi::CuDeviceMatrix{T},
+                                         eta::CuDeviceMatrix{T},
+                                         chain_force::CuDeviceMatrix{T},
+                                         chain_masses::CuDeviceMatrix{T},
+                                         kinetic_total_per_bath::CuDeviceVector{T},
+                                         thermostat_kinetic_per_bath::CuDeviceVector{T},
+                                         thermostat_potential_per_bath::CuDeviceVector{T},
+                                         last_velocity_scale_per_bath::CuDeviceVector{T},
+                                         dof_per_bath::CuDeviceVector{T},
+                                         target_temperature::CuDeviceVector{T},
+                                         stage_dt::T,
+                                         substeps::Int32) where {T<:AbstractFloat}
+    b = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    nbaths = length(kinetic_total_per_bath)
+    if b <= nbaths
+        @inbounds begin
+            dof = dof_per_bath[b]
+            if dof <= zero(T)
+                kinetic_total_per_bath[b] = zero(T)
+                thermostat_kinetic_per_bath[b] = zero(T)
+                thermostat_potential_per_bath[b] = zero(T)
+                last_velocity_scale_per_bath[b] = one(T)
+                return nothing
+            end
+
+            M = size(xi, 1)
+            ns = Int(substeps)
+            h = stage_dt / T(ns)
+            quarter_h = h / T(4)
+            eighth_h = h / T(8)
+            half_h = h / T(2)
+            Ttarget = target_temperature[b]
+            K = kinetic_total_per_bath[b]
+            total_scale = one(T)
+
+            for j in 2:M
+                chain_force[j, b] = (chain_masses[j - 1, b] * xi[j - 1, b] * xi[j - 1, b] - Ttarget) / chain_masses[j, b]
+            end
+
+            for _ in 1:ns
+                accel1 = (T(2) * K - dof * Ttarget) / chain_masses[1, b]
+
+                for j in M:-1:2
+                    expfac = j < M ? exp(-eighth_h * xi[j + 1, b]) : one(T)
+                    xi[j, b] *= expfac
+                    xi[j, b] += chain_force[j, b] * quarter_h
+                    xi[j, b] *= expfac
+                end
+
+                expfac1 = M > 1 ? exp(-eighth_h * xi[2, b]) : one(T)
+                xi[1, b] *= expfac1
+                xi[1, b] += accel1 * quarter_h
+                xi[1, b] *= expfac1
+
+                scale = exp(-half_h * xi[1, b])
+                total_scale *= scale
+                K *= scale * scale
+
+                accel1 = (T(2) * K - dof * Ttarget) / chain_masses[1, b]
+
+                for j in 1:M
+                    eta[j, b] += half_h * xi[j, b]
+                end
+
+                xi[1, b] *= expfac1
+                xi[1, b] += accel1 * quarter_h
+                xi[1, b] *= expfac1
+
+                for j in 2:M
+                    expfac = j < M ? exp(-eighth_h * xi[j + 1, b]) : one(T)
+                    xi[j, b] *= expfac
+                    chain_force[j, b] = (chain_masses[j - 1, b] * xi[j - 1, b] * xi[j - 1, b] - Ttarget) / chain_masses[j, b]
+                    xi[j, b] += chain_force[j, b] * quarter_h
+                    xi[j, b] *= expfac
+                end
+            end
+
+            kinetic_total_per_bath[b] = K
+            last_velocity_scale_per_bath[b] = total_scale
+
+            therm_kin = zero(T)
+            for j in 1:M
+                therm_kin += T(0.5) * chain_masses[j, b] * xi[j, b] * xi[j, b]
+            end
+            thermostat_kinetic_per_bath[b] = therm_kin
+
+            therm_pot = dof * Ttarget * eta[1, b]
+            for j in 2:M
+                therm_pot += Ttarget * eta[j, b]
+            end
+            thermostat_potential_per_bath[b] = therm_pot
+        end
+    end
+    return nothing
+end
+
+function _run_nhc_chain_stage!(spec::NHCSpec{T},
+                               stage_dt::T) where {T<:AbstractFloat}
+    p = spec.params
+    ws = spec.workspace
+    B = length(ws.kinetic_total_per_bath)
+    B == 0 && return nothing
+    threads = min(256, B)
+    blocks = cld(B, threads)
+    if p.propagator == NHC_PROPAGATOR_LEGACY
+        k = CUDA.@cuda launch=false _nhc_chain_stage_legacy_kernel!(ws.xi,
+                                                                    ws.eta,
+                                                                    ws.chain_force,
+                                                                    ws.chain_masses,
+                                                                    ws.kinetic_total_per_bath,
+                                                                    ws.thermostat_kinetic_per_bath,
+                                                                    ws.thermostat_potential_per_bath,
+                                                                    ws.last_velocity_scale_per_bath,
+                                                                    ws.dof_per_bath,
+                                                                    ws.target_temperature,
+                                                                    stage_dt,
+                                                                    Int32(p.substeps))
+        k(ws.xi,
+          ws.eta,
+          ws.chain_force,
+          ws.chain_masses,
+          ws.kinetic_total_per_bath,
+          ws.thermostat_kinetic_per_bath,
+          ws.thermostat_potential_per_bath,
+          ws.last_velocity_scale_per_bath,
+          ws.dof_per_bath,
+          ws.target_temperature,
+          stage_dt,
+          Int32(p.substeps);
+          threads,
+          blocks)
+    elseif p.propagator == NHC_PROPAGATOR_GROMACS
+        k = CUDA.@cuda launch=false _nhc_chain_stage_gromacs_kernel!(ws.xi,
+                                                                     ws.eta,
+                                                                     ws.chain_masses,
+                                                                     ws.kinetic_total_per_bath,
+                                                                     ws.thermostat_kinetic_per_bath,
+                                                                     ws.thermostat_potential_per_bath,
+                                                                     ws.last_velocity_scale_per_bath,
+                                                                     ws.dof_per_bath,
+                                                                     ws.target_temperature,
+                                                                     stage_dt,
+                                                                     Int32(p.substeps))
+        k(ws.xi,
+          ws.eta,
+          ws.chain_masses,
+          ws.kinetic_total_per_bath,
+          ws.thermostat_kinetic_per_bath,
+          ws.thermostat_potential_per_bath,
+          ws.last_velocity_scale_per_bath,
+          ws.dof_per_bath,
+          ws.target_temperature,
+          stage_dt,
+          Int32(p.substeps);
+          threads,
+          blocks)
+    elseif p.propagator == NHC_PROPAGATOR_LAMMPS
+        k = CUDA.@cuda launch=false _nhc_chain_stage_lammps_kernel!(ws.xi,
+                                                                    ws.eta,
+                                                                    ws.chain_force,
+                                                                    ws.chain_masses,
+                                                                    ws.kinetic_total_per_bath,
+                                                                    ws.thermostat_kinetic_per_bath,
+                                                                    ws.thermostat_potential_per_bath,
+                                                                    ws.last_velocity_scale_per_bath,
+                                                                    ws.dof_per_bath,
+                                                                    ws.target_temperature,
+                                                                    stage_dt,
+                                                                    Int32(p.substeps))
+        k(ws.xi,
+          ws.eta,
+          ws.chain_force,
+          ws.chain_masses,
+          ws.kinetic_total_per_bath,
+          ws.thermostat_kinetic_per_bath,
+          ws.thermostat_potential_per_bath,
+          ws.last_velocity_scale_per_bath,
+          ws.dof_per_bath,
+          ws.target_temperature,
+          stage_dt,
+          Int32(p.substeps);
+          threads,
+          blocks)
+    else
+        throw(ArgumentError("Unsupported NHC propagator id $(p.propagator)."))
+    end
+    return nothing
+end
+
+"""
+    _apply_nhc_thermostat_stage!(spec, st, stage_dt)
+
+Propagate the NHC chain and apply deterministic velocity scaling over
+`stage_dt`, internally split into `spec.params.substeps`.
+"""
+function _apply_nhc_thermostat_stage!(spec::NHCSpec{T},
+                                      st::SimulationState{T},
+                                      stage_dt::T) where {T<:AbstractFloat}
+    ws = spec.workspace
+    _nhc_update_dof_per_bath!(spec, st)
+    _ensure_nhc_kinetic_initialized!(spec, st)
+    _run_nhc_chain_stage!(spec, stage_dt)
+    _nhc_apply_stage_scale!(st, ws.last_velocity_scale_per_bath, ws.particle_bath_id)
+    return nothing
+end
+
+# -----------------------------------------------------------------------------
+# Integrator protocol implementations
+# -----------------------------------------------------------------------------
+
+integrator_id(::Union{VVSpec,BAOABSpec,BAOASpec,GSMSpec}) = INTEGRATOR_ID_LANGEVIN
+integrator_id(::Union{BrownianSpec,EMSpec}) = INTEGRATOR_ID_BROWNIAN
+integrator_id(::NHCSpec) = INTEGRATOR_ID_NHC
+integrator_id(::CSVRSpec) = INTEGRATOR_ID_CSVR
+
+integrator_name(::VVSpec) = :velocity_verlet
+integrator_name(::BAOABSpec) = :baoab
+integrator_name(::BAOASpec) = :baoa
+integrator_name(::GSMSpec) = :gsm
+integrator_name(::BrownianSpec) = :brownian_midpoint
+integrator_name(::EMSpec) = :euler_maruyama
+integrator_name(::NHCSpec) = :nose_hoover_chain
+integrator_name(::CSVRSpec) = :csvr
+
+stage_sequence(::VVSpec) = (:kick1, :drift, :force, :kick2)
+stage_sequence(::BAOABSpec) = (:B1, :A1, :O, :A2, :force, :B2)
+stage_sequence(::GSMSpec) = (:B1, :A1, :O, :A2, :force, :B2)
+stage_sequence(::BAOASpec) = (:B1, :A1, :O, :A2, :force, :power, :kinetic_refresh)
+stage_sequence(::BrownianSpec) = (:midpoint_predict, :midpoint_force, :final_position, :force)
+stage_sequence(::EMSpec) = (:midpoint_predict, :midpoint_force, :final_position, :force)
+stage_sequence(::NHCSpec) = (:thermostat_pre, :kick1, :drift, :force, :kick2, :thermostat_post)
+stage_sequence(::CSVRSpec) = (:kick1, :drift, :force, :kick2, :thermostat)
+
+function validate_integrator_inputs!(spec::Union{BAOABSpec,BAOASpec,GSMSpec}, st, dt)
+    _require_positive_gamma!(spec.params.gamma, string(integrator_name(spec)))
+    return nothing
+end
+
+function validate_integrator_inputs!(spec::BrownianSpec, st, dt)
+    _require_positive_gamma!(spec.params.gamma, "Brownian midpoint")
+    return nothing
+end
+
+function validate_integrator_inputs!(spec::EMSpec, st, dt)
+    _require_positive_gamma!(spec.params.gamma, "Euler-Maruyama")
+    return nothing
+end
+
+function validate_integrator_inputs!(spec::NHCSpec{T}, st, dt) where {T<:AbstractFloat}
+    p = spec.params
+    p.mass > zero(T) || throw(ArgumentError("NHC requires mass > 0."))
+    p.substeps >= 1 || throw(ArgumentError("NHC requires substeps >= 1."))
+    p.chain_length >= 1 || throw(ArgumentError("NHC requires chain_length >= 1."))
+    (p.propagator == NHC_PROPAGATOR_LEGACY ||
+     p.propagator == NHC_PROPAGATOR_GROMACS ||
+     p.propagator == NHC_PROPAGATOR_LAMMPS) ||
+        throw(ArgumentError("NHC requires a supported propagator id, got $(p.propagator)."))
+    nbaths = length(p.target_temperature)
+    nbaths >= 1 || throw(ArgumentError("NHC requires at least one bath."))
+    length(p.tau) == nbaths ||
+        throw(ArgumentError("NHC requires length(tau) == length(target_temperature)."))
+    size(p.chain_masses, 1) == p.chain_length ||
+        throw(ArgumentError("NHC chain_masses first dimension must equal chain_length."))
+    size(p.chain_masses, 2) == nbaths ||
+        throw(ArgumentError("NHC chain_masses second dimension must equal number of baths."))
+    @inbounds for b in 1:nbaths
+        p.target_temperature[b] > zero(T) ||
+            throw(ArgumentError("NHC requires target_temperature[$(b)] > 0."))
+        p.tau[b] > zero(T) || throw(ArgumentError("NHC requires tau[$(b)] > 0."))
+    end
+    @inbounds for j in 1:p.chain_length, b in 1:nbaths
+        p.chain_masses[j, b] > zero(T) ||
+            throw(ArgumentError("NHC chain mass Q[$(j), bath=$(b)] must be > 0."))
+    end
+    return nothing
+end
+
+function validate_integrator_inputs!(spec::CSVRSpec{T}, st, dt) where {T<:AbstractFloat}
+    p = spec.params
+    p.mass > zero(T) || throw(ArgumentError("CSVR requires mass > 0."))
+    nbaths = length(p.target_temperature)
+    nbaths >= 1 || throw(ArgumentError("CSVR requires at least one bath."))
+    length(p.tau) == nbaths ||
+        throw(ArgumentError("CSVR requires length(tau) == length(target_temperature)."))
+    @inbounds for b in 1:nbaths
+        p.target_temperature[b] > zero(T) ||
+            throw(ArgumentError("CSVR requires target_temperature[$(b)] > 0."))
+        p.tau[b] > zero(T) || throw(ArgumentError("CSVR requires tau[$(b)] > 0."))
+    end
+    return nothing
+end
+
+function ensure_integrator_workspace!(spec::VVSpec{T}, st::SimulationState{T}) where {T<:AbstractFloat}
+    _ensure_workspace_buffers!(spec.workspace, st; ou=spec.params.ou)
+    return nothing
+end
+
+function ensure_integrator_workspace!(spec::Union{BAOABSpec{T},BAOASpec{T},GSMSpec{T}},
+                                      st::SimulationState{T}) where {T<:AbstractFloat}
+    _ensure_workspace_buffers!(spec.workspace, st; ou=spec.params.ou)
+    return nothing
+end
+
+function ensure_integrator_workspace!(spec::Union{BrownianSpec{T},EMSpec{T}},
+                                      st::SimulationState{T}) where {T<:AbstractFloat}
+    _ensure_workspace_buffers!(spec.workspace, st; ou=spec.params.ou)
+    return nothing
+end
+
+function ensure_integrator_workspace!(spec::NHCSpec{T},
+                                      st::SimulationState{T}) where {T<:AbstractFloat}
+    p = spec.params
+    ws = spec.workspace
+    M = p.chain_length
+    B = length(p.target_temperature)
+    N = length(st.rx)
+
+    if size(ws.xi) != (M, B)
+        ws.xi = CUDA.zeros(T, M, B)
+        ws.eta = CUDA.zeros(T, M, B)
+        ws.chain_force = CUDA.zeros(T, M, B)
+        ws.chain_masses = CUDA.zeros(T, M, B)
+        ws.chain_masses_signature = UInt64(0)
+        ws.kinetic_initialized = false
+    end
+
+    if length(ws.target_temperature) != B
+        ws.target_temperature = CUDA.zeros(T, B)
+    end
+    copyto!(ws.target_temperature, p.target_temperature)
+
+    if length(ws.particle_bath_id) != N
+        ws.particle_bath_id = CUDA.fill(Int32(1), N)
+        ws.kinetic_initialized = false
+        ws.dof_dirty = true
+    end
+    if length(ws.bath_counts) != B
+        ws.bath_counts = CUDA.zeros(Int32, B)
+        ws.dof_dirty = true
+    end
+    if length(ws.dof_per_bath) != B
+        ws.dof_per_bath = CUDA.zeros(T, B)
+        ws.dof_dirty = true
+    end
+    if length(ws.kinetic_total_per_bath) != B
+        ws.kinetic_total_per_bath = CUDA.zeros(T, B)
+        ws.kinetic_initialized = false
+    end
+    if length(ws.thermostat_kinetic_per_bath) != B
+        ws.thermostat_kinetic_per_bath = CUDA.zeros(T, B)
+    end
+    if length(ws.thermostat_potential_per_bath) != B
+        ws.thermostat_potential_per_bath = CUDA.zeros(T, B)
+    end
+    if length(ws.last_velocity_scale_per_bath) != B
+        ws.last_velocity_scale_per_bath = CUDA.fill(one(T), B)
+    end
+
+    sig = _nhc_chain_masses_signature(p.chain_masses)
+    if ws.chain_masses_signature != sig
+        copyto!(ws.chain_masses, p.chain_masses)
+        ws.chain_masses_signature = sig
+        ws.kinetic_initialized = false
     end
 
     if st.step == 0
-        if D == 2
-            _compute_final_nonbonded2!(st, compute_energy)
-            _finalize_force_eval2!(st, compute_energy, freeze_spring)
-        else
-            _compute_final_nonbonded3!(st, compute_energy)
-            _finalize_force_eval3!(st, compute_energy, freeze_spring)
-        end
+        ws.kinetic_initialized = false
     end
-
-    if D == 2
-        # Draw noise once and compute midpoint positions into vx,vy
-        BrownianIntegrators.bd_prepare_noise_2d!(st.rf_x, st.rf_y;
-                                                 noise_scale=bp.noise_scale,
-                                                 corr_time=bp.corr_time,
-                                                 state_x=st.ou_x, state_y=st.ou_y,
-                                                 dt=dtT)
-        BrownianIntegrators.bd_midpoint_positions_2d!(
-            st.rx, st.ry, st.fx, st.fy,
-            st.rf_x, st.rf_y,
-            st.vx, st.vy,
-            bp.gamma, bp.noise_scale,
-            dtT, st.box2::Definitions.Box2)
-        if freeze_hold
-            _apply_freeze_hold!(st, st.vx, st.vy)
-        end
-        if st.nb_kind == NB_KIND_LJ
-            if st.sigma_particle === nothing
-                if st.bonds === nothing
-                    NonBondedForces.lj_forces_soa_noE!(st.vx, st.vy, st.f0x, st.f0y, st.nbh, st.box2::Definitions.Box2, st.pair_lj)
-                else
-                    NonBondedForces.lj_forces_soa_noE_excl!(st.vx, st.vy, st.f0x, st.f0y, st.nbh, st.bonds, st.box2::Definitions.Box2, st.pair_lj)
-                end
-            else
-                NonBondedForces.lj_forces_soa_noE_mixed!(st.vx, st.vy, st.f0x, st.f0y,
-                                                         st.nbh, st.box2::Definitions.Box2,
-                                                         st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
-            end
-        elseif st.nb_kind == NB_KIND_WCA
-            if st.sigma_pair !== nothing
-                NonBondedForces.wca_forces_soa_noE_pairs!(st.vx, st.vy, st.f0x, st.f0y,
-                                                         st.nbh, st.box2::Definitions.Box2,
-                                                         st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
-            elseif st.sigma_particle !== nothing
-                NonBondedForces.wca_forces_soa_noE_mixed!(st.vx, st.vy, st.f0x, st.f0y,
-                                                         st.nbh, st.box2::Definitions.Box2,
-                                                         st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
-            else
-                if st.bonds === nothing
-                    NonBondedForces.wca_forces_soa_noE!(st.vx, st.vy, st.f0x, st.f0y, st.nbh, st.box2::Definitions.Box2, st.pair_lj)
-                else
-                    NonBondedForces.wca_forces_soa_noE_excl!(st.vx, st.vy, st.f0x, st.f0y, st.nbh, st.bonds, st.box2::Definitions.Box2, st.pair_lj)
-                end
-            end
-        else
-            @assert st.softrep !== nothing "softrep params missing"
-            if st.bonds === nothing
-                NonBondedForces.harmonic_rep_forces_soa_noE!(st.vx, st.vy, st.f0x, st.f0y,
-                                                              st.nbh, st.box2::Definitions.Box2, st.softrep)
-            else
-                NonBondedForces.harmonic_rep_forces_soa_noE_excl!(st.vx, st.vy, st.f0x, st.f0y,
-                                                                  st.nbh, st.bonds, st.box2::Definitions.Box2, st.softrep)
-            end
-        end
-        if st.bonds !== nothing
-            _apply_bonds2!(st, st.f0x, st.f0y, nothing, false)
-        end
-        if freeze_spring
-            _apply_freeze_spring!(st, st.vx, st.vy, st.f0x, st.f0y, nothing, false)
-        end
-        # Finalize step using forces at midpoint (in f0*) and same noise
-        BrownianIntegrators.bd_finish_step_2d!(
-            st.rx, st.ry, st.f0x, st.f0y,
-            st.rf_x, st.rf_y,
-            bp.gamma, bp.noise_scale,
-            dtT, st.dq, st.dU, st.box2::Definitions.Box2;
-            unwrapped_x=st.rx_unwrap, unwrapped_y=st.ry_unwrap)
-        if freeze_hold
-            _apply_freeze_hold_positions!(st)
-        end
-        _collisions_update_after_positions!(st)
-        _compute_final_nonbonded2!(st, compute_energy)
-        _finalize_force_eval2!(st, compute_energy, freeze_spring)
-    else
-        BrownianIntegrators.bd_prepare_noise_3d!(st.rf_x, st.rf_y, st.rf_z;
-                                                 noise_scale=bp.noise_scale,
-                                                 corr_time=bp.corr_time,
-                                                 state_x=st.ou_x, state_y=st.ou_y, state_z=st.ou_z,
-                                                 dt=dtT)
-        BrownianIntegrators.bd_midpoint_positions_3d!(
-            st.rx, st.ry, st.rz, st.fx, st.fy, st.fz,
-            st.rf_x, st.rf_y, st.rf_z,
-            st.vx, st.vy, st.vz,
-            bp.gamma, bp.noise_scale,
-            dtT, st.box3::Definitions.Box3)
-        if freeze_hold
-            _apply_freeze_hold!(st, st.vx, st.vy, st.vz)
-        end
-        if st.nb_kind == NB_KIND_LJ
-            if st.sigma_particle === nothing
-                if st.bonds === nothing
-                    NonBondedForces.lj_forces_soa_noE!(st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z, st.nbh, st.box3::Definitions.Box3, st.pair_lj)
-                else
-                    NonBondedForces.lj_forces_soa_noE_excl!(st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z, st.nbh, st.bonds, st.box3::Definitions.Box3, st.pair_lj)
-                end
-            else
-                NonBondedForces.lj_forces_soa_noE_mixed!(st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z,
-                                                         st.nbh, st.box3::Definitions.Box3,
-                                                         st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
-            end
-        elseif st.nb_kind == NB_KIND_WCA
-            if st.sigma_pair !== nothing
-                NonBondedForces.wca_forces_soa_noE_pairs!(st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z,
-                                                         st.nbh, st.box3::Definitions.Box3,
-                                                         st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
-            elseif st.sigma_particle !== nothing
-                NonBondedForces.wca_forces_soa_noE_mixed!(st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z,
-                                                         st.nbh, st.box3::Definitions.Box3,
-                                                         st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
-            else
-                if st.bonds === nothing
-                    NonBondedForces.wca_forces_soa_noE!(st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z, st.nbh, st.box3::Definitions.Box3, st.pair_lj)
-                else
-                    NonBondedForces.wca_forces_soa_noE_excl!(st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z, st.nbh, st.bonds, st.box3::Definitions.Box3, st.pair_lj)
-                end
-            end
-        else
-            @assert st.softrep !== nothing "softrep params missing"
-            if st.bonds === nothing
-                NonBondedForces.harmonic_rep_forces_soa_noE!(st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z,
-                                                              st.nbh, st.box3::Definitions.Box3, st.softrep)
-            else
-                NonBondedForces.harmonic_rep_forces_soa_noE_excl!(st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z,
-                                                                  st.nbh, st.bonds, st.box3::Definitions.Box3, st.softrep)
-            end
-        end
-        if st.bonds !== nothing
-            _apply_bonds3!(st, st.f0x, st.f0y, st.f0z, nothing, false)
-        end
-        if freeze_spring
-            _apply_freeze_spring!(st, st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z, nothing, false)
-        end
-        BrownianIntegrators.bd_finish_step_3d!(
-            st.rx, st.ry, st.rz,
-            st.f0x, st.f0y, st.f0z,
-            st.rf_x, st.rf_y, st.rf_z,
-            bp.gamma, bp.noise_scale,
-            dtT, st.dq, st.dU, st.box3::Definitions.Box3;
-            unwrapped_x=st.rx_unwrap, unwrapped_y=st.ry_unwrap, unwrapped_z=st.rz_unwrap)
-        if freeze_hold
-            _apply_freeze_hold_positions!(st)
-        end
-        _collisions_update_after_positions!(st)
-        _compute_final_nonbonded3!(st, compute_energy)
-        _finalize_force_eval3!(st, compute_energy, freeze_spring)
-    end
-
-    st.step += 1
     return nothing
+end
+
+function ensure_integrator_workspace!(spec::CSVRSpec{T},
+                                      st::SimulationState{T}) where {T<:AbstractFloat}
+    p = spec.params
+    ws = spec.workspace
+    B = length(p.target_temperature)
+    N = length(st.rx)
+
+    if length(ws.target_temperature) != B
+        ws.target_temperature = CUDA.zeros(T, B)
+    end
+    copyto!(ws.target_temperature, p.target_temperature)
+
+    if length(ws.tau) != B
+        ws.tau = CUDA.zeros(T, B)
+    end
+    copyto!(ws.tau, p.tau)
+
+    if length(ws.particle_bath_id) != N
+        ws.particle_bath_id = CUDA.fill(Int32(1), N)
+        ws.kinetic_initialized = false
+        ws.dof_dirty = true
+    end
+    if length(ws.bath_counts) != B
+        ws.bath_counts = CUDA.zeros(Int32, B)
+        ws.dof_dirty = true
+    end
+    if length(ws.dof_per_bath) != B
+        ws.dof_per_bath = CUDA.zeros(T, B)
+        ws.dof_dirty = true
+    end
+    if length(ws.kinetic_total_per_bath) != B
+        ws.kinetic_total_per_bath = CUDA.zeros(T, B)
+        ws.kinetic_initialized = false
+    end
+    if length(ws.cumulative_energy_exchange_per_bath) != B
+        ws.cumulative_energy_exchange_per_bath = CUDA.zeros(T, B)
+    end
+    if length(ws.last_velocity_scale_per_bath) != B
+        ws.last_velocity_scale_per_bath = CUDA.fill(one(T), B)
+    end
+
+    if st.step == 0
+        ws.kinetic_initialized = false
+    end
+    return nothing
+end
+
+function execute_integrator_stage!(spec::VVSpec{T},
+                                   st::SimulationState{T},
+                                   dt::T,
+                                   stage_tag;
+                                   compute_energy::Bool=true,
+                                   freeze_hold::Bool=false,
+                                   freeze_spring::Bool=false) where {T<:AbstractFloat}
+    params = spec.params
+    ws = spec.workspace
+
+    if stage_tag === :kick1
+        _prepare_langevin_noise!(params, ws, st, dt)
+    elseif stage_tag === :drift
+        if _is_3d(st)
+            LangevinIntegrators.vv_positions_soa!(st.rx, st.ry, st.rz,
+                                                  st.vx, st.vy, st.vz,
+                                                  st.f0x, st.f0y, st.f0z,
+                                                  ws.rf_x, ws.rf_y, ws.rf_z,
+                                                  params, dt, st.box3::Definitions.Box3;
+                                                  unwrapped_x=st.rx_unwrap,
+                                                  unwrapped_y=st.ry_unwrap,
+                                                  unwrapped_z=st.rz_unwrap)
+        else
+            LangevinIntegrators.vv_positions_soa!(st.rx, st.ry,
+                                                  st.vx, st.vy,
+                                                  st.f0x, st.f0y,
+                                                  ws.rf_x, ws.rf_y,
+                                                  params, dt, st.box2::Definitions.Box2;
+                                                  unwrapped_x=st.rx_unwrap,
+                                                  unwrapped_y=st.ry_unwrap)
+        end
+        apply_post_position_hooks!(st, :after_drift; freeze_hold=freeze_hold)
+    elseif stage_tag === :force
+        evaluate_forces_into_f!(st, compute_energy; freeze_spring=freeze_spring)
+    elseif stage_tag === :kick2
+        if _is_3d(st)
+            LangevinIntegrators.vv_velocities_soa!(st.vx, st.vy, st.vz,
+                                                   st.f0x, st.f0y, st.f0z,
+                                                   st.fx, st.fy, st.fz,
+                                                   ws.rf_x, ws.rf_y, ws.rf_z,
+                                                   st.dq, st.dU, st.Ekin,
+                                                   params, dt)
+        else
+            LangevinIntegrators.vv_velocities_soa!(st.vx, st.vy,
+                                                   st.f0x, st.f0y,
+                                                   st.fx, st.fy,
+                                                   ws.rf_x, ws.rf_y,
+                                                   st.dq, st.dU, st.Ekin,
+                                                   params, dt)
+        end
+    else
+        throw(ArgumentError("Unsupported stage $(stage_tag) for $(integrator_name(spec))."))
+    end
+
+    return nothing
+end
+
+function _execute_baoab_family_stage!(params::LangevinIntegrators.BAOABParams{T},
+                                      ws::StochasticWorkspace{T},
+                                      st::SimulationState{T},
+                                      stage_tag::Symbol,
+                                      dt::T;
+                                      compute_energy::Bool,
+                                      freeze_hold::Bool,
+                                      freeze_spring::Bool) where {T<:AbstractFloat}
+    if stage_tag === :B1
+        if _is_3d(st)
+            LangevinIntegrators.baoab_B_3d!(st.vx, st.vy, st.vz,
+                                            st.f0x, st.f0y, st.f0z,
+                                            params, dt, st.Ekin, st.dU)
+        else
+            LangevinIntegrators.baoab_B_2d!(st.vx, st.vy,
+                                            st.f0x, st.f0y,
+                                            params, dt, st.Ekin, st.dU)
+        end
+    elseif stage_tag === :A1 || stage_tag === :A2
+        if _is_3d(st)
+            LangevinIntegrators.baoab_A_3d!(st.rx, st.ry, st.rz,
+                                            st.vx, st.vy, st.vz,
+                                            dt, st.box3::Definitions.Box3;
+                                            unwrapped_x=st.rx_unwrap,
+                                            unwrapped_y=st.ry_unwrap,
+                                            unwrapped_z=st.rz_unwrap)
+        else
+            LangevinIntegrators.baoab_A_2d!(st.rx, st.ry,
+                                            st.vx, st.vy,
+                                            dt, st.box2::Definitions.Box2;
+                                            unwrapped_x=st.rx_unwrap,
+                                            unwrapped_y=st.ry_unwrap)
+        end
+        apply_post_position_hooks!(st, stage_tag === :A1 ? :after_drift : :after_final_position;
+                                   freeze_hold=freeze_hold)
+    elseif stage_tag === :O
+        _prepare_langevin_noise!(params, ws, st, dt)
+        if _is_3d(st)
+            LangevinIntegrators.baoab_OU_3d!(st.vx, st.vy, st.vz,
+                                             ws.rf_x, ws.rf_y, ws.rf_z,
+                                             params, dt, st.dq)
+        else
+            LangevinIntegrators.baoab_OU_2d!(st.vx, st.vy,
+                                             ws.rf_x, ws.rf_y,
+                                             params, dt, st.dq)
+        end
+    elseif stage_tag === :force
+        evaluate_forces_into_f!(st, compute_energy; freeze_spring=freeze_spring)
+    elseif stage_tag === :B2
+        if _is_3d(st)
+            LangevinIntegrators.baoab_B_3d!(st.vx, st.vy, st.vz,
+                                            st.fx, st.fy, st.fz,
+                                            params, dt, st.Ekin, st.dU)
+        else
+            LangevinIntegrators.baoab_B_2d!(st.vx, st.vy,
+                                            st.fx, st.fy,
+                                            params, dt, st.Ekin, st.dU)
+        end
+    else
+        throw(ArgumentError("Unsupported stage $(stage_tag) for BAOAB-family integrator."))
+    end
+    return nothing
+end
+
+function execute_integrator_stage!(spec::Union{BAOABSpec{T},GSMSpec{T}},
+                                   st::SimulationState{T},
+                                   dt::T,
+                                   stage_tag;
+                                   compute_energy::Bool=true,
+                                   freeze_hold::Bool=false,
+                                   freeze_spring::Bool=false) where {T<:AbstractFloat}
+    return _execute_baoab_family_stage!(spec.params, spec.workspace, st, stage_tag, dt;
+                                        compute_energy=compute_energy,
+                                        freeze_hold=freeze_hold,
+                                        freeze_spring=freeze_spring)
+end
+
+function execute_integrator_stage!(spec::BAOASpec{T},
+                                   st::SimulationState{T},
+                                   dt::T,
+                                   stage_tag;
+                                   compute_energy::Bool=true,
+                                   freeze_hold::Bool=false,
+                                   freeze_spring::Bool=false) where {T<:AbstractFloat}
+    params = spec.params
+    ws = spec.workspace
+
+    if stage_tag === :B1
+        if _is_3d(st)
+            LangevinIntegrators.baoab_B_3d!(st.vx, st.vy, st.vz,
+                                            st.f0x, st.f0y, st.f0z,
+                                            params, T(2) * dt, st.Ekin, st.dU)
+        else
+            LangevinIntegrators.baoab_B_2d!(st.vx, st.vy,
+                                            st.f0x, st.f0y,
+                                            params, T(2) * dt, st.Ekin, st.dU)
+        end
+    elseif stage_tag === :A1 || stage_tag === :A2
+        if _is_3d(st)
+            LangevinIntegrators.baoab_A_3d!(st.rx, st.ry, st.rz,
+                                            st.vx, st.vy, st.vz,
+                                            dt, st.box3::Definitions.Box3;
+                                            unwrapped_x=st.rx_unwrap,
+                                            unwrapped_y=st.ry_unwrap,
+                                            unwrapped_z=st.rz_unwrap)
+        else
+            LangevinIntegrators.baoab_A_2d!(st.rx, st.ry,
+                                            st.vx, st.vy,
+                                            dt, st.box2::Definitions.Box2;
+                                            unwrapped_x=st.rx_unwrap,
+                                            unwrapped_y=st.ry_unwrap)
+        end
+        apply_post_position_hooks!(st, stage_tag === :A1 ? :after_drift : :after_final_position;
+                                   freeze_hold=freeze_hold)
+    elseif stage_tag === :O
+        _prepare_langevin_noise!(params, ws, st, dt)
+        if _is_3d(st)
+            LangevinIntegrators.baoab_OU_3d!(st.vx, st.vy, st.vz,
+                                             ws.rf_x, ws.rf_y, ws.rf_z,
+                                             params, dt, st.dq)
+        else
+            LangevinIntegrators.baoab_OU_2d!(st.vx, st.vy,
+                                             ws.rf_x, ws.rf_y,
+                                             params, dt, st.dq)
+        end
+    elseif stage_tag === :force
+        evaluate_forces_into_f!(st, compute_energy; freeze_spring=freeze_spring)
+    elseif stage_tag === :power
+        if _is_3d(st)
+            LangevinIntegrators.cons_power_3d!(st.vx, st.vy, st.vz,
+                                               st.fx, st.fy, st.fz,
+                                               st.dU)
+        else
+            LangevinIntegrators.cons_power_2d!(st.vx, st.vy,
+                                               st.fx, st.fy,
+                                               st.dU)
+        end
+    elseif stage_tag === :kinetic_refresh
+        if _is_3d(st)
+            LangevinIntegrators.baoab_B_3d!(st.vx, st.vy, st.vz,
+                                            st.fx, st.fy, st.fz,
+                                            params, T(0), st.Ekin, st.dU)
+        else
+            LangevinIntegrators.baoab_B_2d!(st.vx, st.vy,
+                                            st.fx, st.fy,
+                                            params, T(0), st.Ekin, st.dU)
+        end
+    else
+        throw(ArgumentError("Unsupported stage $(stage_tag) for $(integrator_name(spec))."))
+    end
+
+    return nothing
+end
+
+function _execute_brownian_midpoint_stage!(params::Union{BrownianIntegrators.BrownianParams{T},BrownianIntegrators.EMParams{T}},
+                                           ws::StochasticWorkspace{T},
+                                           st::SimulationState{T},
+                                           stage_tag::Symbol,
+                                           dt::T;
+                                           compute_energy::Bool,
+                                           freeze_hold::Bool,
+                                           freeze_spring::Bool) where {T<:AbstractFloat}
+    if stage_tag === :midpoint_predict
+        _prepare_brownian_noise!(params, ws, st, dt)
+        if _is_3d(st)
+            BrownianIntegrators.bd_midpoint_positions_3d!(st.rx, st.ry, st.rz,
+                                                          st.fx, st.fy, st.fz,
+                                                          ws.rf_x, ws.rf_y, ws.rf_z,
+                                                          st.vx, st.vy, st.vz,
+                                                          params.gamma, params.noise_scale,
+                                                          dt, st.box3::Definitions.Box3)
+            if freeze_hold
+                _apply_freeze_hold!(st, st.vx, st.vy, st.vz)
+            end
+        else
+            BrownianIntegrators.bd_midpoint_positions_2d!(st.rx, st.ry,
+                                                          st.fx, st.fy,
+                                                          ws.rf_x, ws.rf_y,
+                                                          st.vx, st.vy,
+                                                          params.gamma, params.noise_scale,
+                                                          dt, st.box2::Definitions.Box2)
+            if freeze_hold
+                _apply_freeze_hold!(st, st.vx, st.vy)
+            end
+        end
+    elseif stage_tag === :midpoint_force
+        evaluate_midpoint_forces_into_f0!(st; freeze_spring=freeze_spring)
+    elseif stage_tag === :final_position
+        if _is_3d(st)
+            BrownianIntegrators.bd_finish_step_3d!(st.rx, st.ry, st.rz,
+                                                   st.f0x, st.f0y, st.f0z,
+                                                   ws.rf_x, ws.rf_y, ws.rf_z,
+                                                   params.gamma, params.noise_scale,
+                                                   dt, st.dq, st.dU,
+                                                   st.box3::Definitions.Box3;
+                                                   unwrapped_x=st.rx_unwrap,
+                                                   unwrapped_y=st.ry_unwrap,
+                                                   unwrapped_z=st.rz_unwrap)
+        else
+            BrownianIntegrators.bd_finish_step_2d!(st.rx, st.ry,
+                                                   st.f0x, st.f0y,
+                                                   ws.rf_x, ws.rf_y,
+                                                   params.gamma, params.noise_scale,
+                                                   dt, st.dq, st.dU,
+                                                   st.box2::Definitions.Box2;
+                                                   unwrapped_x=st.rx_unwrap,
+                                                   unwrapped_y=st.ry_unwrap)
+        end
+        apply_post_position_hooks!(st, :after_final_position; freeze_hold=freeze_hold)
+    elseif stage_tag === :force
+        evaluate_forces_into_f!(st, compute_energy; freeze_spring=freeze_spring)
+    else
+        throw(ArgumentError("Unsupported stage $(stage_tag) for Brownian-family integrator."))
+    end
+
+    return nothing
+end
+
+function execute_integrator_stage!(spec::BrownianSpec{T},
+                                   st::SimulationState{T},
+                                   dt::T,
+                                   stage_tag;
+                                   compute_energy::Bool=true,
+                                   freeze_hold::Bool=false,
+                                   freeze_spring::Bool=false) where {T<:AbstractFloat}
+    return _execute_brownian_midpoint_stage!(spec.params, spec.workspace, st, stage_tag, dt;
+                                             compute_energy=compute_energy,
+                                             freeze_hold=freeze_hold,
+                                             freeze_spring=freeze_spring)
+end
+
+function execute_integrator_stage!(spec::EMSpec{T},
+                                   st::SimulationState{T},
+                                   dt::T,
+                                   stage_tag;
+                                   compute_energy::Bool=true,
+                                   freeze_hold::Bool=false,
+                                   freeze_spring::Bool=false) where {T<:AbstractFloat}
+    return _execute_brownian_midpoint_stage!(spec.params, spec.workspace, st, stage_tag, dt;
+                                             compute_energy=compute_energy,
+                                             freeze_hold=freeze_hold,
+                                             freeze_spring=freeze_spring)
+end
+
+function execute_integrator_stage!(spec::NHCSpec{T},
+                                   st::SimulationState{T},
+                                   dt::T,
+                                   stage_tag;
+                                   compute_energy::Bool=true,
+                                   freeze_hold::Bool=false,
+                                   freeze_spring::Bool=false) where {T<:AbstractFloat}
+    p = spec.params
+    ws = spec.workspace
+
+    if stage_tag === :thermostat_pre
+        _apply_nhc_thermostat_stage!(spec, st, dt / T(2))
+    elseif stage_tag === :kick1
+        _nhc_apply_half_kick!(st, st.f0x, st.f0y, st.f0z, dt, p.mass, ws.kinetic_total_per_bath, ws.particle_bath_id)
+    elseif stage_tag === :drift
+        _nhc_drift_positions!(st, dt)
+        apply_post_position_hooks!(st, :after_drift; freeze_hold=freeze_hold)
+    elseif stage_tag === :force
+        evaluate_forces_into_f!(st, compute_energy; freeze_spring=freeze_spring)
+    elseif stage_tag === :kick2
+        _nhc_apply_half_kick!(st, st.fx, st.fy, st.fz, dt, p.mass, ws.kinetic_total_per_bath, ws.particle_bath_id)
+    elseif stage_tag === :thermostat_post
+        _apply_nhc_thermostat_stage!(spec, st, dt / T(2))
+    else
+        throw(ArgumentError("Unsupported stage $(stage_tag) for $(integrator_name(spec))."))
+    end
+
+    return nothing
+end
+
+function execute_integrator_stage!(spec::CSVRSpec{T},
+                                   st::SimulationState{T},
+                                   dt::T,
+                                   stage_tag;
+                                   compute_energy::Bool=true,
+                                   freeze_hold::Bool=false,
+                                   freeze_spring::Bool=false) where {T<:AbstractFloat}
+    p = spec.params
+    ws = spec.workspace
+
+    if stage_tag === :kick1
+        _nhc_apply_half_kick!(st, st.f0x, st.f0y, st.f0z, dt, p.mass, ws.kinetic_total_per_bath, ws.particle_bath_id)
+    elseif stage_tag === :drift
+        _nhc_drift_positions!(st, dt)
+        apply_post_position_hooks!(st, :after_drift; freeze_hold=freeze_hold)
+    elseif stage_tag === :force
+        evaluate_forces_into_f!(st, compute_energy; freeze_spring=freeze_spring)
+    elseif stage_tag === :kick2
+        _nhc_apply_half_kick!(st, st.fx, st.fy, st.fz, dt, p.mass, ws.kinetic_total_per_bath, ws.particle_bath_id)
+    elseif stage_tag === :thermostat
+        _apply_csvr_thermostat_stage!(spec, st, dt)
+    else
+        throw(ArgumentError("Unsupported stage $(stage_tag) for $(integrator_name(spec))."))
+    end
+
+    return nothing
+end
+
+"""
+    run_integrator_step!(st, spec, dt; compute_energy=true)
+
+Shared stage-driven step engine. Integrator-independent orchestration lives
+here, while stage-specific work is delegated through the integrator protocol.
+"""
+function run_integrator_step!(st::SimulationState{T},
+                              spec::IntegratorSpec{T},
+                              dt::T;
+                              compute_energy::Bool=true) where {T<:AbstractFloat}
+    validate_integrator_inputs!(spec, st, dt)
+
+    freeze_active = _freeze_active!(st)
+    freeze_hold = freeze_active && st.freeze_mode == FREEZE_HOLD
+    freeze_spring = freeze_active && st.freeze_mode == FREEZE_SPRING
+
+    rebuild_needed = plan_neighbor_rebuild!(st, dt)
+    apply_neighbor_rebuild_if_needed!(st, rebuild_needed)
+
+    prepare_previous_force_buffers!(st, spec)
+    ensure_reference_forces_ready!(st, spec, compute_energy, freeze_spring)
+    ensure_integrator_workspace!(spec, st)
+
+    for stage_tag in stage_sequence(spec)
+        _trace_integrator_stage!(st, spec, stage_tag;
+                                 force_evaluated=(stage_tag == :force),
+                                 rebuild_applied=rebuild_needed)
+        execute_integrator_stage!(spec, st, dt, stage_tag;
+                                  compute_energy=compute_energy,
+                                  freeze_hold=freeze_hold,
+                                  freeze_spring=freeze_spring)
+    end
+
+    finalize_step_accounting!(st, spec, compute_energy)
+    finalize_step_counter!(st, integrator_id(spec))
+    return nothing
+end
+
+# -----------------------------------------------------------------------------
+# Public stepping API
+# -----------------------------------------------------------------------------
+
+"""
+    step!(st, spec, dt; compute_energy=true)
+
+Canonical explicit stepping API.
+"""
+function step!(st::SimulationState{T},
+               spec::IntegratorSpec{T},
+               dt::Real;
+               compute_energy::Bool=true) where {T<:AbstractFloat}
+    return run_integrator_step!(st, spec, T(dt); compute_energy=compute_energy)
+end
+
+"""
+    step_graph!(st, spec, dt; compute_energy=true)
+
+Graph-entry stepping API with explicit integrator selection. It currently
+shares the same stage-driven engine as [`step!`](@ref).
+"""
+function step_graph!(st::SimulationState{T},
+                     spec::IntegratorSpec{T},
+                     dt::Real;
+                     compute_energy::Bool=true) where {T<:AbstractFloat}
+    return run_integrator_step!(st, spec, T(dt); compute_energy=compute_energy)
+end
+
+"""
+    step!(st, vv, dt; compute_energy=true)
+
+Compatibility wrapper for explicit `VVParams` stepping.
+"""
+function step!(st::SimulationState{T},
+               vv::LangevinIntegrators.VVParams{T},
+               dt::Real;
+               compute_energy::Bool=true) where {T<:AbstractFloat}
+    return step!(st, VVSpec(vv), dt; compute_energy=compute_energy)
+end
+
+"""
+    step!(st, bao, dt; compute_energy=true)
+
+Compatibility wrapper for explicit `BAOABParams` stepping.
+"""
+function step!(st::SimulationState{T},
+               bao::LangevinIntegrators.BAOABParams{T},
+               dt::Real;
+               compute_energy::Bool=true) where {T<:AbstractFloat}
+    return step!(st, BAOABSpec(bao), dt; compute_energy=compute_energy)
+end
+
+"""
+    step!(st, bp, dt; compute_energy=true)
+
+Compatibility wrapper for explicit Brownian midpoint stepping.
+"""
+function step!(st::SimulationState{T},
+               bp::BrownianIntegrators.BrownianParams{T},
+               dt::Real;
+               compute_energy::Bool=true) where {T<:AbstractFloat}
+    return step!(st, BrownianSpec(bp), dt; compute_energy=compute_energy)
+end
+
+"""
+    step!(st, em, dt; compute_energy=true)
+
+Compatibility wrapper for explicit Euler–Maruyama stepping.
+"""
+function step!(st::SimulationState{T},
+               em::BrownianIntegrators.EMParams{T},
+               dt::Real;
+               compute_energy::Bool=true) where {T<:AbstractFloat}
+    return step!(st, EMSpec(em), dt; compute_energy=compute_energy)
+end
+
+"""
+    step_graph!(st, vv, dt; compute_energy=true)
+
+Compatibility wrapper for explicit `VVParams` graph stepping.
+"""
+function step_graph!(st::SimulationState{T},
+                     vv::LangevinIntegrators.VVParams{T},
+                     dt::Real;
+                     compute_energy::Bool=true) where {T<:AbstractFloat}
+    return step_graph!(st, VVSpec(vv), dt; compute_energy=compute_energy)
+end
+
+"""
+    step_graph!(st, bao, dt; compute_energy=true)
+
+Compatibility wrapper for explicit `BAOABParams` graph stepping.
+"""
+function step_graph!(st::SimulationState{T},
+                     bao::LangevinIntegrators.BAOABParams{T},
+                     dt::Real;
+                     compute_energy::Bool=true) where {T<:AbstractFloat}
+    return step_graph!(st, BAOABSpec(bao), dt; compute_energy=compute_energy)
+end
+
+"""
+    step_graph!(st, bp, dt; compute_energy=true)
+
+Compatibility wrapper for explicit Brownian midpoint graph stepping.
+"""
+function step_graph!(st::SimulationState{T},
+                     bp::BrownianIntegrators.BrownianParams{T},
+                     dt::Real;
+                     compute_energy::Bool=true) where {T<:AbstractFloat}
+    return step_graph!(st, BrownianSpec(bp), dt; compute_energy=compute_energy)
+end
+
+"""
+    step_graph!(st, em, dt; compute_energy=true)
+
+Compatibility wrapper for explicit Euler-Maruyama graph stepping.
+"""
+function step_graph!(st::SimulationState{T},
+                     em::BrownianIntegrators.EMParams{T},
+                     dt::Real;
+                     compute_energy::Bool=true) where {T<:AbstractFloat}
+    return step_graph!(st, EMSpec(em), dt; compute_energy=compute_energy)
+end
+
+"""
+    step_graph!(st, nhc, dt; compute_energy=true)
+
+Compatibility wrapper for explicit Nose-Hoover chain graph stepping.
+"""
+function step_graph!(st::SimulationState{T},
+                     nhc::NHCParams{T},
+                     dt::Real;
+                     compute_energy::Bool=true) where {T<:AbstractFloat}
+    return step_graph!(st, NHCSpec(nhc), dt; compute_energy=compute_energy)
+end
+
+"""
+    step_graph!(st, csvr_params, dt; compute_energy=true)
+
+Compatibility wrapper for explicit CSVR graph stepping.
+"""
+function step_graph!(st::SimulationState{T},
+                     csvr_params::CSVRParams{T},
+                     dt::Real;
+                     compute_energy::Bool=true) where {T<:AbstractFloat}
+    return step_graph!(st, CSVRSpec(csvr_params), dt; compute_energy=compute_energy)
+end
+
+"""
+    step!(st, nhc, dt; compute_energy=true)
+
+Compatibility wrapper for explicit Nose-Hoover Chain parameter stepping.
+"""
+function step!(st::SimulationState{T},
+               nhc::NHCParams{T},
+               dt::Real;
+               compute_energy::Bool=true) where {T<:AbstractFloat}
+    return step!(st,
+                 NHCSpec{T}(nhc, _new_nhc_workspace(T,
+                                                    nhc.chain_length,
+                                                    length(nhc.target_temperature),
+                                                    length(st.rx))),
+                 dt;
+                 compute_energy=compute_energy)
+end
+
+"""
+    step!(st, csvr_params, dt; compute_energy=true)
+
+Compatibility wrapper for explicit CSVR parameter stepping.
+"""
+function step!(st::SimulationState{T},
+               csvr_params::CSVRParams{T},
+               dt::Real;
+               compute_energy::Bool=true) where {T<:AbstractFloat}
+    return step!(st,
+                 CSVRSpec{T}(csvr_params,
+                             _new_csvr_workspace(T,
+                                                 length(csvr_params.target_temperature),
+                                                 length(st.rx))),
+                 dt;
+                 compute_energy=compute_energy)
 end
 
 """
     step_bd!(st, dt, bp; compute_energy=true)
 
-Deprecated thin wrapper. Use `step!(st, bp, dt; ...)` instead.
+Deprecated thin wrapper. Use `step!(st, bp, dt; ...)`.
 """
-function step_bd!(st::SimulationState{T}, dt::Real, bp::BrownianIntegrators.BrownianParams{T}; compute_energy::Bool=true) where {T<:AbstractFloat}
-    return step!(st, bp, T(dt); compute_energy)
+function step_bd!(st::SimulationState{T},
+                  dt::Real,
+                  bp::BrownianIntegrators.BrownianParams{T};
+                  compute_energy::Bool=true) where {T<:AbstractFloat}
+    return step!(st, bp, dt; compute_energy=compute_energy)
 end
-"""
-    step!(st, em::BrownianIntegrators.EMParams{T}, dt; compute_energy=true)
 
-Euler–Maruyama overdamped step with additive noise: Δr = μ f Δt + √(2DΔt) ξ.
-Accumulates conservative work w = f · Δr into dq (heat) and dU (conservative power proxy).
-"""
-function step!(st::SimulationState{T}, em::BrownianIntegrators.EMParams{T}, dt::Real; compute_energy::Bool=true) where {T<:AbstractFloat}
-    dtT = T(dt)
-    _require_positive_gamma!(em.gamma, "Euler-Maruyama")
-    freeze_active = _freeze_active!(st)
-    freeze_hold = freeze_active && st.freeze_mode == FREEZE_HOLD
-    freeze_spring = freeze_active && st.freeze_mode == FREEZE_SPRING
-    st.last_integrator = UInt8(2)
-    D = st.rz === nothing ? 2 : 3
-    _ensure_ou_state!(st, em.corr_time)
+# -----------------------------------------------------------------------------
+# Observables and thermostat metadata
+# -----------------------------------------------------------------------------
 
-    # Neighbor-list maintenance (mirror Brownian EH implementation)
-    do_check = (st.step % st.neigh_interval == 0)
-    if do_check
-        rebuild_needed = if D == 2
-            NeighborLists.update_needed!(st.nbh, st.rx, st.ry;
-                                        skin=st.nbh.skin,
-                                        Lx=st.box2[1], Ly=st.box2[2],
-                                        step=st.step)
-        else
-            NeighborLists.update_needed!(st.nbh, st.rx, st.ry, st.rz;
-                                        skin=st.nbh.skin,
-                                        Lx=st.box3[1], Ly=st.box3[2], Lz=st.box3[3],
-                                        step=st.step)
-        end
-        if rebuild_needed
-            if D == 2
-                NeighborLists.update_neighbors_inplace!(st.nbh, st.rx, st.ry; box = st.box2, step=st.step)
-                _collisions_reinit_on_rebuild!(st)
-            else
-                NeighborLists.update_neighbors_inplace!(st.nbh, st.rx, st.ry, st.rz; box = st.box3, step=st.step)
-                _collisions_reinit_on_rebuild!(st)
+"""
+    thermostatted_particle_mask(st, spec)
+
+Return a mask of particles thermostatted by `spec`. `nothing` means all
+particles are currently thermostatted.
+"""
+function thermostatted_particle_mask(st::SimulationState,
+                                     spec::IntegratorSpec)
+    if st.freeze_mask === nothing || st.freeze_mode == FREEZE_NONE
+        return nothing
+    end
+    return ifelse.(st.freeze_mask .== UInt8(0), UInt8(1), UInt8(0))
+end
+
+function thermostatted_particle_mask(st::SimulationState,
+                                     spec::NHCSpec)
+    if st.freeze_mask === nothing || st.freeze_mode == FREEZE_NONE
+        return nothing
+    end
+    return ifelse.(st.freeze_mask .== UInt8(0), UInt8(1), UInt8(0))
+end
+
+"""
+    thermostatted_dof(st, spec) -> Int
+
+Return the physical degrees of freedom acted on by the thermostat.
+"""
+function thermostatted_dof(st::SimulationState,
+                           spec::IntegratorSpec)
+    D = _is_3d(st) ? 3 : 2
+    mask = thermostatted_particle_mask(st, spec)
+    if mask === nothing
+        return D * length(st.rx)
+    end
+    ntherm = Int(CUDA.sum(Int32.(mask)))
+    return D * ntherm
+end
+
+function thermostatted_dof(st::SimulationState,
+                           spec::NHCSpec)
+    D = _is_3d(st) ? 3 : 2
+    mask = thermostatted_particle_mask(st, spec)
+    if mask === nothing
+        return D * length(st.rx)
+    end
+    ntherm = Int(CUDA.sum(Int32.(mask)))
+    return D * ntherm
+end
+
+@inline _device_scalar(x::CuArray{T,1}) where {T<:AbstractFloat} = T(Array(x)[1])
+
+function collect_integrator_observables(spec::NHCSpec{T},
+                                        st::SimulationState{T}) where {T<:AbstractFloat}
+    p = spec.params
+    ws = spec.workspace
+    _nhc_update_dof_per_bath!(spec, st)
+    Ekin_total = T(CUDA.sum(st.Ekin))
+    Epot_total = T(CUDA.sum(st.Epot))
+    dof_b = Array(ws.dof_per_bath)
+    K_b = Array(ws.kinetic_total_per_bath)
+    target_b = p.target_temperature
+    tau_b = p.tau
+    scale_b = Array(ws.last_velocity_scale_per_bath)
+    total_dof = sum(dof_b)
+
+    weighted_target = zero(T)
+    weighted_error = zero(T)
+    if total_dof > zero(T)
+        weighted_target = sum(target_b .* dof_b) / total_dof
+        @inbounds for b in eachindex(target_b)
+            dof = dof_b[b]
+            if dof > zero(T)
+                Tinst = T(2) * K_b[b] / dof
+                weighted_error += (Tinst - target_b[b]) * dof
             end
         end
+        weighted_error /= total_dof
     end
 
-    # Ensure forces at t
-    if st.step == 0
-        if D == 2
-            if st.nb_kind == NB_KIND_LJ
-                if st.sigma_particle === nothing
-                    if st.bonds === nothing
-                        NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.nbh, st.box2::Definitions.Box2, st.pair_lj)
-                    else
-                        NonBondedForces.lj_forces_soa_excl!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.nbh, st.bonds, st.box2::Definitions.Box2, st.pair_lj)
-                    end
-                else
-                    NonBondedForces.lj_forces_soa_mixed!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.nbh, st.box2::Definitions.Box2, st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
-                end
-            elseif st.nb_kind == NB_KIND_WCA
-                if st.sigma_pair !== nothing
-                    NonBondedForces.wca_forces_soa_pairs!(st.rx, st.ry, st.fx, st.fy, st.Epot,
-                                                         st.nbh, st.box2::Definitions.Box2,
-                                                         st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
-                elseif st.sigma_particle !== nothing
-                    NonBondedForces.wca_forces_soa_mixed!(st.rx, st.ry, st.fx, st.fy, st.Epot,
-                                                         st.nbh, st.box2::Definitions.Box2,
-                                                         st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
-                else
-                    if st.bonds === nothing
-                        NonBondedForces.wca_forces_soa!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.nbh, st.box2::Definitions.Box2, st.pair_lj)
-                    else
-                        NonBondedForces.wca_forces_soa_excl!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.nbh, st.bonds, st.box2::Definitions.Box2, st.pair_lj)
-                    end
-                end
-            else
-                @assert st.softrep !== nothing
-                if st.bonds === nothing
-                    NonBondedForces.harmonic_rep_forces_soa!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.nbh, st.box2::Definitions.Box2, st.softrep)
-                else
-                    NonBondedForces.harmonic_rep_forces_soa_excl!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.nbh, st.bonds, st.box2::Definitions.Box2, st.softrep)
-                end
-            end
-        else
-            if st.nb_kind == NB_KIND_LJ
-                if st.sigma_particle === nothing
-                    if st.bonds === nothing
-                        NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.nbh, st.box3::Definitions.Box3, st.pair_lj)
-                    else
-                        NonBondedForces.lj_forces_soa_excl!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.nbh, st.bonds, st.box3::Definitions.Box3, st.pair_lj)
-                    end
-                else
-                    NonBondedForces.lj_forces_soa_mixed!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.nbh, st.box3::Definitions.Box3, st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
-                end
-            elseif st.nb_kind == NB_KIND_WCA
-                if st.sigma_pair !== nothing
-                    NonBondedForces.wca_forces_soa_pairs!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot,
-                                                         st.nbh, st.box3::Definitions.Box3,
-                                                         st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
-                elseif st.sigma_particle !== nothing
-                    NonBondedForces.wca_forces_soa_mixed!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot,
-                                                         st.nbh, st.box3::Definitions.Box3,
-                                                         st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
-                else
-                    if st.bonds === nothing
-                        NonBondedForces.wca_forces_soa!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.nbh, st.box3::Definitions.Box3, st.pair_lj)
-                    else
-                        NonBondedForces.wca_forces_soa_excl!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.nbh, st.bonds, st.box3::Definitions.Box3, st.pair_lj)
-                    end
-                end
-            else
-                @assert st.softrep !== nothing
-                if st.bonds === nothing
-                    NonBondedForces.harmonic_rep_forces_soa!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.nbh, st.box3::Definitions.Box3, st.softrep)
-                else
-                    NonBondedForces.harmonic_rep_forces_soa_excl!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.nbh, st.bonds, st.box3::Definitions.Box3, st.softrep)
-                end
+    thermostat_kin = T(sum(Array(ws.thermostat_kinetic_per_bath)))
+    thermostat_pot = T(sum(Array(ws.thermostat_potential_per_bath)))
+    if total_dof > zero(T)
+        acc = zero(T)
+        @inbounds for b in eachindex(scale_b)
+            if dof_b[b] > zero(T)
+                acc += log(max(scale_b[b], eps(T))) * dof_b[b]
             end
         end
-        # Include bonded interactions in the initial forces
-        if st.bonds !== nothing
-            if D == 2
-                _apply_bonds2!(st, st.fx, st.fy, compute_energy ? st.Epot : nothing, compute_energy)
-            else
-                _apply_bonds3!(st, st.fx, st.fy, st.fz, compute_energy ? st.Epot : nothing, compute_energy)
-            end
-        end
-        if freeze_spring
-            if D == 2
-                _apply_freeze_spring!(st, st.rx, st.ry, st.fx, st.fy,
-                                      compute_energy ? st.Epot : nothing, compute_energy)
-            else
-                _apply_freeze_spring!(st, st.rx, st.ry, st.rz, st.fx, st.fy, st.fz,
-                                      compute_energy ? st.Epot : nothing, compute_energy)
-            end
-        end
-    end
-
-    # Position update and dq/dU accumulation using midpoint so EPR == UPR
-    if D == 2
-        # Predictor: draw noise then compute midpoint positions into vx,vy
-        BrownianIntegrators.bd_prepare_noise_2d!(st.rf_x, st.rf_y;
-                                                 noise_scale=em.noise_scale,
-                                                 corr_time=em.corr_time,
-                                                 state_x=st.ou_x, state_y=st.ou_y,
-                                                 dt=dtT)
-        BrownianIntegrators.bd_midpoint_positions_2d!(
-            st.rx, st.ry, st.fx, st.fy,
-            st.rf_x, st.rf_y,
-            st.vx, st.vy,
-            em.gamma, em.noise_scale,
-            dtT, st.box2::Definitions.Box2)
-        if freeze_hold
-            _apply_freeze_hold!(st, st.vx, st.vy)
-        end
-        # Forces at midpoint positions (no energy)
-        if st.nb_kind == NB_KIND_LJ
-            if st.sigma_particle === nothing
-                if st.bonds === nothing
-                    NonBondedForces.lj_forces_soa_noE!(st.vx, st.vy, st.f0x, st.f0y, st.nbh, st.box2::Definitions.Box2, st.pair_lj)
-                else
-                    NonBondedForces.lj_forces_soa_noE_excl!(st.vx, st.vy, st.f0x, st.f0y, st.nbh, st.bonds, st.box2::Definitions.Box2, st.pair_lj)
-                end
-            else
-                NonBondedForces.lj_forces_soa_noE_mixed!(st.vx, st.vy, st.f0x, st.f0y,
-                                                         st.nbh, st.box2::Definitions.Box2,
-                                                         st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
-            end
-        elseif st.nb_kind == NB_KIND_WCA
-            if st.sigma_pair !== nothing
-                NonBondedForces.wca_forces_soa_noE_pairs!(st.vx, st.vy, st.f0x, st.f0y,
-                                                         st.nbh, st.box2::Definitions.Box2,
-                                                         st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
-            elseif st.sigma_particle !== nothing
-                NonBondedForces.wca_forces_soa_noE_mixed!(st.vx, st.vy, st.f0x, st.f0y,
-                                                         st.nbh, st.box2::Definitions.Box2,
-                                                         st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
-            else
-                if st.bonds === nothing
-                    NonBondedForces.wca_forces_soa_noE!(st.vx, st.vy, st.f0x, st.f0y, st.nbh, st.box2::Definitions.Box2, st.pair_lj)
-                else
-                    NonBondedForces.wca_forces_soa_noE_excl!(st.vx, st.vy, st.f0x, st.f0y, st.nbh, st.bonds, st.box2::Definitions.Box2, st.pair_lj)
-                end
-            end
-        else
-            @assert st.softrep !== nothing
-            if st.bonds === nothing
-                NonBondedForces.harmonic_rep_forces_soa_noE!(st.vx, st.vy, st.f0x, st.f0y,
-                                                              st.nbh, st.box2::Definitions.Box2, st.softrep)
-            else
-                NonBondedForces.harmonic_rep_forces_soa_noE_excl!(st.vx, st.vy, st.f0x, st.f0y,
-                                                                  st.nbh, st.bonds, st.box2::Definitions.Box2, st.softrep)
-            end
-        end
-        if st.bonds !== nothing
-            _apply_bonds2!(st, st.f0x, st.f0y, nothing, false)
-        end
-        if freeze_spring
-            _apply_freeze_spring!(st, st.vx, st.vy, st.f0x, st.f0y, nothing, false)
-        end
-        # Finish step: advance positions with midpoint force; accumulate dq and dU equally
-        BrownianIntegrators.bd_finish_step_2d!(
-            st.rx, st.ry, st.f0x, st.f0y,
-            st.rf_x, st.rf_y,
-            em.gamma, em.noise_scale,
-            dtT, st.dq, st.dU, st.box2::Definitions.Box2;
-            unwrapped_x=st.rx_unwrap, unwrapped_y=st.ry_unwrap)
-        if freeze_hold
-            _apply_freeze_hold_positions!(st)
-        end
-        _collisions_update_after_positions!(st)
-        _compute_final_nonbonded2!(st, compute_energy)
-        _finalize_force_eval2!(st, compute_energy, freeze_spring)
+        stage_scale = exp(acc / total_dof)
     else
-        # Predictor: draw noise then compute midpoint positions into vx,vy,vz
-        BrownianIntegrators.bd_prepare_noise_3d!(st.rf_x, st.rf_y, st.rf_z;
-                                                 noise_scale=em.noise_scale,
-                                                 corr_time=em.corr_time,
-                                                 state_x=st.ou_x, state_y=st.ou_y, state_z=st.ou_z,
-                                                 dt=dtT)
-        BrownianIntegrators.bd_midpoint_positions_3d!(
-            st.rx, st.ry, st.rz, st.fx, st.fy, st.fz,
-            st.rf_x, st.rf_y, st.rf_z,
-            st.vx, st.vy, st.vz,
-            em.gamma, em.noise_scale,
-            dtT, st.box3::Definitions.Box3)
-        if freeze_hold
-            _apply_freeze_hold!(st, st.vx, st.vy, st.vz)
-        end
-        # Forces at midpoint positions (no energy)
-        if st.nb_kind == NB_KIND_LJ
-            if st.sigma_particle === nothing
-                if st.bonds === nothing
-                    NonBondedForces.lj_forces_soa_noE!(st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z, st.nbh, st.box3::Definitions.Box3, st.pair_lj)
-                else
-                    NonBondedForces.lj_forces_soa_noE_excl!(st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z, st.nbh, st.bonds, st.box3::Definitions.Box3, st.pair_lj)
-                end
-            else
-                NonBondedForces.lj_forces_soa_noE_mixed!(st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z,
-                                                         st.nbh, st.box3::Definitions.Box3,
-                                                         st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
-            end
-        elseif st.nb_kind == NB_KIND_WCA
-            if st.sigma_pair !== nothing
-                NonBondedForces.wca_forces_soa_noE_pairs!(st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z,
-                                                         st.nbh, st.box3::Definitions.Box3,
-                                                         st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
-            elseif st.sigma_particle !== nothing
-                NonBondedForces.wca_forces_soa_noE_mixed!(st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z,
-                                                         st.nbh, st.box3::Definitions.Box3,
-                                                         st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
-            else
-                if st.bonds === nothing
-                    NonBondedForces.wca_forces_soa_noE!(st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z, st.nbh, st.box3::Definitions.Box3, st.pair_lj)
-                else
-                    NonBondedForces.wca_forces_soa_noE_excl!(st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z, st.nbh, st.bonds, st.box3::Definitions.Box3, st.pair_lj)
-                end
-            end
-        else
-            @assert st.softrep !== nothing
-            if st.bonds === nothing
-                NonBondedForces.harmonic_rep_forces_soa_noE!(st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z, st.nbh, st.box3::Definitions.Box3, st.softrep)
-            else
-                NonBondedForces.harmonic_rep_forces_soa_noE_excl!(st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z, st.nbh, st.bonds, st.box3::Definitions.Box3, st.softrep)
-            end
-        end
-        if st.bonds !== nothing
-            _apply_bonds3!(st, st.f0x, st.f0y, st.f0z, nothing, false)
-        end
-        if freeze_spring
-            _apply_freeze_spring!(st, st.vx, st.vy, st.vz, st.f0x, st.f0y, st.f0z, nothing, false)
-        end
-        # Finish step: advance positions with midpoint force; accumulate dq and dU equally
-        BrownianIntegrators.bd_finish_step_3d!(
-            st.rx, st.ry, st.rz, st.f0x, st.f0y, st.f0z,
-            st.rf_x, st.rf_y, st.rf_z,
-            em.gamma, em.noise_scale,
-            dtT, st.dq, st.dU, st.box3::Definitions.Box3;
-            unwrapped_x=st.rx_unwrap, unwrapped_y=st.ry_unwrap, unwrapped_z=st.rz_unwrap)
-        if freeze_hold
-            _apply_freeze_hold_positions!(st)
-        end
-        _collisions_update_after_positions!(st)
-        _compute_final_nonbonded3!(st, compute_energy)
-        _finalize_force_eval3!(st, compute_energy, freeze_spring)
+        stage_scale = one(T)
     end
 
-    st.step += 1
-    return nothing
+    ext_h = Epot_total + Ekin_total + thermostat_kin + thermostat_pot
+    return (thermostat_kind=:nhc,
+            target_temperature=weighted_target,
+            thermostat_timescale=(isempty(tau_b) ? zero(T) : T(sum(tau_b) / length(tau_b))),
+            chain_length=p.chain_length,
+            chain_substeps=p.substeps,
+            nhc_propagator=_nhc_propagator_name(p.propagator),
+            nhc_num_baths=length(target_b),
+            nhc_dof_total=total_dof,
+            physical_kinetic=Ekin_total,
+            thermostat_kinetic=thermostat_kin,
+            thermostat_potential=thermostat_pot,
+            extended_hamiltonian=ext_h,
+            thermostat_temperature_error=weighted_error,
+            nhc_velocity_scale=stage_scale)
 end
 
+function collect_integrator_observables(spec::CSVRSpec{T},
+                                        st::SimulationState{T}) where {T<:AbstractFloat}
+    p = spec.params
+    ws = spec.workspace
+    _csvr_update_dof_per_bath!(spec, st)
+    _ensure_csvr_kinetic_initialized!(spec, st)
+    Ekin_total = T(CUDA.sum(st.Ekin))
+    Epot_total = T(CUDA.sum(st.Epot))
+    dof_b = Array(ws.dof_per_bath)
+    K_b = Array(ws.kinetic_total_per_bath)
+    target_b = p.target_temperature
+    tau_b = p.tau
+    scale_b = Array(ws.last_velocity_scale_per_bath)
+    total_dof = sum(dof_b)
+
+    weighted_target = zero(T)
+    weighted_error = zero(T)
+    if total_dof > zero(T)
+        weighted_target = sum(target_b .* dof_b) / total_dof
+        @inbounds for b in eachindex(target_b)
+            dof = dof_b[b]
+            if dof > zero(T)
+                Tinst = T(2) * K_b[b] / dof
+                weighted_error += (Tinst - target_b[b]) * dof
+            end
+        end
+        weighted_error /= total_dof
+    end
+
+    thermostat_energy = T(sum(Array(ws.cumulative_energy_exchange_per_bath)))
+    if total_dof > zero(T)
+        acc = zero(T)
+        @inbounds for b in eachindex(scale_b)
+            if dof_b[b] > zero(T)
+                acc += log(max(scale_b[b], eps(T))) * dof_b[b]
+            end
+        end
+        stage_scale = exp(acc / total_dof)
+    else
+        stage_scale = one(T)
+    end
+
+    ext_h = Epot_total + Ekin_total + thermostat_energy
+    return (thermostat_kind=:csvr,
+            target_temperature=weighted_target,
+            thermostat_timescale=(isempty(tau_b) ? zero(T) : T(sum(tau_b) / length(tau_b))),
+            csvr_num_baths=length(target_b),
+            csvr_dof_total=total_dof,
+            physical_kinetic=Ekin_total,
+            thermostat_energy=thermostat_energy,
+            extended_hamiltonian=ext_h,
+            thermostat_temperature_error=weighted_error,
+            csvr_velocity_scale=stage_scale)
+end
+
+"""
+    collect_step_observables(st, spec) -> NamedTuple
+
+Collect universal and integrator-specific diagnostics for writers and
+post-processing.
+"""
+function collect_step_observables(st::SimulationState{T},
+                                  spec::IntegratorSpec{T}) where {T<:AbstractFloat}
+    Epot_total = T(CUDA.sum(st.Epot))
+    Ekin_total = T(CUDA.sum(st.Ekin))
+    virial_total = T(CUDA.sum(st.virial))
+    dq_total = T(CUDA.sum(st.dq))
+    dU_total = T(CUDA.sum(st.dU))
+
+    base = (step=st.step,
+            integrator=integrator_name(spec),
+            Epot_total=Epot_total,
+            Ekin_total=Ekin_total,
+            Etot=Epot_total + Ekin_total,
+            virial_total=virial_total,
+            dq_total=dq_total,
+            dU_total=dU_total,
+            Qtot=dq_total,
+            thermostatted_dof=thermostatted_dof(st, spec))
+
+    return merge(base, collect_integrator_observables(spec, st))
+end
 
 end # module

@@ -483,8 +483,9 @@ with `ntypes=2` to log `cold/cold`, `cold/hot`, and `hot/hot` encounters.
 # Examples
 ```julia
 enable_collision_counting!(st; ntypes=2, bins=:all_pairs)
+vv = velocityverlet(st; gamma=gamma, temperature=temperature, dt=dt)
 for _ in 1:1_000_000
-    step!(st, velocityverlet(st), dt; compute_energy=false)
+    step!(st, vv, dt; compute_energy=false)
 end
 counts = collisions_read_counts!(st) ./ (dt * 1_000_000)
 ```
