@@ -619,6 +619,12 @@ function _nhc_resize_baths!(spec::NHCSpec{T},
     if length(ws.kinetic_total_per_bath) != nbaths
         ws.kinetic_total_per_bath = CUDA.zeros(T, nbaths)
     end
+    if length(ws.kinetic_stage_start_per_bath) != nbaths
+        ws.kinetic_stage_start_per_bath = CUDA.zeros(T, nbaths)
+    end
+    if length(ws.cumulative_energy_exchange_per_bath) != nbaths
+        ws.cumulative_energy_exchange_per_bath = CUDA.zeros(T, nbaths)
+    end
     if length(ws.thermostat_kinetic_per_bath) != nbaths
         ws.thermostat_kinetic_per_bath = CUDA.zeros(T, nbaths)
     end
@@ -630,6 +636,8 @@ function _nhc_resize_baths!(spec::NHCSpec{T},
     end
 
     _nhc_ensure_particle_bath_buffer!(spec, st)
+    fill!(ws.cumulative_energy_exchange_per_bath, zero(T))
+    fill!(ws.last_velocity_scale_per_bath, one(T))
     ws.chain_masses_signature = UInt64(0)
     ws.kinetic_initialized = false
     ws.dof_dirty = true
@@ -695,6 +703,8 @@ function assign_nhc_baths!(spec::NHCSpec{T},
 
     ws.kinetic_initialized = false
     ws.dof_dirty = true
+    fill!(ws.cumulative_energy_exchange_per_bath, zero(T))
+    fill!(ws.last_velocity_scale_per_bath, one(T))
     return spec
 end
 
@@ -712,6 +722,8 @@ function set_thermostat_temperature!(spec::NHCSpec{T}, temperature::Real) where 
     end
     spec.workspace.kinetic_initialized = false
     spec.workspace.dof_dirty = true
+    fill!(spec.workspace.cumulative_energy_exchange_per_bath, zero(T))
+    fill!(spec.workspace.last_velocity_scale_per_bath, one(T))
     return spec
 end
 
@@ -731,6 +743,8 @@ function set_thermostat_temperature!(spec::NHCSpec{T},
     end
     spec.workspace.kinetic_initialized = false
     spec.workspace.dof_dirty = true
+    fill!(spec.workspace.cumulative_energy_exchange_per_bath, zero(T))
+    fill!(spec.workspace.last_velocity_scale_per_bath, one(T))
     return spec
 end
 
@@ -872,6 +886,8 @@ function set_temperature!(spec::NHCSpec{T},
         throw(ArgumentError("NHC temperature assignment left $(n_unassigned) particles unassigned. Provide a complete filter partition."))
 
     ws.chain_masses_signature = UInt64(0)
+    fill!(ws.cumulative_energy_exchange_per_bath, zero(T))
+    fill!(ws.last_velocity_scale_per_bath, one(T))
     ws.kinetic_initialized = false
     ws.dof_dirty = true
     return spec
@@ -1007,6 +1023,8 @@ function assign_csvr_baths!(spec::CSVRSpec{T},
 
     ws.kinetic_initialized = false
     ws.dof_dirty = true
+    fill!(ws.cumulative_energy_exchange_per_bath, zero(T))
+    fill!(ws.last_velocity_scale_per_bath, one(T))
     return spec
 end
 
@@ -1019,6 +1037,8 @@ function set_thermostat_temperature!(spec::CSVRSpec{T}, temperature::Real) where
     end
     spec.workspace.kinetic_initialized = false
     spec.workspace.dof_dirty = true
+    fill!(spec.workspace.cumulative_energy_exchange_per_bath, zero(T))
+    fill!(spec.workspace.last_velocity_scale_per_bath, one(T))
     return spec
 end
 
@@ -1038,6 +1058,8 @@ function set_thermostat_temperature!(spec::CSVRSpec{T},
     end
     spec.workspace.kinetic_initialized = false
     spec.workspace.dof_dirty = true
+    fill!(spec.workspace.cumulative_energy_exchange_per_bath, zero(T))
+    fill!(spec.workspace.last_velocity_scale_per_bath, one(T))
     return spec
 end
 

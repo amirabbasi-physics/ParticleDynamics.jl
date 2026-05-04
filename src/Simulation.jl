@@ -35,6 +35,7 @@ const FREEZE_SPRING = UInt8(2)
 
 export SimulationState, build_simulation, step!, step_graph!, zero_forces!, sync_unwrapped!, accumulate_virial!, virial_components, virial_tensor
 export run_integrator_step!, collect_step_observables, thermostatted_dof, thermostatted_particle_mask
+export reset_bath_exchange_accumulators!
 export IntegratorSpec, VVSpec, BAOABSpec, BAOASpec, GSMSpec, BrownianSpec, EMSpec, NHCParams, NHCSpec, CSVRParams, CSVRSpec
 export velocityverlet, baoab, baoa, gsm, eulerheun, eulermaruyama, nosehooverchain, csvr
 
@@ -456,6 +457,8 @@ mutable struct NHCWorkspace{T<:AbstractFloat}
     bath_counts::CuArray{Int32,1}
     dof_per_bath::CuArray{T,1}
     kinetic_total_per_bath::CuArray{T,1}
+    kinetic_stage_start_per_bath::CuArray{T,1}
+    cumulative_energy_exchange_per_bath::CuArray{T,1}
     thermostat_kinetic_per_bath::CuArray{T,1}
     thermostat_potential_per_bath::CuArray{T,1}
     last_velocity_scale_per_bath::CuArray{T,1}
@@ -607,6 +610,8 @@ end
                            CUDA.zeros(T, nbaths),
                            CUDA.fill(Int32(1), nparticles),
                            CUDA.zeros(Int32, nbaths),
+                           CUDA.zeros(T, nbaths),
+                           CUDA.zeros(T, nbaths),
                            CUDA.zeros(T, nbaths),
                            CUDA.zeros(T, nbaths),
                            CUDA.zeros(T, nbaths),
@@ -3268,7 +3273,9 @@ function _apply_nhc_thermostat_stage!(spec::NHCSpec{T},
     ws = spec.workspace
     _nhc_update_dof_per_bath!(spec, st)
     _ensure_nhc_kinetic_initialized!(spec, st)
+    copyto!(ws.kinetic_stage_start_per_bath, ws.kinetic_total_per_bath)
     _run_nhc_chain_stage!(spec, stage_dt)
+    @. ws.cumulative_energy_exchange_per_bath += ws.kinetic_stage_start_per_bath - ws.kinetic_total_per_bath
     _nhc_apply_stage_scale!(st, ws.last_velocity_scale_per_bath, ws.particle_bath_id)
     return nothing
 end
@@ -3414,6 +3421,13 @@ function ensure_integrator_workspace!(spec::NHCSpec{T},
     if length(ws.kinetic_total_per_bath) != B
         ws.kinetic_total_per_bath = CUDA.zeros(T, B)
         ws.kinetic_initialized = false
+    end
+    if length(ws.kinetic_stage_start_per_bath) != B
+        ws.kinetic_stage_start_per_bath = CUDA.zeros(T, B)
+        ws.kinetic_initialized = false
+    end
+    if length(ws.cumulative_energy_exchange_per_bath) != B
+        ws.cumulative_energy_exchange_per_bath = CUDA.zeros(T, B)
     end
     if length(ws.thermostat_kinetic_per_bath) != B
         ws.thermostat_kinetic_per_bath = CUDA.zeros(T, B)
@@ -4248,11 +4262,107 @@ function collect_integrator_observables(spec::CSVRSpec{T},
             csvr_velocity_scale=stage_scale)
 end
 
+@inline _langevin_bath_heat_sign(::VVSpec) = 1
+@inline _langevin_bath_heat_sign(::Union{BAOABSpec,BAOASpec,GSMSpec}) = -1
+
+function _langevin_inverse_temperature_host(gamma::CuArray{T,1},
+                                            noise_scale::CuArray{T,1},
+                                            dt::T) where {T<:AbstractFloat}
+    gamma_host = Array(gamma)
+    scale_host = Array(noise_scale)
+    invT = zeros(T, length(scale_host))
+    @inbounds for i in eachindex(scale_host)
+        gi = gamma_host[i]
+        si = scale_host[i]
+        if gi > zero(T) && si > zero(T)
+            invT[i] = (T(2) * gi * dt) / (si * si)
+        end
+    end
+    return invT
+end
+
+function _bath_entropy_per_bath(heat_b::AbstractVector{T},
+                                target_b::AbstractVector{T}) where {T<:AbstractFloat}
+    entropy_b = similar(heat_b, T)
+    @inbounds for b in eachindex(heat_b)
+        Tb = target_b[b]
+        entropy_b[b] = Tb > zero(T) ? heat_b[b] / Tb : zero(T)
+    end
+    return entropy_b
+end
+
+function _collect_bath_observables(spec::Union{VVSpec{T},BAOABSpec{T},BAOASpec{T},GSMSpec{T}},
+                                   st::SimulationState{T}) where {T<:AbstractFloat}
+    dt = spec.params.dt
+    invT = _langevin_inverse_temperature_host(spec.params.gamma, spec.params.noise_scale, dt)
+    sign = T(_langevin_bath_heat_sign(spec))
+    dq_host = Array(st.dq)
+    heat_total = sign * T(sum(dq_host)) * dt
+    entropy_total = sign * T(sum(dq_host .* invT)) * dt
+    return (bath_heat_total=heat_total,
+            bath_entropy_total=entropy_total)
+end
+
+function _collect_bath_observables(spec::NHCSpec{T},
+                                   st::SimulationState{T}) where {T<:AbstractFloat}
+    heat_b = Array(spec.workspace.cumulative_energy_exchange_per_bath)
+    temp_b = copy(spec.params.target_temperature)
+    entropy_b = _bath_entropy_per_bath(heat_b, temp_b)
+    return (bath_heat_total=T(sum(heat_b)),
+            bath_entropy_total=T(sum(entropy_b)),
+            bath_heat_per_bath=heat_b,
+            bath_entropy_per_bath=entropy_b,
+            bath_temperature_per_bath=temp_b)
+end
+
+function _collect_bath_observables(spec::CSVRSpec{T},
+                                   st::SimulationState{T}) where {T<:AbstractFloat}
+    heat_b = Array(spec.workspace.cumulative_energy_exchange_per_bath)
+    temp_b = copy(spec.params.target_temperature)
+    entropy_b = _bath_entropy_per_bath(heat_b, temp_b)
+    return (bath_heat_total=T(sum(heat_b)),
+            bath_entropy_total=T(sum(entropy_b)),
+            bath_heat_per_bath=heat_b,
+            bath_entropy_per_bath=entropy_b,
+            bath_temperature_per_bath=temp_b)
+end
+
+_collect_bath_observables(spec::IntegratorSpec, st::SimulationState) = NamedTuple()
+
+function _reset_particle_exchange_buffers!(st::SimulationState{T}) where {T<:AbstractFloat}
+    fill!(st.dq, zero(T))
+    fill!(st.dU, zero(T))
+    return nothing
+end
+
+"""
+    reset_bath_exchange_accumulators!(st, spec)
+
+Reset the accumulators used for bath heat and entropy diagnostics. This leaves
+positions, velocities, and thermostat internal state untouched.
+"""
+function reset_bath_exchange_accumulators!(st::SimulationState{T},
+                                           spec::IntegratorSpec{T}) where {T<:AbstractFloat}
+    return _reset_particle_exchange_buffers!(st)
+end
+
+function reset_bath_exchange_accumulators!(st::SimulationState{T},
+                                           spec::NHCSpec{T}) where {T<:AbstractFloat}
+    fill!(spec.workspace.cumulative_energy_exchange_per_bath, zero(T))
+    return _reset_particle_exchange_buffers!(st)
+end
+
+function reset_bath_exchange_accumulators!(st::SimulationState{T},
+                                           spec::CSVRSpec{T}) where {T<:AbstractFloat}
+    fill!(spec.workspace.cumulative_energy_exchange_per_bath, zero(T))
+    return _reset_particle_exchange_buffers!(st)
+end
+
 """
     collect_step_observables(st, spec) -> NamedTuple
 
-Collect universal and integrator-specific diagnostics for writers and
-post-processing.
+Collect universal diagnostics, integrator-specific diagnostics, and bath heat /
+entropy totals accumulated since the last reset of the relevant buffers.
 """
 function collect_step_observables(st::SimulationState{T},
                                   spec::IntegratorSpec{T}) where {T<:AbstractFloat}
@@ -4273,7 +4383,9 @@ function collect_step_observables(st::SimulationState{T},
             Qtot=dq_total,
             thermostatted_dof=thermostatted_dof(st, spec))
 
-    return merge(base, collect_integrator_observables(spec, st))
+    return merge(base,
+                 collect_integrator_observables(spec, st),
+                 _collect_bath_observables(spec, st))
 end
 
 end # module

@@ -2,19 +2,19 @@
 GPU-accelerated non-equilibrium particle simulations with Langevin and
 Brownian dynamics.
 
-`NonEqSimGPU` orchestrates SoA GPU buffers, neighbor lists, nonbonded and
+`ParticleDynamics` orchestrates SoA GPU buffers, neighbor lists, nonbonded and
 bonded force kernels, integrators, collision counters, and writers so that
 research scripts can copy validated parameter sets from `examples/` and run
 production simulations without touching CUDA code. The top-level module
 re-exports the most common types (`SimulationState`, `LJParams`, filters,
-integrator specs, writers, …) so a user usually only needs `using NonEqSimGPU`.
+integrator specs, writers, …) so a user usually only needs `using ParticleDynamics`.
 
 # Example
 The snippet below mirrors `examples/2D_allpairs_quicktest.jl`, which checks the
 all-pairs WCA path with `N = 256` particles and a WCA cutoff of `2^(1/6)σ`.
 
 ```julia
-using NonEqSimGPU
+using ParticleDynamics
 
 N = 256
 box = (80.0f0, 80.0f0)
@@ -37,7 +37,7 @@ end
 See the README and the scripts under `examples/` for richer setups (two-temperature
 filters, bonded polymers, Brownian dynamics, collision histograms, etc.).
 """
-module NonEqSimGPU
+module ParticleDynamics
 
 using CUDA
 using StaticArrays
@@ -67,7 +67,7 @@ using .Definitions: LJParams, SoftRepulsiveParams,
 using .IntegratorInterfaces: AbstractIntegratorSpec
 
 using .Simulation: SimulationState, build_simulation, step!, step_graph!, zero_forces!, sync_unwrapped!, accumulate_energies!, accumulate_virial!, virial_components, virial_tensor
-using .Simulation: run_integrator_step!, collect_step_observables, thermostatted_dof, thermostatted_particle_mask
+using .Simulation: run_integrator_step!, collect_step_observables, thermostatted_dof, thermostatted_particle_mask, reset_bath_exchange_accumulators!
 using .Simulation: IntegratorSpec, VVSpec, BAOABSpec, BAOASpec, GSMSpec, BrownianSpec, EMSpec, NHCParams, NHCSpec, CSVRParams, CSVRSpec
 using .Simulation: velocityverlet, baoab, baoa, gsm, eulerheun, eulermaruyama, nosehooverchain, csvr
 using .Writers: InMemoryLogger, CSVWriter, XYZWriter,
@@ -88,7 +88,7 @@ export Filters, BondedForces,
        StokesFrictionCoefficient, SphereMass, InertialTime, DiffusiveTime,
        # Simulation helpers
        SimulationState, build_simulation, step!, step_graph!, zero_forces!, sync_unwrapped!, accumulate_energies!, accumulate_virial!, virial_components, virial_tensor,
-       run_integrator_step!, collect_step_observables, thermostatted_dof, thermostatted_particle_mask,
+       run_integrator_step!, collect_step_observables, thermostatted_dof, thermostatted_particle_mask, reset_bath_exchange_accumulators!,
        AbstractIntegratorSpec,
        IntegratorSpec, VVSpec, BAOABSpec, BAOASpec, GSMSpec, BrownianSpec, EMSpec, NHCParams, NHCSpec, CSVRParams, CSVRSpec,
        velocityverlet, baoab, baoa, gsm, eulermaruyama, nosehooverchain, csvr,
@@ -106,7 +106,7 @@ export Filters, BondedForces,
        collisions_reset_counts!, collisions_read_counts!, set_collision_pair_cutoffs!
 
 println("##########################################################")
-println("                  NonEqSimGPU Loaded                ")
+println("                  ParticleDynamics Loaded                ")
 println("##########################################################")
 
 function __init__()
@@ -155,4 +155,4 @@ function _maybe_set_cuda_compat!()
     end
 end
 
-end # module NonEqSimGPU
+end # module ParticleDynamics

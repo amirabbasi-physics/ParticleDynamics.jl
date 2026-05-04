@@ -22,8 +22,8 @@
 
         CUDA.fill!(st_dense.fx, 0.0); CUDA.fill!(st_dense.fy, 0.0); CUDA.fill!(st_dense.Epot, 0.0)
         CUDA.fill!(st_allpairs.fx, 0.0); CUDA.fill!(st_allpairs.fy, 0.0); CUDA.fill!(st_allpairs.Epot, 0.0)
-        NonEqSimGPU.NonBondedForces.lj_forces_soa!(st_dense.rx, st_dense.ry, st_dense.fx, st_dense.fy, st_dense.Epot, st_dense.nbh, st_dense.box2, st_dense.pair_lj)
-        NonEqSimGPU.NonBondedForces.lj_forces_soa!(st_allpairs.rx, st_allpairs.ry, st_allpairs.fx, st_allpairs.fy, st_allpairs.Epot, st_allpairs.nbh, st_allpairs.box2, st_allpairs.pair_lj)
+        ParticleDynamics.NonBondedForces.lj_forces_soa!(st_dense.rx, st_dense.ry, st_dense.fx, st_dense.fy, st_dense.Epot, st_dense.nbh, st_dense.box2, st_dense.pair_lj)
+        ParticleDynamics.NonBondedForces.lj_forces_soa!(st_allpairs.rx, st_allpairs.ry, st_allpairs.fx, st_allpairs.fy, st_allpairs.Epot, st_allpairs.nbh, st_allpairs.box2, st_allpairs.pair_lj)
 
         fdx = Array(st_dense.fx) .- Array(st_allpairs.fx)
         fdy = Array(st_dense.fy) .- Array(st_allpairs.fy)
@@ -49,14 +49,14 @@
         set_positions_2d!(st_stencil, Array(st_dense.rx), Array(st_dense.ry))
 
         rcut_particle = fill(Float64(cutoff), N)
-        st_stencil.nbh = NonEqSimGPU.NeighborLists.build_neighbors_stencil!(
+        st_stencil.nbh = ParticleDynamics.NeighborLists.build_neighbors_stencil!(
             st_stencil.rx, st_stencil.ry; box=st_stencil.box2, rcut_particle=rcut_particle, cap=Int32(64), skin=skin
         )
 
         CUDA.fill!(st_dense.fx, 0.0); CUDA.fill!(st_dense.fy, 0.0); CUDA.fill!(st_dense.Epot, 0.0)
         CUDA.fill!(st_stencil.fx, 0.0); CUDA.fill!(st_stencil.fy, 0.0); CUDA.fill!(st_stencil.Epot, 0.0)
-        NonEqSimGPU.NonBondedForces.lj_forces_soa!(st_dense.rx, st_dense.ry, st_dense.fx, st_dense.fy, st_dense.Epot, st_dense.nbh, st_dense.box2, st_dense.pair_lj)
-        NonEqSimGPU.NonBondedForces.lj_forces_soa!(st_stencil.rx, st_stencil.ry, st_stencil.fx, st_stencil.fy, st_stencil.Epot, st_stencil.nbh, st_stencil.box2, st_stencil.pair_lj)
+        ParticleDynamics.NonBondedForces.lj_forces_soa!(st_dense.rx, st_dense.ry, st_dense.fx, st_dense.fy, st_dense.Epot, st_dense.nbh, st_dense.box2, st_dense.pair_lj)
+        ParticleDynamics.NonBondedForces.lj_forces_soa!(st_stencil.rx, st_stencil.ry, st_stencil.fx, st_stencil.fy, st_stencil.Epot, st_stencil.nbh, st_stencil.box2, st_stencil.pair_lj)
 
         fdx = Array(st_dense.fx) .- Array(st_stencil.fx)
         fdy = Array(st_dense.fy) .- Array(st_stencil.fy)
@@ -75,21 +75,21 @@
         rx0 = Array(st.rx)
         ry0 = Array(st.ry)
         step_base = 1
-        @test NonEqSimGPU.NeighborLists.update_needed!(
+        @test ParticleDynamics.NeighborLists.update_needed!(
             st.nbh, st.rx, st.ry; skin=st.nbh.skin, Lx=st.box2[1], Ly=st.box2[2], step=step_base
         ) == false
 
         rx_small = copy(rx0)
         rx_small[1] += 0.49 * skin
         set_positions_2d!(st, rx_small, ry0)
-        @test NonEqSimGPU.NeighborLists.update_needed!(
+        @test ParticleDynamics.NeighborLists.update_needed!(
             st.nbh, st.rx, st.ry; skin=st.nbh.skin, Lx=st.box2[1], Ly=st.box2[2], step=step_base + 1
         ) == false
 
         rx_large = copy(rx0)
         rx_large[1] += 0.51 * skin
         set_positions_2d!(st, rx_large, ry0)
-        @test NonEqSimGPU.NeighborLists.update_needed!(
+        @test ParticleDynamics.NeighborLists.update_needed!(
             st.nbh, st.rx, st.ry; skin=st.nbh.skin, Lx=st.box2[1], Ly=st.box2[2], step=step_base + 2
         ) == true
     end

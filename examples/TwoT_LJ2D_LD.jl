@@ -1,5 +1,5 @@
-using NonEqSimGPU
-using NonEqSimGPU: Filters, velocityverlet, hex_random_2d
+using ParticleDynamics
+using ParticleDynamics: Filters, velocityverlet, hex_random_2d
 using CUDA
 using Random
 using Printf

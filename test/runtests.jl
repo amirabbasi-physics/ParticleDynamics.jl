@@ -1,8 +1,8 @@
 using Test
 using Random
 using CUDA
-using NonEqSimGPU
-using NonEqSimGPU: Simulation, BrownianIntegrators, LangevinIntegrators, Filters
+using ParticleDynamics
+using ParticleDynamics: Simulation, BrownianIntegrators, LangevinIntegrators, Filters
 
 CUDA.allowscalar(false)
 
@@ -11,7 +11,7 @@ using .TestUtils
 include("params_from_examples.jl")
 using .ParamsFromExamples
 
-@testset "NonEqSimGPU.jl (GPU)" begin
+@testset "ParticleDynamics.jl (GPU)" begin
     if !gpu_required()
         @testset "CUDA unavailable" begin
             @test_skip false
@@ -31,6 +31,7 @@ using .ParamsFromExamples
         include("test_integrators_brownian.jl")
         include("test_integrators_nhc.jl")
         include("test_integrators_csvr.jl")
+        include("test_entropy_observables.jl")
         include("test_virial.jl")
         include("test_collisions.jl")
         include("test_io_gsd.jl")

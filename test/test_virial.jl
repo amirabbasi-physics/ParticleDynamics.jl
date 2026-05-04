@@ -1,4 +1,4 @@
-using NonEqSimGPU: Simulation, accumulate_virial!, virial_components, virial_tensor, harmonic_bond, fene_bond
+using ParticleDynamics: Simulation, accumulate_virial!, virial_components, virial_tensor, harmonic_bond, fene_bond
 
 @testset "Configurational Virial" begin
     seed_all!(0xC0FFEE)
@@ -112,9 +112,9 @@ using NonEqSimGPU: Simulation, accumulate_virial!, virial_components, virial_ten
 
     function update_neighbors_host!(st)
         if st.rz === nothing
-            NonEqSimGPU.NeighborLists.update_neighbors_inplace!(st.nbh, st.rx, st.ry; box=st.box2, step=st.step)
+            ParticleDynamics.NeighborLists.update_neighbors_inplace!(st.nbh, st.rx, st.ry; box=st.box2, step=st.step)
         else
-            NonEqSimGPU.NeighborLists.update_neighbors_inplace!(st.nbh, st.rx, st.ry, st.rz; box=st.box3, step=st.step)
+            ParticleDynamics.NeighborLists.update_neighbors_inplace!(st.nbh, st.rx, st.ry, st.rz; box=st.box3, step=st.step)
         end
         return st
     end

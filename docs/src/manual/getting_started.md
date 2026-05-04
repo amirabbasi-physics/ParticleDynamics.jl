@@ -1,12 +1,12 @@
 # Getting Started
 
-This page gives a minimal, test-aligned startup path for running `NonEqSimGPU` on a CUDA-capable GPU.
+This page gives a minimal, test-aligned startup path for running `ParticleDynamics` on a CUDA-capable GPU.
 
 ## 1) Install and verify CUDA
 
 ```julia
 using Pkg
-Pkg.add(url="https://github.com/<your-org>/NonEqSimGPU.jl")  # or local dev path
+Pkg.add(url="https://github.com/<your-org>/ParticleDynamics.jl")  # or local dev path
 ```
 
 ```julia
@@ -14,12 +14,12 @@ using CUDA
 CUDA.functional() || error("CUDA is not functional on this machine.")
 ```
 
-`NonEqSimGPU` is GPU-only: simulation state arrays are `CuArray`s and integrators/forces are implemented for GPU execution.
+`ParticleDynamics` is GPU-only: simulation state arrays are `CuArray`s and integrators/forces are implemented for GPU execution.
 
 ## 2) First simulation (2D, tiny and fast)
 
 ```julia
-using NonEqSimGPU
+using ParticleDynamics
 using CUDA
 
 N = 64

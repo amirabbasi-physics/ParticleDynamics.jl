@@ -3,7 +3,7 @@
 Date: 2026-02-13
 
 ## 1) Export visibility policy (`eulerheun`)
-- Current behavior: `NonEqSimGPU.eulerheun` is bound but not exported from the top-level module, while the sibling `eulermaruyama` is exported.
+- Current behavior: `ParticleDynamics.eulerheun` is bound but not exported from the top-level module, while the sibling `eulermaruyama` is exported.
 - Test policy in Phase 2: treat this as an API inconsistency and fail until made explicit.
 - Recommended resolution in Phase 3: either export `eulerheun` at top-level or document it as intentionally internal and remove user-facing expectations.
 

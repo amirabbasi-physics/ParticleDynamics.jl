@@ -59,10 +59,10 @@
         ry = T[0.0, 0.0, 0.0, 0.6]
         copyto!(st.rx, rx)
         copyto!(st.ry, ry)
-        NonEqSimGPU.NeighborLists.update_neighbors_inplace!(st.nbh, st.rx, st.ry; box=st.box2, step=st.step)
+        ParticleDynamics.NeighborLists.update_neighbors_inplace!(st.nbh, st.rx, st.ry; box=st.box2, step=st.step)
 
         fill!(st.fx, zero(T)); fill!(st.fy, zero(T)); fill!(st.Epot, zero(T))
-        NonEqSimGPU.NonBondedForces.harmonic_rep_forces_soa_excl!(
+        ParticleDynamics.NonBondedForces.harmonic_rep_forces_soa_excl!(
             st.rx, st.ry, st.fx, st.fy, st.Epot, st.nbh, st.bonds, st.box2, st.softrep
         )
         CUDA.synchronize()
@@ -130,8 +130,8 @@
         end
         copyto!(st_poly.rx, rx); copyto!(st_poly.ry, ry)
         copyto!(st_gas.rx, rx);  copyto!(st_gas.ry, ry)
-        NonEqSimGPU.NeighborLists.update_neighbors_inplace!(st_poly.nbh, st_poly.rx, st_poly.ry; box=st_poly.box2, step=st_poly.step)
-        NonEqSimGPU.NeighborLists.update_neighbors_inplace!(st_gas.nbh, st_gas.rx, st_gas.ry; box=st_gas.box2, step=st_gas.step)
+        ParticleDynamics.NeighborLists.update_neighbors_inplace!(st_poly.nbh, st_poly.rx, st_poly.ry; box=st_poly.box2, step=st_poly.step)
+        ParticleDynamics.NeighborLists.update_neighbors_inplace!(st_gas.nbh, st_gas.rx, st_gas.ry; box=st_gas.box2, step=st_gas.step)
 
         dt = T(2.5e-6)
         spec_poly = Simulation.velocityverlet(st_poly; gamma=T(1), temperature=T(0), dt=dt)

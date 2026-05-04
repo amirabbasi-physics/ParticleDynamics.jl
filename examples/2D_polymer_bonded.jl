@@ -1,4 +1,4 @@
-using NonEqSimGPU
+using ParticleDynamics
 using CUDA
 
 # Simple 2D polymer chain with bonded interactions (FENE or harmonic)

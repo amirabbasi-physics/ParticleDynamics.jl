@@ -1,6 +1,6 @@
-# NonEqSimGPU.jl
+# ParticleDynamics.jl
 
-`NonEqSimGPU.jl` is a GPU-first Julia package for non-equilibrium particle simulations (Langevin and Brownian dynamics) on `CUDA.jl`.
+`ParticleDynamics.jl` is a GPU-first Julia package for non-equilibrium particle simulations (Langevin and Brownian dynamics) on `CUDA.jl`.
 
 ```@raw html
 <div style="padding:0.6rem 0.8rem; border-left:4px solid #d9534f; background:#fff6f6;">

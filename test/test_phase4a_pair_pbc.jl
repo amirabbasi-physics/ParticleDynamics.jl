@@ -10,7 +10,7 @@
         )
         st.typeid .= CuArray(Int32[1, 2])
         set_positions_2d!(st, [-0.5, 0.5], [0.0, 0.0]) # r = 1.0
-        NonEqSimGPU.NeighborLists.update_neighbors_inplace!(st.nbh, st.rx, st.ry; box=st.box2, step=st.step)
+        ParticleDynamics.NeighborLists.update_neighbors_inplace!(st.nbh, st.rx, st.ry; box=st.box2, step=st.step)
 
         sigma_pair_h = Float64[
             0.90 1.10;
@@ -31,7 +31,7 @@
         CUDA.fill!(st.fx, 0.0)
         CUDA.fill!(st.fy, 0.0)
         CUDA.fill!(st.Epot, 0.0)
-        NonEqSimGPU.NonBondedForces.wca_forces_soa_pairs!(
+        ParticleDynamics.NonBondedForces.wca_forces_soa_pairs!(
             st.rx, st.ry, st.fx, st.fy, st.Epot,
             st.nbh, st.box2, st.typeid, sigma_pair, epsilon_pair, rcut_pair
         )
@@ -54,7 +54,7 @@
         CUDA.fill!(st.fx, 0.0)
         CUDA.fill!(st.fy, 0.0)
         CUDA.fill!(st.Epot, 0.0)
-        NonEqSimGPU.NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.nbh, st.box2, st.pair_lj)
+        ParticleDynamics.NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.nbh, st.box2, st.pair_lj)
         fx0 = Array(st.fx)
         fy0 = Array(st.fy)
         e0 = Float64(CUDA.sum(st.Epot))
@@ -62,12 +62,12 @@
         Lx, Ly = st.box2
         st.rx .+= Lx
         st.ry .-= Ly
-        NonEqSimGPU.NeighborLists.update_neighbors_inplace!(st.nbh, st.rx, st.ry; box=st.box2, step=st.step + 1)
+        ParticleDynamics.NeighborLists.update_neighbors_inplace!(st.nbh, st.rx, st.ry; box=st.box2, step=st.step + 1)
 
         CUDA.fill!(st.fx, 0.0)
         CUDA.fill!(st.fy, 0.0)
         CUDA.fill!(st.Epot, 0.0)
-        NonEqSimGPU.NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.nbh, st.box2, st.pair_lj)
+        ParticleDynamics.NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.nbh, st.box2, st.pair_lj)
         fx1 = Array(st.fx)
         fy1 = Array(st.fy)
         e1 = Float64(CUDA.sum(st.Epot))

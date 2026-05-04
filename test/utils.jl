@@ -2,8 +2,8 @@ module TestUtils
 
 using Random
 using CUDA
-using NonEqSimGPU
-using NonEqSimGPU: Simulation
+using ParticleDynamics
+using ParticleDynamics: Simulation
 
 export gpu_required, seed_all!,
        build_tiny2d, build_tiny3d,
@@ -122,7 +122,7 @@ function build_tiny2d(;
     rx, ry = _grid_positions_2d(N, T)
     set_positions_2d!(st, rx, ry)
     set_velocities_2d!(st, fill(zero(T), N), fill(zero(T), N))
-    NonEqSimGPU.NeighborLists.update_neighbors_inplace!(st.nbh, st.rx, st.ry; box=st.box2, step=st.step)
+    ParticleDynamics.NeighborLists.update_neighbors_inplace!(st.nbh, st.rx, st.ry; box=st.box2, step=st.step)
     if unwrapped_positions
         Simulation.sync_unwrapped!(st)
     end
@@ -157,7 +157,7 @@ function build_tiny3d(;
     rx, ry, rz = _grid_positions_3d(N, T)
     set_positions_3d!(st, rx, ry, rz)
     set_velocities_3d!(st, fill(zero(T), N), fill(zero(T), N), fill(zero(T), N))
-    NonEqSimGPU.NeighborLists.update_neighbors_inplace!(st.nbh, st.rx, st.ry, st.rz; box=st.box3, step=st.step)
+    ParticleDynamics.NeighborLists.update_neighbors_inplace!(st.nbh, st.rx, st.ry, st.rz; box=st.box3, step=st.step)
     if unwrapped_positions
         Simulation.sync_unwrapped!(st)
     end

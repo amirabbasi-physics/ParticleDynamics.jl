@@ -1,6 +1,6 @@
-# NonEqSimGPU.jl
+# ParticleDynamics.jl
 
-`NonEqSimGPU.jl` is a GPU-only Julia package for non-equilibrium particle simulations
+`ParticleDynamics.jl` is a GPU-only Julia package for non-equilibrium particle simulations
 using `CUDA.jl`. It provides Langevin and Brownian dynamics integrators,
 neighbor-list backends, nonbonded/bonded force models, collision counting, and
 XYZ/CSV/GSD writers.
@@ -15,7 +15,7 @@ This package requires a functional CUDA environment.
 
 ```julia
 using CUDA
-CUDA.functional() || error("NonEqSimGPU requires CUDA.functional() == true")
+CUDA.functional() || error("ParticleDynamics requires CUDA.functional() == true")
 ```
 
 No CPU fallback simulation path is provided.
@@ -26,21 +26,21 @@ No CPU fallback simulation path is provided.
 
 ```julia
 using Pkg
-Pkg.add(url="https://github.com/ORG_OR_USER/NonEqSimGPU.jl")
+Pkg.add(url="https://github.com/ORG_OR_USER/ParticleDynamics.jl")
 ```
 
 ### Develop locally
 
 ```julia
 using Pkg
-Pkg.develop(path="/path/to/NonEqSimGPU")
+Pkg.develop(path="/path/to/ParticleDynamics")
 Pkg.instantiate()
 ```
 
 ## Minimal quickstart (GPU)
 
 ```julia
-using NonEqSimGPU
+using ParticleDynamics
 using CUDA
 
 N = 64
@@ -86,7 +86,7 @@ Build docs locally:
 julia --project=docs -e 'using Pkg; Pkg.instantiate(); include("docs/make.jl")'
 ```
 
-Docs site placeholder: `https://ORG_OR_USER.github.io/NonEqSimGPU.jl/`
+Docs site placeholder: `https://ORG_OR_USER.github.io/ParticleDynamics.jl/`
 
 ## Example smoke run
 
