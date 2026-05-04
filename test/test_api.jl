@@ -1,21 +1,43 @@
 @testset "API and Filters" begin
     seed_all!(0xA1001)
 
-    @test isdefined(ParticleDynamics, :SimulationState)
-    @test isdefined(ParticleDynamics, :build_simulation)
-    @test isdefined(ParticleDynamics, :step!)
-    @test isdefined(ParticleDynamics, :step_graph!)
-    @test isdefined(ParticleDynamics, :velocityverlet)
-    @test isdefined(ParticleDynamics, :reset_bath_exchange_accumulators!)
-    @test isdefined(ParticleDynamics, :baoab)
-    @test isdefined(ParticleDynamics, :baoa)
-    @test isdefined(ParticleDynamics, :gsm)
-    @test isdefined(ParticleDynamics, :eulermaruyama)
-    @test isdefined(ParticleDynamics, :eulerheun)
-    @test isdefined(ParticleDynamics, :nosehooverchain)
-    @test isdefined(ParticleDynamics, :NHCSpec)
-    @test isdefined(ParticleDynamics, :csvr)
-    @test isdefined(ParticleDynamics, :CSVRSpec)
+    exported = Set(names(ParticleDynamics))
+    for sym in (
+        :SimulationState,
+        :build_simulation,
+        :step!,
+        :step_graph!,
+        :sync_unwrapped!,
+        :collect_step_observables,
+        :reset_bath_exchange_accumulators!,
+        :velocityverlet,
+        :baoab,
+        :baoa,
+        :gsm,
+        :eulermaruyama,
+        :eulerheun,
+        :nosehooverchain,
+        :csvr,
+        :NHCSpec,
+        :CSVRSpec,
+        :gsd_open,
+        :gsd_close,
+        :write_gsd_frame!,
+        :read_gsd_frame!,
+    )
+        @test sym in exported
+    end
+
+    for sym in (
+        :zero_forces!,
+        :accumulate_energies!,
+        :run_integrator_step!,
+        :thermostatted_dof,
+        :thermostatted_particle_mask,
+    )
+        @test sym ∉ exported
+        @test isdefined(ParticleDynamics.Simulation, sym)
+    end
 
     N = 16
     dt = 0.002f0
