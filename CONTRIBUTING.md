@@ -37,7 +37,7 @@ bash scripts/ci_gpu_local.sh
 
 - Do not change runtime behavior unless the issue and fix are clearly documented.
 - Do not add CPU fallback implementations for simulation kernels.
-- Keep API changes explicit and documented in `NEWS.md`.
+- Keep API changes explicit and documented in `CHANGELOG.md`.
 - Add/adjust tests for behavior changes.
 - Update docs when user-visible behavior changes.
 
