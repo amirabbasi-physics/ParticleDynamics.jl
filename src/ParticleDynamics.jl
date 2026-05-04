@@ -1,6 +1,5 @@
 """
-GPU-accelerated non-equilibrium particle simulations with Langevin and
-Brownian dynamics.
+GPU-accelerated non-equilibrium particle simulations with Langevin/Brownian/Molecular dynamics.
 
 `ParticleDynamics` orchestrates SoA GPU buffers, neighbor lists, nonbonded and
 bonded force kernels, integrators, collision counters, and writers so that
