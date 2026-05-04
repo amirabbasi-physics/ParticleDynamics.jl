@@ -75,9 +75,11 @@
         @test isempty(missing_sim)
         @test isempty(missing_writers)
 
-        # eulerheun policy in Phase 3: keep bound but unexported at top-level.
+        # Phase 3 policy: export Brownian midpoint and restart helpers from the
+        # curated top-level API.
         @test isdefined(ParticleDynamics, :eulerheun)
-        @test !(:eulerheun in names(ParticleDynamics; all=false, imported=false))
+        @test :eulerheun in names(ParticleDynamics; all=false, imported=false)
+        @test :read_gsd_frame! in names(ParticleDynamics; all=false, imported=false)
     end
 
     @testset "IR-004 test_em_rebuild_collision_state_consistency" begin

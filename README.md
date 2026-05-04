@@ -40,7 +40,7 @@ Pkg.instantiate()
 ## Minimal quickstart (GPU)
 
 ```julia
-using ParticleDynamics
+using ParticleDynamics: build_simulation, step!, velocityverlet
 using CUDA
 
 N = 64
@@ -72,6 +72,9 @@ end
 @show st.step
 ```
 
+Advanced orchestration helpers that are not part of the default import surface
+remain available under qualified paths such as `ParticleDynamics.Simulation`.
+
 ## Running tests (GPU machine)
 
 ```bash
@@ -85,6 +88,19 @@ Build docs locally:
 ```bash
 julia --project=docs -e 'using Pkg; Pkg.instantiate(); include("docs/make.jl")'
 ```
+
+## Curated top-level API
+
+The supported top-level `using ParticleDynamics` surface is centered on:
+
+- system construction and stepping: `SimulationState`, `build_simulation`, `step!`, `step_graph!`
+- integrator builders: `velocityverlet`, `baoab`, `baoa`, `gsm`, `eulerheun`, `eulermaruyama`, `nosehooverchain`, `csvr`
+- observables/output helpers: `collect_step_observables`, `reset_bath_exchange_accumulators!`, `write_xyz!`, `write_observables_csv!`, `gsd_open`, `gsd_close`, `write_gsd_frame!`, `read_gsd_frame!`
+- setup helpers: `Filters`, bond/parameter types, collision helpers, and initialization generators
+
+Lower-level `Simulation` helpers that are mainly useful for package internals or
+specialized workflows should be accessed explicitly as
+`ParticleDynamics.Simulation.<name>`.
 
 ## Example smoke run
 

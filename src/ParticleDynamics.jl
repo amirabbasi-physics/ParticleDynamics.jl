@@ -4,9 +4,10 @@ GPU-accelerated non-equilibrium particle simulations with Langevin/Brownian/Mole
 `ParticleDynamics` orchestrates SoA GPU buffers, neighbor lists, nonbonded and
 bonded force kernels, integrators, collision counters, and writers so that
 research scripts can copy validated parameter sets from `examples/` and run
-production simulations without touching CUDA code. The top-level module
-re-exports the most common types (`SimulationState`, `LJParams`, filters,
-integrator specs, writers, …) so a user usually only needs `using ParticleDynamics`.
+production simulations without touching CUDA code. The top-level module keeps a
+curated public API (`SimulationState`, `build_simulation`, integrator builders,
+filters, writers, and setup helpers), while lower-level execution helpers stay
+under qualified submodules such as `ParticleDynamics.Simulation`.
 
 # Example
 The snippet below mirrors `examples/2D_allpairs_quicktest.jl`, which checks the
@@ -65,8 +66,8 @@ using .Definitions: LJParams, SoftRepulsiveParams,
     harmonic_bond, fene_bond
 using .IntegratorInterfaces: AbstractIntegratorSpec
 
-using .Simulation: SimulationState, build_simulation, step!, step_graph!, zero_forces!, sync_unwrapped!, accumulate_energies!, accumulate_virial!, virial_components, virial_tensor
-using .Simulation: run_integrator_step!, collect_step_observables, thermostatted_dof, thermostatted_particle_mask, reset_bath_exchange_accumulators!
+using .Simulation: SimulationState, build_simulation, step!, step_graph!, sync_unwrapped!, accumulate_virial!, virial_components, virial_tensor
+using .Simulation: collect_step_observables, reset_bath_exchange_accumulators!
 using .Simulation: IntegratorSpec, VVSpec, BAOABSpec, BAOASpec, GSMSpec, BrownianSpec, EMSpec, NHCParams, NHCSpec, CSVRParams, CSVRSpec
 using .Simulation: velocityverlet, baoab, baoa, gsm, eulerheun, eulermaruyama, nosehooverchain, csvr
 using .Writers: InMemoryLogger, CSVWriter, XYZWriter,
@@ -86,14 +87,14 @@ export Filters, BondedForces,
        harmonic_bond, fene_bond,
        StokesFrictionCoefficient, SphereMass, InertialTime, DiffusiveTime,
        # Simulation helpers
-       SimulationState, build_simulation, step!, step_graph!, zero_forces!, sync_unwrapped!, accumulate_energies!, accumulate_virial!, virial_components, virial_tensor,
-       run_integrator_step!, collect_step_observables, thermostatted_dof, thermostatted_particle_mask, reset_bath_exchange_accumulators!,
+       SimulationState, build_simulation, step!, step_graph!, sync_unwrapped!, accumulate_virial!, virial_components, virial_tensor,
+       collect_step_observables, reset_bath_exchange_accumulators!,
        AbstractIntegratorSpec,
        IntegratorSpec, VVSpec, BAOABSpec, BAOASpec, GSMSpec, BrownianSpec, EMSpec, NHCParams, NHCSpec, CSVRParams, CSVRSpec,
-       velocityverlet, baoab, baoa, gsm, eulermaruyama, nosehooverchain, csvr,
+       velocityverlet, baoab, baoa, gsm, eulerheun, eulermaruyama, nosehooverchain, csvr,
        # Writers
        InMemoryLogger, CSVWriter, XYZWriter,
-       write_xyz!, write_observables_csv!, gsd_open, gsd_close, write_gsd_frame!,
+       write_xyz!, write_observables_csv!, gsd_open, gsd_close, write_gsd_frame!, read_gsd_frame!,
        # Bond list helper
        BondList, build_bondlist,
        # Initial configuration generators (2D)

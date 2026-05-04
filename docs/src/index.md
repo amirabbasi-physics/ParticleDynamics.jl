@@ -23,17 +23,26 @@
 
 ## Public API Map (Current Exports)
 
-The table below maps current exported symbols to where they will be documented in the manual/API pages.
+The table below maps the supported top-level API to where it is intended to be
+described. Lower-level helpers that are mainly useful for custom orchestration
+stay under qualified paths such as `ParticleDynamics.Simulation`.
 
 | API group | Exported symbols | Planned primary page |
 |---|---|---|
-| Core simulation | `SimulationState`, `build_simulation`, `step!`, `step_graph!`, `velocityverlet`, `baoab`, `baoa`, `gsm`, `eulermaruyama` | `manual/simulation_state.md`, `manual/integrators.md` |
+| Core simulation | `SimulationState`, `build_simulation`, `step!`, `step_graph!`, `sync_unwrapped!`, `collect_step_observables`, `reset_bath_exchange_accumulators!`, `velocityverlet`, `baoab`, `baoa`, `gsm`, `eulerheun`, `eulermaruyama`, `nosehooverchain`, `csvr` | `manual/simulation_state.md`, `manual/integrators.md` |
 | Parameters and physical helpers | `LJParams`, `SoftRepulsiveParams`, `HarmonicBondParams`, `FENEParams`, `BondPotential`, `HarmonicBond`, `FENEBond`, `harmonic_bond`, `fene_bond`, `StokesFrictionCoefficient`, `SphereMass`, `InertialTime`, `DiffusiveTime` | `manual/forces.md` |
 | Initialization generators | `box_from_phi_2d`, `box_from_phi_3d`, `hex_random_2d`, `hex_circle_2d`, `hex_circle_plus_random_2d`, `hex_sites_in_box_2d`, `hex_circle_in_box_2d`, `hex_slab_coexistence_2d`, `fcc_sites_in_box_3d`, `fcc_random_3d`, `fcc_slab_coexistence_3d` | `manual/getting_started.md` |
-| Writers and I/O | `write_xyz!`, `write_observables_csv!`, `gsd_open`, `gsd_close`, `write_gsd_frame!`, `InMemoryLogger`, `CSVWriter`, `XYZWriter` | `manual/io.md` |
+| Writers and I/O | `write_xyz!`, `write_observables_csv!`, `gsd_open`, `gsd_close`, `write_gsd_frame!`, `read_gsd_frame!`, `InMemoryLogger`, `CSVWriter`, `XYZWriter` | `manual/io.md` |
 | Bond lists | `BondList`, `build_bondlist` | `manual/forces.md` |
 | Collision counting | `enable_collision_counting!`, `disable_collision_counting!`, `collisions_reset_counts!`, `collisions_read_counts!`, `set_collision_pair_cutoffs!` | `manual/collisions.md` |
 | Modules | `Filters`, `BondedForces` | `manual/groups_filters_freeze.md`, `manual/forces.md` |
+
+Advanced helpers that are intentionally not part of the default import surface
+include `ParticleDynamics.Simulation.zero_forces!`,
+`ParticleDynamics.Simulation.accumulate_energies!`,
+`ParticleDynamics.Simulation.run_integrator_step!`,
+`ParticleDynamics.Simulation.thermostatted_dof`, and
+`ParticleDynamics.Simulation.thermostatted_particle_mask`.
 
 ## Behavior Baseline (from tests)
 
@@ -48,4 +57,3 @@ Current tests validate:
 ```bash
 julia --project=docs -e 'using Pkg; Pkg.instantiate(); include("docs/make.jl")'
 ```
-

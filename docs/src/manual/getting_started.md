@@ -6,7 +6,7 @@ This page gives a minimal, test-aligned startup path for running `ParticleDynami
 
 ```julia
 using Pkg
-Pkg.add(url="https://github.com/<your-org>/ParticleDynamics.jl")  # or local dev path
+Pkg.add(url="<repository-url>")  # or local dev path
 ```
 
 ```julia
@@ -14,12 +14,14 @@ using CUDA
 CUDA.functional() || error("CUDA is not functional on this machine.")
 ```
 
-`ParticleDynamics` is GPU-only: simulation state arrays are `CuArray`s and integrators/forces are implemented for GPU execution.
+`ParticleDynamics` is GPU-only: simulation buffers stay GPU-resident, and the
+current implementation uses CUDA-backed arrays internally.
 
 ## 2) First simulation (2D, tiny and fast)
 
 ```julia
-using ParticleDynamics
+using ParticleDynamics: build_simulation, step!, velocityverlet, baoab, eulerheun, eulermaruyama,
+    write_xyz!, write_observables_csv!, gsd_open, gsd_close, write_gsd_frame!
 using CUDA
 
 N = 64
@@ -63,6 +65,10 @@ step!(st, bao, dt; compute_energy=true)
 # Brownian Euler-Maruyama
 em = eulermaruyama(st; gamma=50.0f0, temperature=1.0f0, dt=dt)
 step!(st, em, dt; compute_energy=false)
+
+# Brownian midpoint (Euler-Heun)
+eh = eulerheun(st; gamma=50.0f0, temperature=1.0f0, dt=dt)
+step!(st, eh, dt; compute_energy=false)
 ```
 
 Explicit specs are the stepping API. Stochastic parameters such as `gamma`,
@@ -95,6 +101,9 @@ CUDA.seed!(UInt64(0xBADC0DE))
 
 This gives reproducible runs at the statistical/moment level.  
 Bitwise-identical trajectories across different GPUs/toolchains are not guaranteed.
+
+Advanced orchestration helpers that are not part of the default import surface
+remain available under qualified paths such as `ParticleDynamics.Simulation`.
 
 ## 6) Where to copy realistic parameter sets
 
