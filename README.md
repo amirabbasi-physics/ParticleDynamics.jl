@@ -22,11 +22,11 @@ No CPU fallback simulation path is provided.
 
 ## Installation
 
-### Add from GitHub
+### Add from a git URL
 
 ```julia
 using Pkg
-Pkg.add(url="https://github.com/ORG_OR_USER/ParticleDynamics.jl")
+Pkg.add(url="<repository-url>")
 ```
 
 ### Develop locally
@@ -85,8 +85,6 @@ Build docs locally:
 ```bash
 julia --project=docs -e 'using Pkg; Pkg.instantiate(); include("docs/make.jl")'
 ```
-
-Docs site placeholder: `https://ORG_OR_USER.github.io/ParticleDynamics.jl/`
 
 ## Example smoke run
 
