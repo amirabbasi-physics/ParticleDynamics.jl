@@ -143,20 +143,41 @@
         end
         CUDA.synchronize()
 
-        function avg_step_ms(st, spec; reps::Int=12)
-            vals = Float64[]
-            for _ in 1:reps
-                CUDA.synchronize()
-                t0 = time_ns()
-                Simulation.step!(st, spec, dt; compute_energy=true)
-                CUDA.synchronize()
-                push!(vals, (time_ns() - t0) / 1e6)
-            end
-            return sum(vals) / length(vals)
+        function median_ms(vals::Vector{Float64})
+            sorted = sort!(copy(vals))
+            n = length(sorted)
+            mid = n ÷ 2
+            return isodd(n) ? sorted[mid + 1] : 0.5 * (sorted[mid] + sorted[mid + 1])
         end
 
-        gas_ms = avg_step_ms(st_gas, spec_gas)
-        poly_ms = avg_step_ms(st_poly, spec_poly)
+        function step_ms!(st, spec)
+            CUDA.synchronize()
+            t0 = time_ns()
+            Simulation.step!(st, spec, dt; compute_energy=true)
+            CUDA.synchronize()
+            return (time_ns() - t0) / 1e6
+        end
+
+        # Alternate measurement order and use a median to avoid a single host-side
+        # pause or GC event turning this into a flaky GPU performance guardrail.
+        function paired_medians(st_a, spec_a, st_b, spec_b; reps::Int=21)
+            vals_a = Float64[]
+            vals_b = Float64[]
+            sizehint!(vals_a, reps)
+            sizehint!(vals_b, reps)
+            for rep in 1:reps
+                if isodd(rep)
+                    push!(vals_a, step_ms!(st_a, spec_a))
+                    push!(vals_b, step_ms!(st_b, spec_b))
+                else
+                    push!(vals_b, step_ms!(st_b, spec_b))
+                    push!(vals_a, step_ms!(st_a, spec_a))
+                end
+            end
+            return median_ms(vals_a), median_ms(vals_b)
+        end
+
+        gas_ms, poly_ms = paired_medians(st_gas, spec_gas, st_poly, spec_poly)
         @test poly_ms <= 1.6 * gas_ms
     end
 end
