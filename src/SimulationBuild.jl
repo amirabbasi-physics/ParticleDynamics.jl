@@ -7,7 +7,7 @@
                       epsilon=1, sigma=1, gamma=1, temperature=1,
                       noise_corr_time=nothing, dt=0.001,
                       mass=1, bonds=nothing, bonding=nothing,
-                      nonbonded=:lj, softrep_params=nothing,
+                      nonbonded=:lj, softrep_params=nothing, backend=:cuda,
                       precision=:f32, unwrapped_positions::Bool=false)
 
 Construct a [`SimulationState`](@ref) with GPU-resident SoA arrays and a
@@ -65,8 +65,12 @@ function build_simulation(;N::Int,
                            bonding::Union{Nothing,Definitions.BondPotential}=nothing,
                            nonbonded::Symbol = :lj,
                            softrep_params::Union{Nothing,Definitions.SoftRepulsiveParams{<:Real}}=nothing,
+                           backend::Union{Backends.AbstractBackend,Symbol}=:cuda,
                            precision::Symbol = :f32,
                            unwrapped_positions::Bool = false)
+
+    backend_impl = Backends.normalize_backend(backend)
+    Backends.ensure_available(backend_impl)
 
     D = length(box)
 
@@ -84,25 +88,25 @@ function build_simulation(;N::Int,
     nb_cutoff = (nonbonded === :wca) ? (sigmaT * T(WCA_RC_FACTOR)) : requested_cutoff
     rcut_factor = sigmaT == zero(T) ? T(1) : nb_cutoff / sigmaT
 
-    rx = CUDA.CuArray{T}(undef, N); ry = CUDA.CuArray{T}(undef, N)
-    vx = CUDA.CuArray{T}(undef, N); vy = CUDA.CuArray{T}(undef, N)
-    fx = CUDA.CuArray{T}(undef, N); fy = CUDA.CuArray{T}(undef, N)
+    rx = Backends.allocate_vector(backend_impl, T, N); ry = Backends.allocate_vector(backend_impl, T, N)
+    vx = Backends.allocate_vector(backend_impl, T, N); vy = Backends.allocate_vector(backend_impl, T, N)
+    fx = Backends.allocate_vector(backend_impl, T, N); fy = Backends.allocate_vector(backend_impl, T, N)
     rz = nothing; vz = nothing; fz = nothing
-    rx_unwrap = unwrapped_positions ? CUDA.CuArray{T}(undef, N) : nothing
-    ry_unwrap = unwrapped_positions ? CUDA.CuArray{T}(undef, N) : nothing
+    rx_unwrap = unwrapped_positions ? Backends.allocate_vector(backend_impl, T, N) : nothing
+    ry_unwrap = unwrapped_positions ? Backends.allocate_vector(backend_impl, T, N) : nothing
     rz_unwrap = nothing
 
-    f0x = CUDA.CuArray{T}(undef, N)
-    f0y = CUDA.CuArray{T}(undef, N)
+    f0x = Backends.allocate_vector(backend_impl, T, N)
+    f0y = Backends.allocate_vector(backend_impl, T, N)
     f0z = nothing
 
     if D == 3
-        rz  = CUDA.CuArray{T}(undef, N)
-        vz  = CUDA.CuArray{T}(undef, N)
-        fz  = CUDA.CuArray{T}(undef, N)
-        f0z = CUDA.CuArray{T}(undef, N)
+        rz  = Backends.allocate_vector(backend_impl, T, N)
+        vz  = Backends.allocate_vector(backend_impl, T, N)
+        fz  = Backends.allocate_vector(backend_impl, T, N)
+        f0z = Backends.allocate_vector(backend_impl, T, N)
         if unwrapped_positions
-            rz_unwrap = CUDA.CuArray{T}(undef, N)
+            rz_unwrap = Backends.allocate_vector(backend_impl, T, N)
         end
     end
 
@@ -115,7 +119,7 @@ function build_simulation(;N::Int,
     fill!(fx, zero(T)); fill!(fy, zero(T)); fz === nothing || fill!(fz, zero(T))
     fill!(f0x, zero(T)); fill!(f0y, zero(T)); f0z === nothing || fill!(f0z, zero(T))
 
-    temperature_vec = _device_particle_buffer(T, N, temperature, "temperature")
+    temperature_vec = _device_particle_buffer(backend_impl, T, N, temperature, "temperature")
 
     if D == 2
         _init_vel2!(vx, vy, temperature_vec)
@@ -124,17 +128,17 @@ function build_simulation(;N::Int,
     end
 
     if N > 0
-        Vx = CUDA.sum(vx) / T(N)
-        Vy = CUDA.sum(vy) / T(N)
+        Vx = Backends.sum_elements(backend_impl, vx) / T(N)
+        Vy = Backends.sum_elements(backend_impl, vy) / T(N)
         @. vx = vx - Vx
         @. vy = vy - Vy
         if D == 3
-            Vz = CUDA.sum(vz) / T(N)
+            Vz = Backends.sum_elements(backend_impl, vz) / T(N)
             @. vz = vz - Vz
         end
     end
 
-    typeid = CUDA.fill(Int32(1), N)
+    typeid = Backends.fill_vector(backend_impl, Int32(1), N)
 
     if use_neighborlist
         if D == 2
@@ -154,19 +158,19 @@ function build_simulation(;N::Int,
     noise_corr_time === nothing ||
         throw(ArgumentError("build_simulation no longer accepts `noise_corr_time`; pass it to an explicit integrator constructor such as velocityverlet(st; gamma=..., temperature=..., noise_corr_time=..., dt=...)."))
 
-    Epot = CUDA.CuArray{T}(undef, N); fill!(Epot, zero(T))
-    dq   = CUDA.CuArray{T}(undef, N); fill!(dq, zero(T))
-    dU   = CUDA.CuArray{T}(undef, N); fill!(dU, zero(T))
-    Ekin = CUDA.CuArray{T}(undef, N); fill!(Ekin, zero(T))
-    virial = CUDA.CuArray{T}(undef, N); fill!(virial, zero(T))
+    Epot = Backends.allocate_vector(backend_impl, T, N); fill!(Epot, zero(T))
+    dq   = Backends.allocate_vector(backend_impl, T, N); fill!(dq, zero(T))
+    dU   = Backends.allocate_vector(backend_impl, T, N); fill!(dU, zero(T))
+    Ekin = Backends.allocate_vector(backend_impl, T, N); fill!(Ekin, zero(T))
+    virial = Backends.allocate_vector(backend_impl, T, N); fill!(virial, zero(T))
     nvirial = D == 2 ? 3 : 6
-    virial_nonbonded = CUDA.CuArray{T}(undef, N, nvirial); fill!(virial_nonbonded, zero(T))
-    virial_bonded = CUDA.CuArray{T}(undef, N, nvirial); fill!(virial_bonded, zero(T))
-    virial_tensor = CUDA.CuArray{T}(undef, N, nvirial); fill!(virial_tensor, zero(T))
-    Epot_accum = CUDA.CuArray{T}(undef, N); fill!(Epot_accum, zero(T))
-    Ekin_accum = CUDA.CuArray{T}(undef, N); fill!(Ekin_accum, zero(T))
-    virial_accum = CUDA.CuArray{T}(undef, N); fill!(virial_accum, zero(T))
-    virial_tensor_accum = CUDA.CuArray{T}(undef, N, nvirial); fill!(virial_tensor_accum, zero(T))
+    virial_nonbonded = Backends.allocate_matrix(backend_impl, T, N, nvirial); fill!(virial_nonbonded, zero(T))
+    virial_bonded = Backends.allocate_matrix(backend_impl, T, N, nvirial); fill!(virial_bonded, zero(T))
+    virial_tensor = Backends.allocate_matrix(backend_impl, T, N, nvirial); fill!(virial_tensor, zero(T))
+    Epot_accum = Backends.allocate_vector(backend_impl, T, N); fill!(Epot_accum, zero(T))
+    Ekin_accum = Backends.allocate_vector(backend_impl, T, N); fill!(Ekin_accum, zero(T))
+    virial_accum = Backends.allocate_vector(backend_impl, T, N); fill!(virial_accum, zero(T))
+    virial_tensor_accum = Backends.allocate_matrix(backend_impl, T, N, nvirial); fill!(virial_tensor_accum, zero(T))
 
     local bondlist
     if bonds === nothing

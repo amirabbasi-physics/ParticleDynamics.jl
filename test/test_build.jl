@@ -3,6 +3,7 @@
 
     @test ParticleDynamics.SimulationState === Simulation.SimulationState
     @test ParticleDynamics.build_simulation === Simulation.build_simulation
+    @test ParticleDynamics.Backends.normalize_backend(:cuda) isa ParticleDynamics.Backends.CUDABackend
 
     st2 = build_tiny2d(N=9, T=Float32, nonbonded=:wca, unwrapped_positions=true)
     @test st2.rz === nothing
@@ -30,6 +31,23 @@
 
     st_allpairs = build_tiny2d(N=8, T=Float32, use_neighborlist=false)
     @test st_allpairs.nbh isa ParticleDynamics.NeighborLists.AllPairsNeighborMatrix{Float32}
+
+    st_explicit = Simulation.build_simulation(
+        N=8, box=(20f0, 20f0), cutoff=2.5f0, skin=0.3f0, cap=Int32(32), neigh_interval=5,
+        epsilon=1f0, sigma=1f0, gamma=1f0, temperature=1f0, backend=:cuda
+    )
+    @test st_explicit.rx isa CuArray{Float32,1}
+
+    st_object = Simulation.build_simulation(
+        N=8, box=(20f0, 20f0), cutoff=2.5f0, skin=0.3f0, cap=Int32(32), neigh_interval=5,
+        epsilon=1f0, sigma=1f0, gamma=1f0, temperature=1f0,
+        backend=ParticleDynamics.Backends.CUDABackend()
+    )
+    @test st_object.rx isa CuArray{Float32,1}
+    @test_throws ArgumentError Simulation.build_simulation(
+        N=8, box=(20f0, 20f0), cutoff=2.5f0, skin=0.3f0, cap=Int32(32), neigh_interval=5,
+        epsilon=1f0, sigma=1f0, gamma=1f0, temperature=1f0, backend=:cpu
+    )
 end
 
 @testset "WCA cutoff override" begin
