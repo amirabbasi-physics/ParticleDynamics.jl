@@ -1,11 +1,11 @@
 using Documenter
-using NonEqSimGPU
+using ParticleDynamics
 
-DocMeta.setdocmeta!(NonEqSimGPU, :DocTestSetup, :(using NonEqSimGPU); recursive=true)
+DocMeta.setdocmeta!(ParticleDynamics, :DocTestSetup, :(using ParticleDynamics); recursive=true)
 
 makedocs(
-    modules=[NonEqSimGPU],
-    sitename="NonEqSimGPU.jl",
+    modules=[ParticleDynamics],
+    sitename="ParticleDynamics.jl",
     format=Documenter.HTML(prettyurls=false, edit_link=nothing),
     checkdocs=:none,
     doctest=false,

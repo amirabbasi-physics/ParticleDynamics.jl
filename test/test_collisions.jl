@@ -7,7 +7,7 @@
     )
     st.typeid .= CuArray(Int32[1, 1, 1, 1, 2, 2, 2, 2])
 
-    NonEqSimGPU.enable_collision_counting!(st; ntypes=2, bins=:all_pairs)
+    ParticleDynamics.enable_collision_counting!(st; ntypes=2, bins=:all_pairs)
     @test st.coll_enabled
     @test st.coll_prev !== nothing
     @test st.coll_counts !== nothing
@@ -17,20 +17,20 @@
     for _ in 1:4
         Simulation.step!(st, vv, 1f-3; compute_energy=false)
     end
-    counts = NonEqSimGPU.collisions_read_counts!(st)
+    counts = ParticleDynamics.collisions_read_counts!(st)
     @test length(counts) == 3
     @test all(c -> c >= 0, counts)
 
-    NonEqSimGPU.collisions_reset_counts!(st)
-    counts_reset = NonEqSimGPU.collisions_read_counts!(st)
+    ParticleDynamics.collisions_reset_counts!(st)
+    counts_reset = ParticleDynamics.collisions_read_counts!(st)
     @test all(c -> c == 0, counts_reset)
 
     rcut_pair = Float32[1.0 1.1; 1.1 1.2]
-    NonEqSimGPU.set_collision_pair_cutoffs!(st, rcut_pair)
+    ParticleDynamics.set_collision_pair_cutoffs!(st, rcut_pair)
     @test st.rcut_pair !== nothing
     @test size(st.rcut_pair) == (2, 2)
 
-    NonEqSimGPU.disable_collision_counting!(st)
+    ParticleDynamics.disable_collision_counting!(st)
     @test st.coll_enabled == false
     @test st.coll_prev === nothing
     @test st.coll_counts === nothing
@@ -64,8 +64,8 @@ end
         # Start as neighbors but outside collision cutoff.
         copyto!(st.rx, T[0, 1.5])
         copyto!(st.ry, T[0, 0])
-        NonEqSimGPU.NeighborLists.update_neighbors_inplace!(st.nbh, st.rx, st.ry; box=st.box2, step=st.step)
-        NonEqSimGPU.enable_collision_counting!(st; ntypes=1, bins=:all_pairs)
+        ParticleDynamics.NeighborLists.update_neighbors_inplace!(st.nbh, st.rx, st.ry; box=st.box2, step=st.step)
+        ParticleDynamics.enable_collision_counting!(st; ntypes=1, bins=:all_pairs)
         return st
     end
 
@@ -75,11 +75,11 @@ end
     # Move into contact without rebuilding NL so this is an entry event.
     copyto!(st_unbonded.rx, T[0, 0.5])
     copyto!(st_bonded.rx, T[0, 0.5])
-    NonEqSimGPU.Collisions._collisions_update_after_positions!(st_unbonded)
-    NonEqSimGPU.Collisions._collisions_update_after_positions!(st_bonded)
+    ParticleDynamics.Collisions._collisions_update_after_positions!(st_unbonded)
+    ParticleDynamics.Collisions._collisions_update_after_positions!(st_bonded)
 
-    cu = NonEqSimGPU.collisions_read_counts!(st_unbonded)
-    cb = NonEqSimGPU.collisions_read_counts!(st_bonded)
+    cu = ParticleDynamics.collisions_read_counts!(st_unbonded)
+    cb = ParticleDynamics.collisions_read_counts!(st_bonded)
     @test cu == Int64[1]
     @test cb == Int64[0]
 end
@@ -94,15 +94,15 @@ end
     )
 
     st.typeid .= CuArray(Int32[1, 1, 1, 1, 2, 2, 2, 2])
-    NonEqSimGPU.enable_collision_counting!(st; ntypes=2, bins=:all_pairs)
-    NonEqSimGPU.set_collision_pair_cutoffs!(st, T[1.0 1.1; 1.1 1.2])
+    ParticleDynamics.enable_collision_counting!(st; ntypes=2, bins=:all_pairs)
+    ParticleDynamics.set_collision_pair_cutoffs!(st, T[1.0 1.1; 1.1 1.2])
     vv = Simulation.velocityverlet(st; gamma=T(1), temperature=T(0.5), dt=T(1e-3))
 
     for _ in 1:2
         Simulation.step!(st, vv, T(1e-3); compute_energy=false)
     end
 
-    counts = NonEqSimGPU.collisions_read_counts!(st)
+    counts = ParticleDynamics.collisions_read_counts!(st)
     @test length(counts) == 3
     @test all(c -> c >= 0, counts)
 end

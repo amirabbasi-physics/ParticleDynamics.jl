@@ -67,17 +67,17 @@
             return [s for s in syms if !isdefined(mod, s)]
         end
 
-        missing_root = missing_exports(NonEqSimGPU)
+        missing_root = missing_exports(ParticleDynamics)
         missing_sim = missing_exports(Simulation)
-        missing_writers = missing_exports(NonEqSimGPU.Writers)
+        missing_writers = missing_exports(ParticleDynamics.Writers)
 
         @test isempty(missing_root)
         @test isempty(missing_sim)
         @test isempty(missing_writers)
 
         # eulerheun policy in Phase 3: keep bound but unexported at top-level.
-        @test isdefined(NonEqSimGPU, :eulerheun)
-        @test !(:eulerheun in names(NonEqSimGPU; all=false, imported=false))
+        @test isdefined(ParticleDynamics, :eulerheun)
+        @test !(:eulerheun in names(ParticleDynamics; all=false, imported=false))
     end
 
     @testset "IR-004 test_em_rebuild_collision_state_consistency" begin
@@ -88,7 +88,7 @@
             nonbonded=:wca, gamma=1f0, temperature=0.5f0, dt=1f-3
         )
         st.typeid .= CuArray(vcat(fill(Int32(1), 6), fill(Int32(2), 6)))
-        NonEqSimGPU.enable_collision_counting!(st; ntypes=2, bins=:all_pairs)
+        ParticleDynamics.enable_collision_counting!(st; ntypes=2, bins=:all_pairs)
 
         @test st.coll_prev !== nothing
         @test st.coll_counts !== nothing
@@ -115,7 +115,7 @@
         @test length(st.coll_prev) == prev_len
         @test length(st.coll_counts) == 3
 
-        counts = NonEqSimGPU.collisions_read_counts!(st)
+        counts = ParticleDynamics.collisions_read_counts!(st)
         @test all(>=(0), counts)
 
         sentinel = Int(CUDA.sum(ifelse.(st.coll_prev .== UInt8(0x07), Int32(1), Int32(0))))

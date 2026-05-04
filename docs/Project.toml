@@ -1,9 +1,9 @@
 [deps]
 Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
-NonEqSimGPU = "12ca460a-85bb-48c4-9960-620229cee2bc"
+ParticleDynamics = "12ca460a-85bb-48c4-9960-620229cee2bc"
 
 [sources]
-NonEqSimGPU = {path = ".."}
+ParticleDynamics = {path = ".."}
 
 [compat]
 Documenter = "1"

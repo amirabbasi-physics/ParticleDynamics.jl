@@ -1,4 +1,4 @@
-using NonEqSimGPU
+using ParticleDynamics
 using CUDA
 
 """
@@ -89,7 +89,7 @@ gsd_open(gsd_path) do gsdh
     end
 end
 
-frame = NonEqSimGPU.read_gsd_frame!(gsd_path)
+frame = ParticleDynamics.read_gsd_frame!(gsd_path)
 virial = frame.particle_properties[:virial]
 println("Wrote trajectory with virial tensors to $(gsd_path)")
 println("Virial component order: $(virial_components(st))")

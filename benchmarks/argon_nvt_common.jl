@@ -1,5 +1,5 @@
-using NonEqSimGPU
-using NonEqSimGPU: nosehooverchain
+using ParticleDynamics
+using ParticleDynamics: nosehooverchain
 using CUDA
 using Random
 

@@ -1,20 +1,21 @@
 @testset "API and Filters" begin
     seed_all!(0xA1001)
 
-    @test isdefined(NonEqSimGPU, :SimulationState)
-    @test isdefined(NonEqSimGPU, :build_simulation)
-    @test isdefined(NonEqSimGPU, :step!)
-    @test isdefined(NonEqSimGPU, :step_graph!)
-    @test isdefined(NonEqSimGPU, :velocityverlet)
-    @test isdefined(NonEqSimGPU, :baoab)
-    @test isdefined(NonEqSimGPU, :baoa)
-    @test isdefined(NonEqSimGPU, :gsm)
-    @test isdefined(NonEqSimGPU, :eulermaruyama)
-    @test isdefined(NonEqSimGPU, :eulerheun)
-    @test isdefined(NonEqSimGPU, :nosehooverchain)
-    @test isdefined(NonEqSimGPU, :NHCSpec)
-    @test isdefined(NonEqSimGPU, :csvr)
-    @test isdefined(NonEqSimGPU, :CSVRSpec)
+    @test isdefined(ParticleDynamics, :SimulationState)
+    @test isdefined(ParticleDynamics, :build_simulation)
+    @test isdefined(ParticleDynamics, :step!)
+    @test isdefined(ParticleDynamics, :step_graph!)
+    @test isdefined(ParticleDynamics, :velocityverlet)
+    @test isdefined(ParticleDynamics, :reset_bath_exchange_accumulators!)
+    @test isdefined(ParticleDynamics, :baoab)
+    @test isdefined(ParticleDynamics, :baoa)
+    @test isdefined(ParticleDynamics, :gsm)
+    @test isdefined(ParticleDynamics, :eulermaruyama)
+    @test isdefined(ParticleDynamics, :eulerheun)
+    @test isdefined(ParticleDynamics, :nosehooverchain)
+    @test isdefined(ParticleDynamics, :NHCSpec)
+    @test isdefined(ParticleDynamics, :csvr)
+    @test isdefined(ParticleDynamics, :CSVRSpec)
 
     N = 16
     dt = 0.002f0
@@ -94,7 +95,7 @@
 
     @testset "Integrator-spec controls and observables" begin
         spec = Simulation.velocityverlet(st; gamma=1f0, temperature=1f0, dt=dt)
-        @test NonEqSimGPU.IntegratorInterfaces.stage_sequence(spec) == (:kick1, :drift, :force, :kick2)
+        @test ParticleDynamics.IntegratorInterfaces.stage_sequence(spec) == (:kick1, :drift, :force, :kick2)
 
         Filters.set_friction!(spec, st, 1.5f0; filter=cold_filter)
         g_spec = Array(spec.params.gamma)
@@ -132,7 +133,7 @@
 
     @testset "NHC controls" begin
         nhc = Simulation.nosehooverchain(st; temperature=1.0f0, tau=0.5f0, chain_length=4, substeps=3)
-        @test NonEqSimGPU.IntegratorInterfaces.stage_sequence(nhc) ==
+        @test ParticleDynamics.IntegratorInterfaces.stage_sequence(nhc) ==
               (:thermostat_pre, :kick1, :drift, :force, :kick2, :thermostat_post)
         @test nhc.params.propagator == Simulation.NHC_PROPAGATOR_GROMACS
 
@@ -171,7 +172,7 @@
 
     @testset "CSVR controls" begin
         csvr_spec = Simulation.csvr(st; temperature=1.0f0, tau=0.5f0)
-        @test NonEqSimGPU.IntegratorInterfaces.stage_sequence(csvr_spec) ==
+        @test ParticleDynamics.IntegratorInterfaces.stage_sequence(csvr_spec) ==
               (:kick1, :drift, :force, :kick2, :thermostat)
 
         Filters.set_thermostat_temperature!(csvr_spec, 1.1f0)

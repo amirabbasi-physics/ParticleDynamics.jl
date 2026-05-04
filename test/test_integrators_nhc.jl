@@ -8,12 +8,12 @@
         )
         @test_throws UndefKeywordError Simulation.velocityverlet(st)
         vv = Simulation.velocityverlet(st; gamma=1f0, temperature=1f0, dt=dt)
-        @test NonEqSimGPU.IntegratorInterfaces.integrator_name(vv) == :velocity_verlet
+        @test ParticleDynamics.IntegratorInterfaces.integrator_name(vv) == :velocity_verlet
         spec = Simulation.nosehooverchain(st; temperature=1.0f0, tau=0.5f0, chain_length=5, substeps=4)
 
-        @test NonEqSimGPU.IntegratorInterfaces.integrator_name(spec) == :nose_hoover_chain
-        @test NonEqSimGPU.IntegratorInterfaces.integrator_id(spec) == UInt8(3)
-        @test NonEqSimGPU.IntegratorInterfaces.stage_sequence(spec) ==
+        @test ParticleDynamics.IntegratorInterfaces.integrator_name(spec) == :nose_hoover_chain
+        @test ParticleDynamics.IntegratorInterfaces.integrator_id(spec) == UInt8(3)
+        @test ParticleDynamics.IntegratorInterfaces.stage_sequence(spec) ==
               (:thermostat_pre, :kick1, :drift, :force, :kick2, :thermostat_post)
 
         Simulation.step!(st, spec, dt; compute_energy=true)

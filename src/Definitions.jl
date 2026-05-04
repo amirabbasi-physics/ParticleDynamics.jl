@@ -1,5 +1,5 @@
 """
-Domain and potential parameter definitions shared by NonEqSimGPU modules.
+Domain and potential parameter definitions shared by ParticleDynamics modules.
 
 `Definitions` exposes the light-weight structs that describe the simulation
 domain (periodic boxes), nonbonded parameters (Lennard-Jones, soft repulsive,

@@ -7,12 +7,12 @@
             neigh_interval=4, gamma=nothing, temperature=1f0, nonbonded=:wca
         )
         vv = Simulation.velocityverlet(st; gamma=1f0, temperature=1f0, dt=dt)
-        @test NonEqSimGPU.IntegratorInterfaces.integrator_name(vv) == :velocity_verlet
+        @test ParticleDynamics.IntegratorInterfaces.integrator_name(vv) == :velocity_verlet
         spec = Simulation.csvr(st; temperature=1.0f0, tau=0.5f0)
 
-        @test NonEqSimGPU.IntegratorInterfaces.integrator_name(spec) == :csvr
-        @test NonEqSimGPU.IntegratorInterfaces.integrator_id(spec) == UInt8(4)
-        @test NonEqSimGPU.IntegratorInterfaces.stage_sequence(spec) ==
+        @test ParticleDynamics.IntegratorInterfaces.integrator_name(spec) == :csvr
+        @test ParticleDynamics.IntegratorInterfaces.integrator_id(spec) == UInt8(4)
+        @test ParticleDynamics.IntegratorInterfaces.stage_sequence(spec) ==
               (:kick1, :drift, :force, :kick2, :thermostat)
 
         vx0 = randn(Float32, length(st.rx))

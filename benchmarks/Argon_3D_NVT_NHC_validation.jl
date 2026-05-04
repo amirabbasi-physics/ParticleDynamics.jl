@@ -1,5 +1,5 @@
-using NonEqSimGPU
-using NonEqSimGPU: step!, collect_step_observables
+using ParticleDynamics
+using ParticleDynamics: step!, collect_step_observables
 using CUDA
 using Printf
 using Random

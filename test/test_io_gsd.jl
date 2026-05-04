@@ -12,14 +12,14 @@ using GSDFiles
         )
         st.typeid .= CuArray(Int32[1, 2, 1, 2, 1, 2, 1, 2])
 
-        h = NonEqSimGPU.gsd_open(path)
+        h = ParticleDynamics.gsd_open(path)
         try
-            NonEqSimGPU.write_gsd_frame!(h, st; step=7, types_names=["A", "B"])
+            ParticleDynamics.write_gsd_frame!(h, st; step=7, types_names=["A", "B"])
         finally
-            NonEqSimGPU.gsd_close(h)
+            ParticleDynamics.gsd_close(h)
         end
 
-        frame = NonEqSimGPU.read_gsd_frame!(path)
+        frame = ParticleDynamics.read_gsd_frame!(path)
         @test frame.step == 7
         @test frame.N == 8
         @test frame.D == 2
@@ -44,22 +44,22 @@ using GSDFiles
             neigh_interval=5, use_neighborlist=true, nonbonded=:wca, gamma=1f0, temperature=0.2f0
         )
 
-        h1 = NonEqSimGPU.gsd_open(path)
+        h1 = ParticleDynamics.gsd_open(path)
         try
-            NonEqSimGPU.write_gsd_frame!(h1, st; step=7, types_names=["A"])
+            ParticleDynamics.write_gsd_frame!(h1, st; step=7, types_names=["A"])
         finally
-            NonEqSimGPU.gsd_close(h1)
+            ParticleDynamics.gsd_close(h1)
         end
 
-        h2 = NonEqSimGPU.gsd_open(path; append=true)
+        h2 = ParticleDynamics.gsd_open(path; append=true)
         try
-            NonEqSimGPU.write_gsd_frame!(h2, st; step=8, types_names=["A"])
+            ParticleDynamics.write_gsd_frame!(h2, st; step=8, types_names=["A"])
         finally
-            NonEqSimGPU.gsd_close(h2)
+            ParticleDynamics.gsd_close(h2)
         end
 
-        frame_last = NonEqSimGPU.read_gsd_frame!(path)
-        frame_first = NonEqSimGPU.read_gsd_frame!(path; step=1)
+        frame_last = ParticleDynamics.read_gsd_frame!(path)
+        frame_first = ParticleDynamics.read_gsd_frame!(path; step=1)
         @test frame_first.step == 7
         @test frame_last.step == 8
 
@@ -83,14 +83,14 @@ using GSDFiles
         step!(st, vv, 1f-4; compute_energy=true)
         expected_virial = Array(st.virial_tensor)
 
-        h = NonEqSimGPU.gsd_open(path)
+        h = ParticleDynamics.gsd_open(path)
         try
-            NonEqSimGPU.write_gsd_frame!(h, st; step=st.step, types_names=["A"], write_virial=true)
+            ParticleDynamics.write_gsd_frame!(h, st; step=st.step, types_names=["A"], write_virial=true)
         finally
-            NonEqSimGPU.gsd_close(h)
+            ParticleDynamics.gsd_close(h)
         end
 
-        frame = NonEqSimGPU.read_gsd_frame!(path)
+        frame = ParticleDynamics.read_gsd_frame!(path)
         @test haskey(frame.particle_properties, :virial)
         got_virial = frame.particle_properties[:virial]
         @test size(got_virial) == size(expected_virial)

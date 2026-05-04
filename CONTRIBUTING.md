@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for contributing to `NonEqSimGPU.jl`.
+Thanks for contributing to `ParticleDynamics.jl`.
 
 ## Before opening a PR
 

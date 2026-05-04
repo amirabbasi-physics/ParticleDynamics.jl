@@ -24,15 +24,15 @@
         CUDA.fill!(st.Epot, 0.0)
 
         if nonbonded == :lj
-            NonEqSimGPU.NonBondedForces.lj_forces_soa!(
+            ParticleDynamics.NonBondedForces.lj_forces_soa!(
                 st.rx, st.ry, st.fx, st.fy, st.Epot, st.nbh, st.box2, st.pair_lj
             )
         elseif nonbonded == :wca
-            NonEqSimGPU.NonBondedForces.wca_forces_soa!(
+            ParticleDynamics.NonBondedForces.wca_forces_soa!(
                 st.rx, st.ry, st.fx, st.fy, st.Epot, st.nbh, st.box2, st.pair_lj
             )
         elseif nonbonded == :soft_repulsive
-            NonEqSimGPU.NonBondedForces.harmonic_rep_forces_soa!(
+            ParticleDynamics.NonBondedForces.harmonic_rep_forces_soa!(
                 st.rx, st.ry, st.fx, st.fy, st.Epot, st.nbh, st.box2, st.softrep
             )
         else

@@ -1,5 +1,5 @@
-using NonEqSimGPU
-using NonEqSimGPU: Filters, eulermaruyama
+using ParticleDynamics
+using ParticleDynamics: Filters, eulermaruyama
 using CUDA
 
 function initialize_simple_cubic_lattice!(st, box::NTuple{3,Float32})

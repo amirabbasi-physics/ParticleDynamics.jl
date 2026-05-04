@@ -1,5 +1,5 @@
-using NonEqSimGPU
-using NonEqSimGPU: step!, collect_step_observables
+using ParticleDynamics
+using ParticleDynamics: step!, collect_step_observables
 using CUDA
 using Random
 using Printf
@@ -368,7 +368,7 @@ function main()
     lines = String[]
     rows = NamedTuple[]
 
-    push!(lines, "NonEqSimGPU NHC Validation Benchmark Suite")
+    push!(lines, "ParticleDynamics NHC Validation Benchmark Suite")
     push!(lines, "Generated at: $(Dates.format(Dates.now(), dateformat"yyyy-mm-dd HH:MM:SS"))")
     push!(lines, "Mode: $(mode)")
     if full_mode

@@ -1,4 +1,4 @@
-using NonEqSimGPU
+using ParticleDynamics
 using CUDA
 using Printf
 using Dates
@@ -218,7 +218,7 @@ Compute `U_pair` and `W_pair` on GPU for the LJ truncation-with-LRC scheme.
 """
 function compute_gpu_lrc_pair_quantities(cfg::CuboidConfig, rc::Float64)
     st = build_static_state(cfg, rc)
-    NonEqSimGPU.Simulation.evaluate_forces_into_f!(st, true; freeze_spring=false)
+    ParticleDynamics.Simulation.evaluate_forces_into_f!(st, true; freeze_spring=false)
 
     N = length(cfg.x)
     V = cfg.box[1] * cfg.box[2] * cfg.box[3]
@@ -368,7 +368,7 @@ function write_report(rows::Vector{ComparisonRow}, path::String)
     all_pass = all(r -> (r.U_pair_pass && r.W_pair_pass && r.U_lrc_pass), rows)
 
     open(path, "w") do io
-        println(io, "NonEqSimGPU NIST Cuboid LJ Head-to-Head Benchmark")
+        println(io, "ParticleDynamics NIST Cuboid LJ Head-to-Head Benchmark")
         println(io, "Generated at: $(now_str)")
         println(io, "Source: $(NIST_CUBOID_URL)")
         println(io, "NIST page updated: $(NIST_CUBOID_UPDATED)")

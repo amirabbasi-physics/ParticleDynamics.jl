@@ -369,7 +369,7 @@
         copyto!(st.ry, ry)
         copyto!(st.vx, zeros(Float64, N))
         copyto!(st.vy, zeros(Float64, N))
-        NonEqSimGPU.NeighborLists.update_neighbors_inplace!(st.nbh, st.rx, st.ry; box = st.box2, step = st.step)
+        ParticleDynamics.NeighborLists.update_neighbors_inplace!(st.nbh, st.rx, st.ry; box = st.box2, step = st.step)
         Simulation.sync_unwrapped!(st)
         spec = Simulation.velocityverlet(st; gamma=gamma, temperature=temperature, noise_corr_time=tau, dt=dt)
         Filters.set_noise_scale!(spec, noise_scale)

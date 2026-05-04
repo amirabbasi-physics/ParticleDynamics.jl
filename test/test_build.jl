@@ -23,10 +23,10 @@
     @test msd_3d(st3.rx, st3.ry, st3.rz, st3.rx_unwrap, st3.ry_unwrap, st3.rz_unwrap) <= 1e-12
 
     st_dense = build_tiny2d(N=8, T=Float32, use_neighborlist=true)
-    @test st_dense.nbh isa NonEqSimGPU.NeighborLists.NeighborMatrix{Float32}
+    @test st_dense.nbh isa ParticleDynamics.NeighborLists.NeighborMatrix{Float32}
 
     st_allpairs = build_tiny2d(N=8, T=Float32, use_neighborlist=false)
-    @test st_allpairs.nbh isa NonEqSimGPU.NeighborLists.AllPairsNeighborMatrix{Float32}
+    @test st_allpairs.nbh isa ParticleDynamics.NeighborLists.AllPairsNeighborMatrix{Float32}
 end
 
 @testset "WCA cutoff override" begin

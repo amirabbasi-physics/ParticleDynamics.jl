@@ -1,5 +1,5 @@
-using NonEqSimGPU
-using NonEqSimGPU: step!, eulermaruyama
+using ParticleDynamics
+using ParticleDynamics: step!, eulermaruyama
 
 # Active Ornstein–Uhlenbeck particles in 2D (overdamped limit, Fodor et al. PRL 117, 038103)
 # Parameters follow the paper: N=10000, box 250×250, D=100, τ=20, μ=1 (γ=1).
@@ -61,17 +61,17 @@ spec = eulermaruyama(st; gamma=gamma, temperature=temperature,
 Filters.set_noise_scale!(spec, active_impulse)
 
 gsd_path = joinpath(@__DIR__, "traj2d_active_OU_bd.gsd")
-gsdh = NonEqSimGPU.Writers.gsd_open(gsd_path)
+gsdh = ParticleDynamics.Writers.gsd_open(gsd_path)
 types = ["C"]
-NonEqSimGPU.Writers.write_gsd_frame!(gsdh, st; diameter=1f0, types_names=types, step=st.step)
+ParticleDynamics.Writers.write_gsd_frame!(gsdh, st; diameter=1f0, types_names=types, step=st.step)
 
 for s in 1:n_steps
     step!(st, spec, dt; compute_energy=false)
     if s % write_interval == 0
-        NonEqSimGPU.Writers.write_gsd_frame!(gsdh, st; diameter=1f0, types_names=types, step=st.step)
+        ParticleDynamics.Writers.write_gsd_frame!(gsdh, st; diameter=1f0, types_names=types, step=st.step)
         @info "wrote BD frame" step=s
     end
 end
 
-NonEqSimGPU.Writers.gsd_close(gsdh)
+ParticleDynamics.Writers.gsd_close(gsdh)
 println("Finished $(n_steps) BD steps with correlated OU noise (τ=$(corr_time)). GSD: $(gsd_path)")
