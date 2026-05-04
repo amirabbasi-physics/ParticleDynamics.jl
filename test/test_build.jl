@@ -1,6 +1,9 @@
 @testset "Build and State Layout" begin
     seed_all!(0xB1001)
 
+    @test ParticleDynamics.SimulationState === Simulation.SimulationState
+    @test ParticleDynamics.build_simulation === Simulation.build_simulation
+
     st2 = build_tiny2d(N=9, T=Float32, nonbonded=:wca, unwrapped_positions=true)
     @test st2.rz === nothing
     @test st2.vz === nothing
