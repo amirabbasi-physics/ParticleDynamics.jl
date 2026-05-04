@@ -24,6 +24,7 @@ using .ParamsFromExamples
         include("test_thermostats.jl")
         include("test_forces.jl")
         include("test_gpu_residency.jl")
+        include("test_nonbonded_interface.jl")
         include("test_bonded_exclusions.jl")
         include("test_phase4a_forces.jl")
         include("test_phase4a_pair_pbc.jl")
