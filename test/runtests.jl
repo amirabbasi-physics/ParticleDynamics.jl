@@ -20,6 +20,8 @@ using .ParamsFromExamples
         seed_all!(0xBADC0DE)
         include("test_api.jl")
         include("test_build.jl")
+        include("test_particle_groups.jl")
+        include("test_thermostats.jl")
         include("test_forces.jl")
         include("test_gpu_residency.jl")
         include("test_bonded_exclusions.jl")

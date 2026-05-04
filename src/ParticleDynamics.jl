@@ -54,6 +54,8 @@ include("LangevinIntegrators.jl")
 include("BrownianIntegrators.jl")
 include("IntegratorInterfaces.jl")
 include("Collisions.jl")
+include("ParticleGroups.jl")
+include("Thermostats.jl")
 include("Simulation.jl")
 include("Filters.jl")
 include("Writers.jl")
@@ -66,6 +68,13 @@ using .Definitions: LJParams, SoftRepulsiveParams,
     StokesFrictionCoefficient, SphereMass, InertialTime, DiffusiveTime,
     harmonic_bond, fene_bond
 using .IntegratorInterfaces: AbstractIntegratorSpec
+
+using .ParticleGroups: ParticleSelection, ParticleGroup, All, TypeIDs, Indices,
+    materialize, apply_scalar!, apply_values!, gather, sum_values
+using .Thermostats: AbstractThermostat, ThermostatState,
+    NoseHooverChainThermostat, CSVRThermostat,
+    n_baths, target_temperature, response_time,
+    set_target_temperature!, set_response_time!, cumulative_energy_exchange
 
 using .Simulation: SimulationState, build_simulation, step!, step_graph!, sync_unwrapped!, accumulate_virial!, virial_components, virial_tensor
 using .Simulation: collect_step_observables, reset_bath_exchange_accumulators!
@@ -80,13 +89,21 @@ using .InitGenerators: box_from_phi_2d, box_from_phi_3d,
 using .Collisions: enable_collision_counting!, disable_collision_counting!,
     collisions_reset_counts!, collisions_read_counts!, set_collision_pair_cutoffs!
 
-export Filters, BondedForces,
+export Filters, BondedForces, ParticleGroups, Thermostats,
        # Definitions / parameters
        LJParams, SoftRepulsiveParams,
        HarmonicBondParams, FENEParams,
        BondPotential, HarmonicBond, FENEBond,
        harmonic_bond, fene_bond,
        StokesFrictionCoefficient, SphereMass, InertialTime, DiffusiveTime,
+       # Particle groups and selection
+       ParticleSelection, ParticleGroup, All, TypeIDs, Indices,
+       materialize, apply_scalar!, apply_values!, gather, sum_values,
+       # Thermostats
+       AbstractThermostat, ThermostatState,
+       NoseHooverChainThermostat, CSVRThermostat,
+       n_baths, target_temperature, response_time,
+       set_target_temperature!, set_response_time!, cumulative_energy_exchange,
        # Simulation helpers
        SimulationState, build_simulation, step!, step_graph!, sync_unwrapped!, accumulate_virial!, virial_components, virial_tensor,
        collect_step_observables, reset_bath_exchange_accumulators!,
