@@ -11,6 +11,7 @@ import ..IntegratorInterfaces: AbstractIntegratorSpec,
                                execute_integrator_stage!,
                                collect_integrator_observables
 using ..Definitions
+using ..Backends
 using ..NeighborLists
 using ..NonBondedForces
 using ..BondedForces
@@ -62,27 +63,31 @@ mutable struct StochasticWorkspace{T<:AbstractFloat}
     ou_z::Union{Nothing,CuArray{T,2}}
 end
 
-@inline function _device_particle_buffer(::Type{T},
+Backends.storage_backend(::SimulationState) = Backends.CUDABackend()
+
+@inline function _device_particle_buffer(backend::Backends.AbstractBackend,
+                                         ::Type{T},
                                          N::Integer,
                                          value::Union{AbstractVector{<:Real},Real},
                                          name::AbstractString) where {T<:AbstractFloat}
     if value isa Real
-        return CUDA.fill(T(value), N)
+        return Backends.fill_vector(backend, T(value), N)
     end
     length(value) == N ||
         throw(ArgumentError("$(name) vector must have length $(N), got $(length(value))."))
-    return CuArray(T.(value))
+    return Backends.from_host(backend, T.(value))
 end
 
-@inline function _device_corr_time_buffer(::Type{T},
+@inline function _device_corr_time_buffer(backend::Backends.AbstractBackend,
+                                          ::Type{T},
                                           N::Integer,
                                           value::Union{Nothing,AbstractVector{<:Real},Real}) where {T<:AbstractFloat}
     value === nothing && return nothing
-    return _device_particle_buffer(T, N, value, "noise_corr_time")
+    return _device_particle_buffer(backend, T, N, value, "noise_corr_time")
 end
 
-@inline function _all_particle_indices(N::Integer)
-    return CuArray(Int32.(collect(1:N)))
+@inline function _all_particle_indices(backend::Backends.AbstractBackend, N::Integer)
+    return Backends.from_host(backend, Int32.(collect(1:N)))
 end
 
 @inline function _mode_vector(::Type{T},
@@ -109,7 +114,8 @@ end
     return tau_vals, scale_vals
 end
 
-@inline function _ou_coefficients(::Type{T},
+@inline function _ou_coefficients(backend::Backends.AbstractBackend,
+                                  ::Type{T},
                                   dt::T,
                                   tau::AbstractMatrix{T},
                                   scale::AbstractMatrix{T}) where {T<:AbstractFloat}
@@ -127,10 +133,11 @@ end
             coeff_c[i, j] = s * sqrt(max(one(T) - a * a, zero(T)))
         end
     end
-    return CuArray(coeff_a), CuArray(coeff_c)
+    return Backends.from_host(backend, coeff_a), Backends.from_host(backend, coeff_c)
 end
 
-function _build_single_mode_ou(::Type{T},
+function _build_single_mode_ou(backend::Backends.AbstractBackend,
+                               ::Type{T},
                                noise_scale::CuArray{T,1},
                                corr::CuArray{T,1},
                                dt::Real) where {T<:AbstractFloat}
@@ -141,12 +148,16 @@ function _build_single_mode_ou(::Type{T},
     scale_host = Array(noise_scale)
     tau_mat = reshape(T.(corr_host[idx_host]), 1, :)
     scale_mat = reshape(T.(scale_host[idx_host]), 1, :)
-    active_idx = CuArray(Int32.(idx_host))
-    coeff_a, coeff_c = _ou_coefficients(T, T(dt), tau_mat, scale_mat)
-    return Definitions.OUSpectrum{T}(T(dt), active_idx, CuArray(tau_mat), CuArray(scale_mat), coeff_a, coeff_c)
+    active_idx = Backends.from_host(backend, Int32.(idx_host))
+    coeff_a, coeff_c = _ou_coefficients(backend, T, T(dt), tau_mat, scale_mat)
+    return Definitions.OUSpectrum{T}(T(dt), active_idx,
+                                     Backends.from_host(backend, tau_mat),
+                                     Backends.from_host(backend, scale_mat),
+                                     coeff_a, coeff_c)
 end
 
-function _build_mode_ou(::Type{T},
+function _build_mode_ou(backend::Backends.AbstractBackend,
+                        ::Type{T},
                         active_idx::CuArray{Int32,1},
                         taus::Union{AbstractVector{<:Real},Real},
                         scales::Union{AbstractVector{<:Real},Real},
@@ -156,21 +167,25 @@ function _build_mode_ou(::Type{T},
     tau_vals, scale_vals = _canonical_mode_vectors(T, taus, scales)
     tau_mat = repeat(reshape(tau_vals, :, 1), 1, K)
     scale_mat = repeat(reshape(scale_vals, :, 1), 1, K)
-    coeff_a, coeff_c = _ou_coefficients(T, T(dt), tau_mat, scale_mat)
-    return Definitions.OUSpectrum{T}(T(dt), active_idx, CuArray(tau_mat), CuArray(scale_mat), coeff_a, coeff_c)
+    coeff_a, coeff_c = _ou_coefficients(backend, T, T(dt), tau_mat, scale_mat)
+    return Definitions.OUSpectrum{T}(T(dt), active_idx,
+                                     Backends.from_host(backend, tau_mat),
+                                     Backends.from_host(backend, scale_mat),
+                                     coeff_a, coeff_c)
 end
 
-@inline function _compat_corr_time(::Type{T},
+@inline function _compat_corr_time(backend::Backends.AbstractBackend,
+                                   ::Type{T},
                                    N::Integer,
                                    taus::AbstractVector{T},
                                    scales::AbstractVector{T}) where {T<:AbstractFloat}
     length(taus) == 1 && length(scales) == 1 || return nothing
-    return CUDA.fill(taus[1], N)
+    return Backends.fill_vector(backend, taus[1], N)
 end
 
 function _refresh_ou_coefficients!(ou::Definitions.OUSpectrum{T}, dt::T) where {T<:AbstractFloat}
     ou.dt == dt && return ou
-    coeff_a, coeff_c = _ou_coefficients(T, dt, Array(ou.tau), Array(ou.scale))
+    coeff_a, coeff_c = _ou_coefficients(Backends.CUDABackend(), T, dt, Array(ou.tau), Array(ou.scale))
     copyto!(ou.coeff_a, coeff_a)
     copyto!(ou.coeff_c, coeff_c)
     ou.dt = dt
@@ -184,24 +199,25 @@ function _build_vv_params(st::SimulationState{T};
                           ou_scales::Union{Nothing,AbstractVector{<:Real},Real}=nothing,
                           mass::Real=st.mass,
                           dt::Real=st.dt) where {T<:AbstractFloat}
+    backend = Backends.storage_backend(st)
     N = length(st.rx)
-    γ = _device_particle_buffer(T, N, gamma, "gamma")
-    Tbuf = _device_particle_buffer(T, N, temperature, "temperature")
-    noise = CuArray(sqrt.(T(2) .* γ .* Tbuf .* T(dt)))
+    γ = _device_particle_buffer(backend, T, N, gamma, "gamma")
+    Tbuf = _device_particle_buffer(backend, T, N, temperature, "temperature")
+    noise = sqrt.(T(2) .* γ .* Tbuf .* T(dt))
     corr = nothing
     ou = nothing
     if ou_scales !== nothing
         noise_corr_time === nothing &&
             throw(ArgumentError("`ou_scales` requires `noise_corr_time` to be provided as OU mode correlation times."))
-        ou = _build_mode_ou(T, _all_particle_indices(N), noise_corr_time, ou_scales, dt)
+        ou = _build_mode_ou(backend, T, _all_particle_indices(backend, N), noise_corr_time, ou_scales, dt)
         tau_vals, scale_vals = _canonical_mode_vectors(T, noise_corr_time, ou_scales)
-        corr = _compat_corr_time(T, N, tau_vals, scale_vals)
+        corr = _compat_corr_time(backend, T, N, tau_vals, scale_vals)
     elseif noise_corr_time !== nothing
         if noise_corr_time isa AbstractVector && length(noise_corr_time) != N
             throw(ArgumentError("Vector `noise_corr_time` without `ou_scales` is interpreted as legacy per-particle single-mode OU and must have length $(N). Pass `ou_scales` as well for a multi-mode spectrum."))
         end
-        corr = _device_corr_time_buffer(T, N, noise_corr_time)
-        ou = _build_single_mode_ou(T, noise, corr, dt)
+        corr = _device_corr_time_buffer(backend, T, N, noise_corr_time)
+        ou = _build_single_mode_ou(backend, T, noise, corr, dt)
     end
     return LangevinIntegrators.VVParams{T}(γ, T(mass), noise; dt=T(dt), corr_time=corr, ou=ou)
 end
@@ -226,24 +242,25 @@ function _build_brownian_params(st::SimulationState{T};
                                 noise_corr_time::Union{Nothing,AbstractVector{<:Real},Real}=nothing,
                                 ou_scales::Union{Nothing,AbstractVector{<:Real},Real}=nothing,
                                 dt::Real=st.dt) where {T<:AbstractFloat}
+    backend = Backends.storage_backend(st)
     N = length(st.rx)
-    γ = _device_particle_buffer(T, N, gamma, "gamma")
-    Tbuf = _device_particle_buffer(T, N, temperature, "temperature")
-    noise = CuArray(sqrt.(T(2) .* γ .* Tbuf .* T(dt)))
+    γ = _device_particle_buffer(backend, T, N, gamma, "gamma")
+    Tbuf = _device_particle_buffer(backend, T, N, temperature, "temperature")
+    noise = sqrt.(T(2) .* γ .* Tbuf .* T(dt))
     corr = nothing
     ou = nothing
     if ou_scales !== nothing
         noise_corr_time === nothing &&
             throw(ArgumentError("`ou_scales` requires `noise_corr_time` to be provided as OU mode correlation times."))
-        ou = _build_mode_ou(T, _all_particle_indices(N), noise_corr_time, ou_scales, dt)
+        ou = _build_mode_ou(backend, T, _all_particle_indices(backend, N), noise_corr_time, ou_scales, dt)
         tau_vals, scale_vals = _canonical_mode_vectors(T, noise_corr_time, ou_scales)
-        corr = _compat_corr_time(T, N, tau_vals, scale_vals)
+        corr = _compat_corr_time(backend, T, N, tau_vals, scale_vals)
     elseif noise_corr_time !== nothing
         if noise_corr_time isa AbstractVector && length(noise_corr_time) != N
             throw(ArgumentError("Vector `noise_corr_time` without `ou_scales` is interpreted as legacy per-particle single-mode OU and must have length $(N). Pass `ou_scales` as well for a multi-mode spectrum."))
         end
-        corr = _device_corr_time_buffer(T, N, noise_corr_time)
-        ou = _build_single_mode_ou(T, noise, corr, dt)
+        corr = _device_corr_time_buffer(backend, T, N, noise_corr_time)
+        ou = _build_single_mode_ou(backend, T, noise, corr, dt)
     end
     return BrownianIntegrators.BrownianParams{T}(γ, T(dt), noise, corr, ou)
 end
@@ -481,40 +498,42 @@ end
     return sig
 end
 
-@inline function _new_nhc_workspace(::Type{T},
+@inline function _new_nhc_workspace(backend::Backends.AbstractBackend,
+                                    ::Type{T},
                                     chain_length::Int,
                                     nbaths::Int,
                                     nparticles::Int) where {T<:AbstractFloat}
-    return NHCWorkspace{T}(CUDA.zeros(T, chain_length, nbaths),
-                           CUDA.zeros(T, chain_length, nbaths),
-                           CUDA.zeros(T, chain_length, nbaths),
-                           CUDA.zeros(T, chain_length, nbaths),
-                           CUDA.zeros(T, nbaths),
-                           CUDA.fill(Int32(1), nparticles),
-                           CUDA.zeros(Int32, nbaths),
-                           CUDA.zeros(T, nbaths),
-                           CUDA.zeros(T, nbaths),
-                           CUDA.zeros(T, nbaths),
-                           CUDA.zeros(T, nbaths),
-                           CUDA.zeros(T, nbaths),
-                           CUDA.zeros(T, nbaths),
-                           CUDA.fill(one(T), nbaths),
+    return NHCWorkspace{T}(Backends.zeros_matrix(backend, T, chain_length, nbaths),
+                           Backends.zeros_matrix(backend, T, chain_length, nbaths),
+                           Backends.zeros_matrix(backend, T, chain_length, nbaths),
+                           Backends.zeros_matrix(backend, T, chain_length, nbaths),
+                           Backends.zeros_vector(backend, T, nbaths),
+                           Backends.fill_vector(backend, Int32(1), nparticles),
+                           Backends.zeros_vector(backend, Int32, nbaths),
+                           Backends.zeros_vector(backend, T, nbaths),
+                           Backends.zeros_vector(backend, T, nbaths),
+                           Backends.zeros_vector(backend, T, nbaths),
+                           Backends.zeros_vector(backend, T, nbaths),
+                           Backends.zeros_vector(backend, T, nbaths),
+                           Backends.zeros_vector(backend, T, nbaths),
+                           Backends.fill_vector(backend, one(T), nbaths),
                            UInt64(0),
                            true,
                            false)
 end
 
-@inline function _new_csvr_workspace(::Type{T},
+@inline function _new_csvr_workspace(backend::Backends.AbstractBackend,
+                                     ::Type{T},
                                      nbaths::Int,
                                      nparticles::Int) where {T<:AbstractFloat}
-    return CSVRWorkspace{T}(CUDA.zeros(T, nbaths),
-                            CUDA.zeros(T, nbaths),
-                            CUDA.fill(Int32(1), nparticles),
-                            CUDA.zeros(Int32, nbaths),
-                            CUDA.zeros(T, nbaths),
-                            CUDA.zeros(T, nbaths),
-                            CUDA.zeros(T, nbaths),
-                            CUDA.fill(one(T), nbaths),
+    return CSVRWorkspace{T}(Backends.zeros_vector(backend, T, nbaths),
+                            Backends.zeros_vector(backend, T, nbaths),
+                            Backends.fill_vector(backend, Int32(1), nparticles),
+                            Backends.zeros_vector(backend, Int32, nbaths),
+                            Backends.zeros_vector(backend, T, nbaths),
+                            Backends.zeros_vector(backend, T, nbaths),
+                            Backends.zeros_vector(backend, T, nbaths),
+                            Backends.fill_vector(backend, one(T), nbaths),
                             true,
                             false)
 end
@@ -723,7 +742,7 @@ function nosehooverchain(st::SimulationState{T};
                           Int(chain_length),
                           masses,
                           propagator_id)
-    return NHCSpec{T}(params, _new_nhc_workspace(T, Int(chain_length), nbaths, length(st.rx)))
+    return NHCSpec{T}(params, _new_nhc_workspace(Backends.storage_backend(st), T, Int(chain_length), nbaths, length(st.rx)))
 end
 
 """
@@ -775,7 +794,7 @@ function csvr(st::SimulationState{T};
     end
 
     params = CSVRParams{T}(massT, temp_vec, tau_vec)
-    return CSVRSpec{T}(params, _new_csvr_workspace(T, nbaths, length(st.rx)))
+    return CSVRSpec{T}(params, _new_csvr_workspace(Backends.storage_backend(st), T, nbaths, length(st.rx)))
 end
 @inline function _require_positive_gamma!(gamma::CuArray{T,1}, integrator::AbstractString) where {T<:AbstractFloat}
     gmin = minimum(gamma)
@@ -1608,7 +1627,10 @@ Construct a zero-length stochastic workspace used by compatibility constructors
 that receive parameter objects without a simulation state.
 """
 function _empty_workspace(::Type{T}) where {T<:AbstractFloat}
-    return StochasticWorkspace{T}(CUDA.zeros(T, 0), CUDA.zeros(T, 0), nothing, nothing, nothing, nothing)
+    backend = Backends.CUDABackend()
+    return StochasticWorkspace{T}(Backends.zeros_vector(backend, T, 0),
+                                  Backends.zeros_vector(backend, T, 0),
+                                  nothing, nothing, nothing, nothing)
 end
 
 VVSpec(params::LangevinIntegrators.VVParams{T}) where {T<:AbstractFloat} = VVSpec{T}(params, _empty_workspace(T))
@@ -1619,13 +1641,13 @@ BrownianSpec(params::BrownianIntegrators.BrownianParams{T}) where {T<:AbstractFl
 EMSpec(params::BrownianIntegrators.EMParams{T}) where {T<:AbstractFloat} = EMSpec{T}(params, _empty_workspace(T))
 NHCSpec(params::NHCParams{T}) where {T<:AbstractFloat} =
     NHCSpec{T}(params,
-               _new_nhc_workspace(T,
+               _new_nhc_workspace(Backends.CUDABackend(), T,
                                   params.chain_length,
                                   length(params.target_temperature),
                                   0))
 CSVRSpec(params::CSVRParams{T}) where {T<:AbstractFloat} =
     CSVRSpec{T}(params,
-                _new_csvr_workspace(T,
+                _new_csvr_workspace(Backends.CUDABackend(), T,
                                     length(params.target_temperature),
                                     0))
 
@@ -3663,7 +3685,7 @@ function step!(st::SimulationState{T},
                dt::Real;
                compute_energy::Bool=true) where {T<:AbstractFloat}
     return step!(st,
-                 NHCSpec{T}(nhc, _new_nhc_workspace(T,
+                 NHCSpec{T}(nhc, _new_nhc_workspace(Backends.storage_backend(st), T,
                                                     nhc.chain_length,
                                                     length(nhc.target_temperature),
                                                     length(st.rx))),
@@ -3682,7 +3704,7 @@ function step!(st::SimulationState{T},
                compute_energy::Bool=true) where {T<:AbstractFloat}
     return step!(st,
                  CSVRSpec{T}(csvr_params,
-                             _new_csvr_workspace(T,
+                             _new_csvr_workspace(Backends.storage_backend(st), T,
                                                  length(csvr_params.target_temperature),
                                                  length(st.rx))),
                  dt;
