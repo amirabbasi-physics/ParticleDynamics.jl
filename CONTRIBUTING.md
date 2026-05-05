@@ -27,10 +27,11 @@ Run tests on a CUDA-functional machine:
 julia --project -e 'using Pkg; Pkg.test()'
 ```
 
-For release-style local validation:
+For release-style local validation, run the full test suite and docs build:
 
 ```bash
-bash scripts/ci_gpu_local.sh
+julia --project -e 'using Pkg; Pkg.test()'
+julia --project=docs -e 'using Pkg; Pkg.instantiate(); include("docs/make.jl")'
 ```
 
 ## Pull request guidelines

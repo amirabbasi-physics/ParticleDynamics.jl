@@ -26,7 +26,7 @@ No CPU fallback simulation path is provided.
 
 ```julia
 using Pkg
-Pkg.add(url="<repository-url>")
+Pkg.add(url="https://git.imp.fu-berlin.de/abbaa90/NonEqSimGPU.jl.git")
 ```
 
 ### Develop locally
@@ -114,11 +114,8 @@ Optional heavier smoke case:
 NEQSIM_SMOKE_HEAVY=1 julia --project scripts/examples_smoke.jl
 ```
 
-For full local GPU CI bundle:
-
-```bash
-bash scripts/ci_gpu_local.sh
-```
+There is no repository-local CI wrapper script in this tree; use the test and
+docs commands above directly.
 
 ## Known limitations
 
