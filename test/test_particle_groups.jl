@@ -1,4 +1,5 @@
 using ParticleDynamics
+using ParticleDynamics: Filters
 using ParticleDynamics.ParticleGroups
 using CUDA
 
@@ -64,3 +65,49 @@ end
 end
 
 println("ParticleGroups tests passed.")
+
+@testset "Filters compatibility via ParticleGroups" begin
+    N = 12
+    st = build_simulation(N=N, box=(30.0f0, 30.0f0, 30.0f0),
+                          dt=1.0f-3, precision=:f32)
+    st.typeid .= CuArray(Int32[1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2])
+
+    f_type = Filters.TypeIDs(1)
+    pg_type = ParticleGroups.TypeIDs(1)
+
+    filter_host = Filters.resolve(f_type, st)
+    group_host = ParticleGroups.resolve(pg_type, st)
+    @test filter_host == group_host
+
+    filter_dev = Array(Filters.resolve_gpu(f_type, st))
+    group_dev = Array(ParticleGroups.resolve_gpu(pg_type, st))
+    @test filter_dev == group_dev
+
+    filter_sel = Filters.selection(st, f_type)
+    group_sel = ParticleGroups.materialize(pg_type, st)
+    @test filter_sel isa Filters.Selection
+    @test filter_sel.host == group_sel.host
+    @test Array(filter_sel.device) == Array(group_sel.device)
+    @test Filters.count(f_type, st) == ParticleGroups.count(pg_type, st)
+    @test Filters.count(filter_sel) == ParticleGroups.count(group_sel)
+
+    dest_filters = CUDA.zeros(Float32, N)
+    dest_groups = CUDA.zeros(Float32, N)
+    Filters.assign_scalar!(dest_filters, st, f_type, 2.5f0)
+    ParticleGroups.apply_scalar!(dest_groups, group_sel, 2.5f0)
+    @test Array(dest_filters) == Array(dest_groups)
+
+    vals = Float32.(1:ParticleGroups.count(group_sel))
+    dest_filters_vals = CUDA.zeros(Float32, N)
+    dest_groups_vals = CUDA.zeros(Float32, N)
+    Filters.assign_values!(dest_filters_vals, st, f_type, vals)
+    ParticleGroups.apply_values!(dest_groups_vals, group_sel, vals)
+    @test Array(dest_filters_vals) == Array(dest_groups_vals)
+    @test Filters.gather(dest_filters_vals, st, f_type) == ParticleGroups.gather(dest_groups_vals, group_sel)
+    @test Filters.sum(dest_filters_vals, st, f_type) ≈ ParticleGroups.sum_values(dest_groups_vals, group_sel)
+
+    f_idx = Filters.Indices([2, 4, 8, 10])
+    pg_idx = ParticleGroups.Indices([2, 4, 8, 10])
+    @test Filters.resolve(f_idx, st) == ParticleGroups.resolve(pg_idx, st)
+    @test Array(Filters.resolve_gpu(f_idx, st)) == Array(ParticleGroups.resolve_gpu(pg_idx, st))
+end
