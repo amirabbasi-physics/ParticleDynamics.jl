@@ -48,21 +48,12 @@ include("SimulationState.jl")
 # -------------------------
 const IntegratorSpec = AbstractIntegratorSpec
 
-"""
-    StochasticWorkspace{T}
-
-Integrator-local scratch buffers for stochastic updates (random impulses and
-optional OU state). These buffers are carried by integrator specs so the shared
-step engine remains integrator-agnostic.
-"""
-mutable struct StochasticWorkspace{T<:AbstractFloat}
-    rf_x::CuArray{T,1}
-    rf_y::CuArray{T,1}
-    rf_z::Union{Nothing,CuArray{T,1}}
-    ou_x::Union{Nothing,CuArray{T,2}}
-    ou_y::Union{Nothing,CuArray{T,2}}
-    ou_z::Union{Nothing,CuArray{T,2}}
-end
+# Stage 8: Extract integrator specs and constructors
+include("simulation/StochasticWorkspace.jl")
+include("simulation/IntegratorSpecs.jl")
+include("simulation/LangevinSpecConstructors.jl")
+include("simulation/BrownianSpecConstructors.jl")
+include("simulation/ThermostatSpecConstructors.jl")
 
 Backends.storage_backend(::SimulationState) = Backends.CUDABackend()
 
@@ -193,715 +184,6 @@ function _refresh_ou_coefficients!(ou::Definitions.OUSpectrum{T}, dt::T) where {
     return ou
 end
 
-function _build_vv_params(st::SimulationState{T};
-                          gamma::Union{AbstractVector{<:Real},Real},
-                          temperature::Union{AbstractVector{<:Real},Real},
-                          noise_corr_time::Union{Nothing,AbstractVector{<:Real},Real}=nothing,
-                          ou_scales::Union{Nothing,AbstractVector{<:Real},Real}=nothing,
-                          mass::Real=st.mass,
-                          dt::Real=st.dt) where {T<:AbstractFloat}
-    backend = Backends.storage_backend(st)
-    N = length(st.rx)
-    γ = _device_particle_buffer(backend, T, N, gamma, "gamma")
-    Tbuf = _device_particle_buffer(backend, T, N, temperature, "temperature")
-    noise = sqrt.(T(2) .* γ .* Tbuf .* T(dt))
-    corr = nothing
-    ou = nothing
-    if ou_scales !== nothing
-        noise_corr_time === nothing &&
-            throw(ArgumentError("`ou_scales` requires `noise_corr_time` to be provided as OU mode correlation times."))
-        ou = _build_mode_ou(backend, T, _all_particle_indices(backend, N), noise_corr_time, ou_scales, dt)
-        tau_vals, scale_vals = _canonical_mode_vectors(T, noise_corr_time, ou_scales)
-        corr = _compat_corr_time(backend, T, N, tau_vals, scale_vals)
-    elseif noise_corr_time !== nothing
-        if noise_corr_time isa AbstractVector && length(noise_corr_time) != N
-            throw(ArgumentError("Vector `noise_corr_time` without `ou_scales` is interpreted as legacy per-particle single-mode OU and must have length $(N). Pass `ou_scales` as well for a multi-mode spectrum."))
-        end
-        corr = _device_corr_time_buffer(backend, T, N, noise_corr_time)
-        ou = _build_single_mode_ou(backend, T, noise, corr, dt)
-    end
-    return LangevinIntegrators.VVParams{T}(γ, T(mass), noise; dt=T(dt), corr_time=corr, ou=ou)
-end
-
-function _build_baoab_params(st::SimulationState{T};
-                             gamma::Union{AbstractVector{<:Real},Real},
-                             temperature::Union{AbstractVector{<:Real},Real},
-                             noise_corr_time::Union{Nothing,AbstractVector{<:Real},Real}=nothing,
-                             ou_scales::Union{Nothing,AbstractVector{<:Real},Real}=nothing,
-                             mass::Real=st.mass,
-                             dt::Real=st.dt) where {T<:AbstractFloat}
-    vv = _build_vv_params(st; gamma=gamma, temperature=temperature,
-                          noise_corr_time=noise_corr_time,
-                          ou_scales=ou_scales,
-                          mass=mass, dt=dt)
-    return LangevinIntegrators.BAOABParams{T}(vv.gamma, vv.mass, vv.noise_scale; dt=vv.dt, corr_time=vv.corr_time, ou=vv.ou)
-end
-
-function _build_brownian_params(st::SimulationState{T};
-                                gamma::Union{AbstractVector{<:Real},Real},
-                                temperature::Union{AbstractVector{<:Real},Real},
-                                noise_corr_time::Union{Nothing,AbstractVector{<:Real},Real}=nothing,
-                                ou_scales::Union{Nothing,AbstractVector{<:Real},Real}=nothing,
-                                dt::Real=st.dt) where {T<:AbstractFloat}
-    backend = Backends.storage_backend(st)
-    N = length(st.rx)
-    γ = _device_particle_buffer(backend, T, N, gamma, "gamma")
-    Tbuf = _device_particle_buffer(backend, T, N, temperature, "temperature")
-    noise = sqrt.(T(2) .* γ .* Tbuf .* T(dt))
-    corr = nothing
-    ou = nothing
-    if ou_scales !== nothing
-        noise_corr_time === nothing &&
-            throw(ArgumentError("`ou_scales` requires `noise_corr_time` to be provided as OU mode correlation times."))
-        ou = _build_mode_ou(backend, T, _all_particle_indices(backend, N), noise_corr_time, ou_scales, dt)
-        tau_vals, scale_vals = _canonical_mode_vectors(T, noise_corr_time, ou_scales)
-        corr = _compat_corr_time(backend, T, N, tau_vals, scale_vals)
-    elseif noise_corr_time !== nothing
-        if noise_corr_time isa AbstractVector && length(noise_corr_time) != N
-            throw(ArgumentError("Vector `noise_corr_time` without `ou_scales` is interpreted as legacy per-particle single-mode OU and must have length $(N). Pass `ou_scales` as well for a multi-mode spectrum."))
-        end
-        corr = _device_corr_time_buffer(backend, T, N, noise_corr_time)
-        ou = _build_single_mode_ou(backend, T, noise, corr, dt)
-    end
-    return BrownianIntegrators.BrownianParams{T}(γ, T(dt), noise, corr, ou)
-end
-
-function _build_em_params(st::SimulationState{T};
-                          gamma::Union{AbstractVector{<:Real},Real},
-                          temperature::Union{AbstractVector{<:Real},Real},
-                          noise_corr_time::Union{Nothing,AbstractVector{<:Real},Real}=nothing,
-                          ou_scales::Union{Nothing,AbstractVector{<:Real},Real}=nothing,
-                          dt::Real=st.dt) where {T<:AbstractFloat}
-    bp = _build_brownian_params(st; gamma=gamma, temperature=temperature,
-                                noise_corr_time=noise_corr_time, ou_scales=ou_scales, dt=dt)
-    return BrownianIntegrators.EMParams{T}(bp.gamma, bp.dt, bp.noise_scale, bp.corr_time, bp.ou)
-end
-
-"""
-Concrete spec for the package's Langevin/GJF `velocityverlet` path.
-"""
-mutable struct VVSpec{T<:AbstractFloat} <: IntegratorSpec{T}
-    params::LangevinIntegrators.VVParams{T}
-    workspace::StochasticWorkspace{T}
-end
-
-"""
-BAOAB splitting spec used in `examples/TwoT_2D_LD_BAOAB.jl`.
-"""
-mutable struct BAOABSpec{T<:AbstractFloat} <: IntegratorSpec{T}
-    params::LangevinIntegrators.BAOABParams{T}
-    workspace::StochasticWorkspace{T}
-end
-
-"""
-BAOA splitting (no trailing B) for legacy scripts.
-"""
-mutable struct BAOASpec{T<:AbstractFloat} <: IntegratorSpec{T}
-    params::LangevinIntegrators.BAOABParams{T}
-    workspace::StochasticWorkspace{T}
-end
-
-"""
-Generalized simulation scheme (GSM) spec, which reuses the BAOAB parameter type.
-"""
-mutable struct GSMSpec{T<:AbstractFloat} <: IntegratorSpec{T}
-    params::LangevinIntegrators.BAOABParams{T}
-    workspace::StochasticWorkspace{T}
-end
-
-"""
-Midpoint Brownian integrator spec created by [`eulerheun`](@ref).
-"""
-mutable struct BrownianSpec{T<:AbstractFloat} <: IntegratorSpec{T}
-    params::BrownianIntegrators.BrownianParams{T}
-    workspace::StochasticWorkspace{T}
-end
-
-"""
-Euler–Maruyama overdamped spec created by [`eulermaruyama`](@ref).
-"""
-mutable struct EMSpec{T<:AbstractFloat} <: IntegratorSpec{T}
-    params::BrownianIntegrators.EMParams{T}
-    workspace::StochasticWorkspace{T}
-end
-
-"""
-    NHCParams{T}
-
-Parameter container for deterministic Nose-Hoover Chain (NHC) thermostatting.
-`chain_masses` stores the thermostat inertia values `Q_j`.
-"""
-mutable struct NHCParams{T<:AbstractFloat}
-    mass::T
-    target_temperature::Vector{T}
-    tau::Vector{T}
-    substeps::Int
-    chain_length::Int
-    chain_masses::Matrix{T}
-    propagator::UInt8
-end
-
-"""
-    NHCWorkspace{T}
-
-Integrator-local Nose-Hoover Chain state (`xi`, `eta`) and reusable scratch
-buffers for chain-force evaluation.
-"""
-mutable struct NHCWorkspace{T<:AbstractFloat}
-    xi::CuArray{T,2}
-    eta::CuArray{T,2}
-    chain_force::CuArray{T,2}
-    chain_masses::CuArray{T,2}
-    target_temperature::CuArray{T,1}
-    particle_bath_id::CuArray{Int32,1}
-    bath_counts::CuArray{Int32,1}
-    dof_per_bath::CuArray{T,1}
-    kinetic_total_per_bath::CuArray{T,1}
-    kinetic_stage_start_per_bath::CuArray{T,1}
-    cumulative_energy_exchange_per_bath::CuArray{T,1}
-    thermostat_kinetic_per_bath::CuArray{T,1}
-    thermostat_potential_per_bath::CuArray{T,1}
-    last_velocity_scale_per_bath::CuArray{T,1}
-    chain_masses_signature::UInt64
-    dof_dirty::Bool
-    kinetic_initialized::Bool
-end
-
-"""
-    NHCSpec{T}
-
-Concrete integrator specification for NVT dynamics with a Nose-Hoover Chain
-thermostat.
-"""
-mutable struct NHCSpec{T<:AbstractFloat} <: IntegratorSpec{T}
-    params::NHCParams{T}
-    workspace::NHCWorkspace{T}
-end
-
-"""
-    CSVRParams{T}
-
-Parameter container for the canonical-sampling-through-velocity-rescaling
-(CSVR/Bussi) thermostat. The thermostat acts on the kinetic energy of each
-assigned bath with target temperature `target_temperature[b]` and response time
-`tau[b]`.
-"""
-mutable struct CSVRParams{T<:AbstractFloat}
-    mass::T
-    target_temperature::Vector{T}
-    tau::Vector{T}
-end
-
-"""
-    CSVRWorkspace{T}
-
-Integrator-local buffers for fully GPU CSVR thermostatting. The thermostat is
-global within each bath, so the workspace stores per-bath reductions and the
-cumulative energy exchanged with the coupling reservoir.
-"""
-mutable struct CSVRWorkspace{T<:AbstractFloat}
-    target_temperature::CuArray{T,1}
-    tau::CuArray{T,1}
-    particle_bath_id::CuArray{Int32,1}
-    bath_counts::CuArray{Int32,1}
-    dof_per_bath::CuArray{T,1}
-    kinetic_total_per_bath::CuArray{T,1}
-    cumulative_energy_exchange_per_bath::CuArray{T,1}
-    last_velocity_scale_per_bath::CuArray{T,1}
-    dof_dirty::Bool
-    kinetic_initialized::Bool
-end
-
-"""
-    CSVRSpec{T}
-
-Concrete integrator specification for deterministic NVT dynamics with a
-stochastic global Bussi/CSVR thermostat.
-"""
-mutable struct CSVRSpec{T<:AbstractFloat} <: IntegratorSpec{T}
-    params::CSVRParams{T}
-    workspace::CSVRWorkspace{T}
-end
-
-const NHC_PROPAGATOR_LEGACY  = UInt8(1)
-const NHC_PROPAGATOR_GROMACS = UInt8(2)
-const NHC_PROPAGATOR_LAMMPS  = UInt8(3)
-
-@inline function _nhc_propagator_id(propagator::Symbol)
-    if propagator === :legacy
-        return NHC_PROPAGATOR_LEGACY
-    elseif propagator === :gromacs
-        return NHC_PROPAGATOR_GROMACS
-    elseif propagator === :lammps
-        return NHC_PROPAGATOR_LAMMPS
-    end
-    throw(ArgumentError("Unsupported NHC propagator $(propagator). Expected :legacy, :gromacs, or :lammps."))
-end
-
-@inline function _nhc_propagator_name(propagator::UInt8)
-    if propagator == NHC_PROPAGATOR_LEGACY
-        return :legacy
-    elseif propagator == NHC_PROPAGATOR_GROMACS
-        return :gromacs
-    elseif propagator == NHC_PROPAGATOR_LAMMPS
-        return :lammps
-    end
-    return :unknown
-end
-
-NHCParams{T}(mass::T,
-             target_temperature::Vector{T},
-             tau::Vector{T},
-             substeps::Int,
-             chain_length::Int,
-             chain_masses::Matrix{T}) where {T<:AbstractFloat} =
-    NHCParams{T}(mass,
-                 target_temperature,
-                 tau,
-                 substeps,
-                 chain_length,
-                 chain_masses,
-                 NHC_PROPAGATOR_GROMACS)
-
-NHCParams(mass::T,
-          target_temperature::Vector{T},
-          tau::Vector{T},
-          substeps::Int,
-          chain_length::Int,
-          chain_masses::Matrix{T}) where {T<:AbstractFloat} =
-    NHCParams{T}(mass,
-                 target_temperature,
-                 tau,
-                 substeps,
-                 chain_length,
-                 chain_masses)
-
-@inline function _default_nhc_chain_masses(::Type{T},
-                                           dof::Int,
-                                           target_temperature::T,
-                                           tau::T,
-                                           chain_length::Int) where {T<:AbstractFloat}
-    @assert chain_length >= 1
-    base = target_temperature * tau * tau
-    masses = Vector{T}(undef, chain_length)
-    masses[1] = max(one(T), T(dof)) * base
-    @inbounds for j in 2:chain_length
-        masses[j] = base
-    end
-    return masses
-end
-
-@inline function _nhc_chain_masses_signature(masses::AbstractArray{T}) where {T<:AbstractFloat}
-    sig = hash(size(masses))
-    @inbounds for q in masses
-        sig = hash(q, sig)
-    end
-    return sig
-end
-
-@inline function _new_nhc_workspace(backend::Backends.AbstractBackend,
-                                    ::Type{T},
-                                    chain_length::Int,
-                                    nbaths::Int,
-                                    nparticles::Int) where {T<:AbstractFloat}
-    return NHCWorkspace{T}(Backends.zeros_matrix(backend, T, chain_length, nbaths),
-                           Backends.zeros_matrix(backend, T, chain_length, nbaths),
-                           Backends.zeros_matrix(backend, T, chain_length, nbaths),
-                           Backends.zeros_matrix(backend, T, chain_length, nbaths),
-                           Backends.zeros_vector(backend, T, nbaths),
-                           Backends.fill_vector(backend, Int32(1), nparticles),
-                           Backends.zeros_vector(backend, Int32, nbaths),
-                           Backends.zeros_vector(backend, T, nbaths),
-                           Backends.zeros_vector(backend, T, nbaths),
-                           Backends.zeros_vector(backend, T, nbaths),
-                           Backends.zeros_vector(backend, T, nbaths),
-                           Backends.zeros_vector(backend, T, nbaths),
-                           Backends.zeros_vector(backend, T, nbaths),
-                           Backends.fill_vector(backend, one(T), nbaths),
-                           UInt64(0),
-                           true,
-                           false)
-end
-
-@inline function _new_csvr_workspace(backend::Backends.AbstractBackend,
-                                     ::Type{T},
-                                     nbaths::Int,
-                                     nparticles::Int) where {T<:AbstractFloat}
-    return CSVRWorkspace{T}(Backends.zeros_vector(backend, T, nbaths),
-                            Backends.zeros_vector(backend, T, nbaths),
-                            Backends.fill_vector(backend, Int32(1), nparticles),
-                            Backends.zeros_vector(backend, Int32, nbaths),
-                            Backends.zeros_vector(backend, T, nbaths),
-                            Backends.zeros_vector(backend, T, nbaths),
-                            Backends.zeros_vector(backend, T, nbaths),
-                            Backends.fill_vector(backend, one(T), nbaths),
-                            true,
-                            false)
-end
-
-"""
-    velocityverlet(st; gamma, temperature, noise_corr_time=nothing, ou_scales=nothing,
-                   mass=st.mass, dt=st.dt) -> VVSpec
-
-Construct a GJF/Langevin velocity-Verlet spec with integrator-owned stochastic
-buffers.
-"""
-function velocityverlet(st::SimulationState{T};
-                        gamma::Union{AbstractVector{<:Real},Real},
-                        temperature::Union{AbstractVector{<:Real},Real},
-                        noise_corr_time::Union{Nothing,AbstractVector{<:Real},Real}=nothing,
-                        ou_scales::Union{Nothing,AbstractVector{<:Real},Real}=nothing,
-                        mass::Real=st.mass,
-                        dt::Real=st.dt) where {T<:AbstractFloat}
-    return VVSpec(_build_vv_params(st; gamma=gamma, temperature=temperature,
-                                   noise_corr_time=noise_corr_time,
-                                   ou_scales=ou_scales,
-                                   mass=mass, dt=dt))
-end
-"""
-    baoab(st; gamma, temperature, noise_corr_time=nothing, ou_scales=nothing,
-          mass=st.mass, dt=st.dt) -> BAOABSpec
-
-Construct a BAOAB Langevin spec with integrator-owned stochastic buffers.
-"""
-function baoab(st::SimulationState{T};
-               gamma::Union{AbstractVector{<:Real},Real},
-               temperature::Union{AbstractVector{<:Real},Real},
-               noise_corr_time::Union{Nothing,AbstractVector{<:Real},Real}=nothing,
-               ou_scales::Union{Nothing,AbstractVector{<:Real},Real}=nothing,
-               mass::Real=st.mass,
-               dt::Real=st.dt) where {T<:AbstractFloat}
-    return BAOABSpec(_build_baoab_params(st; gamma=gamma, temperature=temperature,
-                                         noise_corr_time=noise_corr_time,
-                                         ou_scales=ou_scales,
-                                         mass=mass, dt=dt))
-end
-"""
-    baoa(st; gamma, temperature, noise_corr_time=nothing, ou_scales=nothing,
-         mass=st.mass, dt=st.dt) -> BAOASpec
-
-Legacy BAOA variant (no final B kick).
-"""
-function baoa(st::SimulationState{T};
-              gamma::Union{AbstractVector{<:Real},Real},
-              temperature::Union{AbstractVector{<:Real},Real},
-              noise_corr_time::Union{Nothing,AbstractVector{<:Real},Real}=nothing,
-              ou_scales::Union{Nothing,AbstractVector{<:Real},Real}=nothing,
-              mass::Real=st.mass,
-              dt::Real=st.dt) where {T<:AbstractFloat}
-    return BAOASpec(_build_baoab_params(st; gamma=gamma, temperature=temperature,
-                                        noise_corr_time=noise_corr_time,
-                                        ou_scales=ou_scales,
-                                        mass=mass, dt=dt))
-end
-"""
-    gsm(st; gamma, temperature, noise_corr_time=nothing, ou_scales=nothing,
-        mass=st.mass, dt=st.dt) -> GSMSpec
-
-Construct a GSM spec (used by `examples/TwoT_2D_LD_GSM.jl`).
-"""
-function gsm(st::SimulationState{T};
-             gamma::Union{AbstractVector{<:Real},Real},
-             temperature::Union{AbstractVector{<:Real},Real},
-             noise_corr_time::Union{Nothing,AbstractVector{<:Real},Real}=nothing,
-             ou_scales::Union{Nothing,AbstractVector{<:Real},Real}=nothing,
-             mass::Real=st.mass,
-             dt::Real=st.dt) where {T<:AbstractFloat}
-    return GSMSpec(_build_baoab_params(st; gamma=gamma, temperature=temperature,
-                                       noise_corr_time=noise_corr_time,
-                                       ou_scales=ou_scales,
-                                       mass=mass, dt=dt))
-end
-"""
-    eulerheun(st; gamma, temperature, noise_corr_time=nothing, ou_scales=nothing,
-              dt=st.dt) -> BrownianSpec
-
-Build a midpoint Brownian spec with integrator-owned stochastic buffers.
-"""
-function eulerheun(st::SimulationState{T};
-                   gamma::Union{AbstractVector{<:Real},Real},
-                   temperature::Union{AbstractVector{<:Real},Real},
-                   noise_corr_time::Union{Nothing,AbstractVector{<:Real},Real}=nothing,
-                   ou_scales::Union{Nothing,AbstractVector{<:Real},Real}=nothing,
-                   dt::Real=st.dt) where {T<:AbstractFloat}
-    return BrownianSpec(_build_brownian_params(st; gamma=gamma, temperature=temperature,
-                                               noise_corr_time=noise_corr_time,
-                                               ou_scales=ou_scales, dt=dt))
-end
-"""
-    eulermaruyama(st; gamma, temperature, noise_corr_time=nothing, ou_scales=nothing,
-                  dt=st.dt) -> EMSpec
-
-Return an Euler–Maruyama spec for overdamped dynamics (`examples/3D_BD.jl`).
-"""
-function eulermaruyama(st::SimulationState{T};
-                       gamma::Union{AbstractVector{<:Real},Real},
-                       temperature::Union{AbstractVector{<:Real},Real},
-                       noise_corr_time::Union{Nothing,AbstractVector{<:Real},Real}=nothing,
-                       ou_scales::Union{Nothing,AbstractVector{<:Real},Real}=nothing,
-                       dt::Real=st.dt) where {T<:AbstractFloat}
-    return EMSpec(_build_em_params(st; gamma=gamma, temperature=temperature,
-                                   noise_corr_time=noise_corr_time,
-                                   ou_scales=ou_scales, dt=dt))
-end
-
-"""
-    nosehooverchain(st; temperature=1, tau=1, chain_length=5, substeps=5,
-                    mass=st.mass, chain_masses=nothing, propagator=:gromacs) -> NHCSpec
-
-Create a deterministic NVT integrator specification using a Nose-Hoover Chain.
-When `chain_masses` is omitted, masses are initialized from `(dof, T, tau)`
-using the standard `Q₁ = g T τ²`, `Qⱼ = T τ² (j>1)` rule. `propagator`
-selects the chain update scheme: `:gromacs` is the package default and uses
-a GPU port of the reversible Suzuki-Yoshida propagator used by GROMACS,
-`:lammps` uses a GPU port of the reversible `tloop` chain update used by
-LAMMPS, and `:legacy` preserves the original package implementation. For
-`propagator=:gromacs`, `substeps=5` matches the default fifth-order outer
-repetition used there; for `propagator=:lammps`, `substeps` corresponds to
-LAMMPS `tloop` and `substeps=1` matches the LAMMPS default.
-"""
-function nosehooverchain(st::SimulationState{T};
-                         temperature::Union{Nothing,Real}=nothing,
-                         tau::Union{Nothing,Real}=nothing,
-                         temperatures::Union{Nothing,AbstractVector{<:Real}}=nothing,
-                         taus::Union{Nothing,AbstractVector{<:Real}}=nothing,
-                         chain_length::Integer=5,
-                         substeps::Integer=5,
-                         mass::Real=st.mass,
-                         chain_masses::Union{Nothing,AbstractVector{<:Real},AbstractMatrix{<:Real}}=nothing,
-                         propagator::Symbol=:gromacs) where {T<:AbstractFloat}
-    chain_length >= 1 || throw(ArgumentError("chain_length must be >= 1, got $(chain_length)."))
-    substeps >= 1 || throw(ArgumentError("substeps must be >= 1, got $(substeps)."))
-    massT = T(mass)
-    massT > zero(T) || throw(ArgumentError("NHC mass must be > 0."))
-    propagator_id = _nhc_propagator_id(propagator)
-
-    if temperatures !== nothing && temperature !== nothing
-        throw(ArgumentError("Provide either `temperature` or `temperatures`, not both."))
-    end
-    if taus !== nothing && tau !== nothing
-        throw(ArgumentError("Provide either `tau` or `taus`, not both."))
-    end
-
-    temp_vec = if temperatures === nothing
-        [T(something(temperature, one(T)))]
-    else
-        T.(temperatures)
-    end
-    tau_vec = if taus === nothing
-        [T(something(tau, one(T)))]
-    else
-        T.(taus)
-    end
-
-    length(temp_vec) == length(tau_vec) ||
-        throw(ArgumentError("temperatures and taus must have identical lengths."))
-    nbaths = length(temp_vec)
-    nbaths >= 1 || throw(ArgumentError("NHC requires at least one bath."))
-
-    @inbounds for (b, Tb) in pairs(temp_vec)
-        Tb > zero(T) || throw(ArgumentError("NHC target temperature for bath $(b) must be > 0."))
-    end
-    @inbounds for (b, τb) in pairs(tau_vec)
-        τb > zero(T) || throw(ArgumentError("NHC tau for bath $(b) must be > 0."))
-    end
-
-    dof_total = (_is_3d(st) ? 3 : 2) * length(st.rx)
-    dof_guess = max(1, cld(dof_total, nbaths))
-
-    masses = if chain_masses === nothing
-        out = Matrix{T}(undef, Int(chain_length), nbaths)
-        @inbounds for b in 1:nbaths
-            col = _default_nhc_chain_masses(T, dof_guess, temp_vec[b], tau_vec[b], Int(chain_length))
-            out[:, b] = col
-        end
-        out
-    else
-        if chain_masses isa AbstractVector
-            length(chain_masses) == chain_length ||
-                throw(ArgumentError("Vector chain_masses length must equal chain_length ($(chain_length))."))
-            v = T.(chain_masses)
-            repeat(reshape(v, Int(chain_length), 1), 1, nbaths)
-        else
-            cm = T.(chain_masses)
-            size(cm, 1) == chain_length ||
-                throw(ArgumentError("Matrix chain_masses first dimension must equal chain_length ($(chain_length))."))
-            size(cm, 2) == nbaths ||
-                throw(ArgumentError("Matrix chain_masses second dimension must equal number of baths ($(nbaths))."))
-            cm
-        end
-    end
-    @inbounds for j in axes(masses, 1), b in axes(masses, 2)
-        masses[j, b] > zero(T) ||
-            throw(ArgumentError("NHC chain mass Q[$(j), bath=$(b)] must be > 0."))
-    end
-
-    params = NHCParams{T}(massT,
-                          temp_vec,
-                          tau_vec,
-                          Int(substeps),
-                          Int(chain_length),
-                          masses,
-                          propagator_id)
-    return NHCSpec{T}(params, _new_nhc_workspace(Backends.storage_backend(st), T, Int(chain_length), nbaths, length(st.rx)))
-end
-
-"""
-    csvr(st; temperature=1, tau=1, mass=st.mass) -> CSVRSpec
-    csvr(st; temperatures, taus, mass=st.mass) -> CSVRSpec
-
-Create a deterministic MD integrator using the Bussi canonical-sampling through
-velocity rescaling (CSVR) thermostat. The thermostat acts on one or more baths
-defined by filter assignments, with one global velocity-rescaling factor drawn
-per bath and per timestep.
-"""
-function csvr(st::SimulationState{T};
-              temperature::Union{Nothing,Real}=nothing,
-              tau::Union{Nothing,Real}=nothing,
-              temperatures::Union{Nothing,AbstractVector{<:Real}}=nothing,
-              taus::Union{Nothing,AbstractVector{<:Real}}=nothing,
-              mass::Real=st.mass) where {T<:AbstractFloat}
-    if temperatures !== nothing && temperature !== nothing
-        throw(ArgumentError("Provide either `temperature` or `temperatures`, not both."))
-    end
-    if taus !== nothing && tau !== nothing
-        throw(ArgumentError("Provide either `tau` or `taus`, not both."))
-    end
-
-    massT = T(mass)
-    massT > zero(T) || throw(ArgumentError("CSVR mass must be > 0."))
-
-    temp_vec = if temperatures === nothing
-        [T(something(temperature, one(T)))]
-    else
-        T.(temperatures)
-    end
-    tau_vec = if taus === nothing
-        [T(something(tau, one(T)))]
-    else
-        T.(taus)
-    end
-
-    length(temp_vec) == length(tau_vec) ||
-        throw(ArgumentError("temperatures and taus must have identical lengths."))
-    nbaths = length(temp_vec)
-    nbaths >= 1 || throw(ArgumentError("CSVR requires at least one bath."))
-
-    @inbounds for (b, Tb) in pairs(temp_vec)
-        Tb > zero(T) || throw(ArgumentError("CSVR target temperature for bath $(b) must be > 0."))
-    end
-    @inbounds for (b, τb) in pairs(tau_vec)
-        τb > zero(T) || throw(ArgumentError("CSVR tau for bath $(b) must be > 0."))
-    end
-
-    params = CSVRParams{T}(massT, temp_vec, tau_vec)
-    return CSVRSpec{T}(params, _new_csvr_workspace(Backends.storage_backend(st), T, nbaths, length(st.rx)))
-end
-@inline function _require_positive_gamma!(gamma::CuArray{T,1}, integrator::AbstractString) where {T<:AbstractFloat}
-    gmin = minimum(gamma)
-    if !(gmin > zero(T))
-        throw(ArgumentError("$(integrator) integrator requires gamma > 0 for all particles."))
-    end
-    return nothing
-end
-
-include("simulation/Freeze.jl")
-
-# ==========================================
-#  Top-level, non-capturing init kernels
-#  (avoid nested functions / closures)
-# ==========================================
-
-function _init_vel2_kernel!(
-    vx::CuDeviceVector{T},
-    vy::CuDeviceVector{T},
-    temperature_vec::CuDeviceVector{T}) where {T<:AbstractFloat}
-    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
-    N = length(vx); if i > N; return; end
-    @inbounds begin
-        vx[i] = randn(T) * sqrt(temperature_vec[i])
-        vy[i] = randn(T) * sqrt(temperature_vec[i])
-    end
-    return
-end
-
-function _init_vel3_kernel!(
-    vx::CuDeviceVector{T},
-    vy::CuDeviceVector{T},
-    vz::CuDeviceVector{T},
-    temperature_vec::CuDeviceVector{T}) where {T<:AbstractFloat}
-    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
-    N = length(vx); if i > N; return; end
-    @inbounds begin
-        vx[i] = randn(T) * sqrt(temperature_vec[i])
-        vy[i] = randn(T) * sqrt(temperature_vec[i])
-        vz[i] = randn(T) * sqrt(temperature_vec[i])
-    end
-    return
-end
-
-# Host launchers
-function _init_vel2!(vx::CuArray{T,1}, vy::CuArray{T,1}, temperature_vec::CuArray{T,1}) where {T<:AbstractFloat}
-    N = length(vx); threads = min(256, N); blocks = cld(N, threads)
-    k = CUDA.@cuda launch=false _init_vel2_kernel!(vx, vy, temperature_vec)
-    CUDA.@sync k(vx, vy, temperature_vec; threads, blocks)
-    return nothing
-end
-
-function _init_vel3!(vx::CuArray{T,1}, vy::CuArray{T,1}, vz::CuArray{T,1}, temperature_vec::CuArray{T,1}) where {T<:AbstractFloat}
-    N = length(vx); threads = min(256, N); blocks = cld(N, threads)
-    k = CUDA.@cuda launch=false _init_vel3_kernel!(vx, vy, vz, temperature_vec)
-    CUDA.@sync k(vx, vy, vz, temperature_vec; threads, blocks)
-    return nothing
-end
-
-include("SimulationBuild.jl")
-
-# TODO: move these includes under observables/ once the Simulation module split is complete.
-include("simulation/Virial.jl")
-include("simulation/EnergyAccumulation.jl")
-
-# =========================
-#   Stage-driven stepping
-# =========================
-
-const INTEGRATOR_ID_UNKNOWN  = UInt8(0)
-const INTEGRATOR_ID_LANGEVIN = UInt8(1)
-const INTEGRATOR_ID_BROWNIAN = UInt8(2)
-const INTEGRATOR_ID_NHC      = UInt8(3)
-const INTEGRATOR_ID_CSVR     = UInt8(4)
-
-"""
-    _empty_workspace(T)
-
-Construct a zero-length stochastic workspace used by compatibility constructors
-that receive parameter objects without a simulation state.
-"""
-function _empty_workspace(::Type{T}) where {T<:AbstractFloat}
-    backend = Backends.CUDABackend()
-    return StochasticWorkspace{T}(Backends.zeros_vector(backend, T, 0),
-                                  Backends.zeros_vector(backend, T, 0),
-                                  nothing, nothing, nothing, nothing)
-end
-
-VVSpec(params::LangevinIntegrators.VVParams{T}) where {T<:AbstractFloat} = VVSpec{T}(params, _empty_workspace(T))
-BAOABSpec(params::LangevinIntegrators.BAOABParams{T}) where {T<:AbstractFloat} = BAOABSpec{T}(params, _empty_workspace(T))
-BAOASpec(params::LangevinIntegrators.BAOABParams{T}) where {T<:AbstractFloat} = BAOASpec{T}(params, _empty_workspace(T))
-GSMSpec(params::LangevinIntegrators.BAOABParams{T}) where {T<:AbstractFloat} = GSMSpec{T}(params, _empty_workspace(T))
-BrownianSpec(params::BrownianIntegrators.BrownianParams{T}) where {T<:AbstractFloat} = BrownianSpec{T}(params, _empty_workspace(T))
-EMSpec(params::BrownianIntegrators.EMParams{T}) where {T<:AbstractFloat} = EMSpec{T}(params, _empty_workspace(T))
-NHCSpec(params::NHCParams{T}) where {T<:AbstractFloat} =
-    NHCSpec{T}(params,
-               _new_nhc_workspace(Backends.CUDABackend(), T,
-                                  params.chain_length,
-                                  length(params.target_temperature),
-                                  0))
-CSVRSpec(params::CSVRParams{T}) where {T<:AbstractFloat} =
-    CSVRSpec{T}(params,
-                _new_csvr_workspace(Backends.CUDABackend(), T,
-                                    length(params.target_temperature),
-                                    0))
-
 @inline _is_3d(st::SimulationState) = st.rz !== nothing
 
 @inline function _stage_tracing_enabled()
@@ -978,6 +260,61 @@ function _ensure_workspace_buffers!(workspace::StochasticWorkspace{T},
 
     return nothing
 end
+
+include("simulation/Freeze.jl")
+
+# ==========================================
+#  Top-level, non-capturing init kernels
+#  (avoid nested functions / closures)
+# ==========================================
+
+function _init_vel2_kernel!(
+    vx::CuDeviceVector{T},
+    vy::CuDeviceVector{T},
+    temperature_vec::CuDeviceVector{T}) where {T<:AbstractFloat}
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    N = length(vx); if i > N; return; end
+    @inbounds begin
+        vx[i] = randn(T) * sqrt(temperature_vec[i])
+        vy[i] = randn(T) * sqrt(temperature_vec[i])
+    end
+    return
+end
+
+function _init_vel3_kernel!(
+    vx::CuDeviceVector{T},
+    vy::CuDeviceVector{T},
+    vz::CuDeviceVector{T},
+    temperature_vec::CuDeviceVector{T}) where {T<:AbstractFloat}
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    N = length(vx); if i > N; return; end
+    @inbounds begin
+        vx[i] = randn(T) * sqrt(temperature_vec[i])
+        vy[i] = randn(T) * sqrt(temperature_vec[i])
+        vz[i] = randn(T) * sqrt(temperature_vec[i])
+    end
+    return
+end
+
+function _init_vel2!(vx::CuArray{T,1}, vy::CuArray{T,1}, temperature_vec::CuArray{T,1}) where {T<:AbstractFloat}
+    N = length(vx); threads = min(256, N); blocks = cld(N, threads)
+    k = CUDA.@cuda launch=false _init_vel2_kernel!(vx, vy, temperature_vec)
+    CUDA.@sync k(vx, vy, temperature_vec; threads, blocks)
+    return nothing
+end
+
+function _init_vel3!(vx::CuArray{T,1}, vy::CuArray{T,1}, vz::CuArray{T,1}, temperature_vec::CuArray{T,1}) where {T<:AbstractFloat}
+    N = length(vx); threads = min(256, N); blocks = cld(N, threads)
+    k = CUDA.@cuda launch=false _init_vel3_kernel!(vx, vy, vz, temperature_vec)
+    CUDA.@sync k(vx, vy, vz, temperature_vec; threads, blocks)
+    return nothing
+end
+
+include("SimulationBuild.jl")
+
+# TODO: move these includes under observables/ once the Simulation module split is complete.
+include("simulation/Virial.jl")
+include("simulation/EnergyAccumulation.jl")
 
 """
     _swap_force_slots!(st)
@@ -2106,33 +1443,6 @@ function _apply_nhc_thermostat_stage!(spec::NHCSpec{T},
     _nhc_apply_stage_scale!(st, ws.last_velocity_scale_per_bath, ws.particle_bath_id)
     return nothing
 end
-
-# -----------------------------------------------------------------------------
-# Integrator protocol implementations
-# -----------------------------------------------------------------------------
-
-integrator_id(::Union{VVSpec,BAOABSpec,BAOASpec,GSMSpec}) = INTEGRATOR_ID_LANGEVIN
-integrator_id(::Union{BrownianSpec,EMSpec}) = INTEGRATOR_ID_BROWNIAN
-integrator_id(::NHCSpec) = INTEGRATOR_ID_NHC
-integrator_id(::CSVRSpec) = INTEGRATOR_ID_CSVR
-
-integrator_name(::VVSpec) = :velocity_verlet
-integrator_name(::BAOABSpec) = :baoab
-integrator_name(::BAOASpec) = :baoa
-integrator_name(::GSMSpec) = :gsm
-integrator_name(::BrownianSpec) = :brownian_midpoint
-integrator_name(::EMSpec) = :euler_maruyama
-integrator_name(::NHCSpec) = :nose_hoover_chain
-integrator_name(::CSVRSpec) = :csvr
-
-stage_sequence(::VVSpec) = (:kick1, :drift, :force, :kick2)
-stage_sequence(::BAOABSpec) = (:B1, :A1, :O, :A2, :force, :B2)
-stage_sequence(::GSMSpec) = (:B1, :A1, :O, :A2, :force, :B2)
-stage_sequence(::BAOASpec) = (:B1, :A1, :O, :A2, :force, :power, :kinetic_refresh)
-stage_sequence(::BrownianSpec) = (:midpoint_predict, :midpoint_force, :final_position, :force)
-stage_sequence(::EMSpec) = (:midpoint_predict, :midpoint_force, :final_position, :force)
-stage_sequence(::NHCSpec) = (:thermostat_pre, :kick1, :drift, :force, :kick2, :thermostat_post)
-stage_sequence(::CSVRSpec) = (:kick1, :drift, :force, :kick2, :thermostat)
 
 function validate_integrator_inputs!(spec::Union{BAOABSpec,BAOASpec,GSMSpec}, st, dt)
     _require_positive_gamma!(spec.params.gamma, string(integrator_name(spec)))
