@@ -262,8 +262,7 @@ function wca_forces_soa_pairs!(rx::CuArray{T,1}, ry::CuArray{T,1},
                                sigma_pair::CuArray{T,2}, epsilon_pair::CuArray{T,2}, rcut_pair::CuArray{T,2}
                                ) where {T<:AbstractFloat}
     N = length(rx)
-    threads = (N < 100_000) ? 128 : 256
-    blocks  = cld(N, threads)
+    threads, blocks = _launch_config_energy(N)
     Lx = T(box[1]); Ly = T(box[2])
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly
     k = CUDA.@cuda launch=false _wca2_csr_kernel_pairs!(
@@ -286,8 +285,7 @@ function wca_forces_soa_pairs!(rx::CuArray{T,1}, ry::CuArray{T,1},
                                sigma_pair::CuArray{T,2}, epsilon_pair::CuArray{T,2}, rcut_pair::CuArray{T,2}
                                ) where {T<:AbstractFloat}
     N = length(rx)
-    threads = (N < 100_000) ? 128 : 256
-    blocks  = cld(N, threads)
+    threads, blocks = _launch_config_energy(N)
     Lx = T(box[1]); Ly = T(box[2])
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly
     k = CUDA.@cuda launch=false _wca2_csr_kernel_pairs_virial!(
@@ -310,8 +308,7 @@ function wca_forces_soa_pairs!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T
                                sigma_pair::CuArray{T,2}, epsilon_pair::CuArray{T,2}, rcut_pair::CuArray{T,2}
                                ) where {T<:AbstractFloat}
     N = length(rx)
-    threads = (N < 100_000) ? 128 : 256
-    blocks  = cld(N, threads)
+    threads, blocks = _launch_config_energy(N)
     Lx = T(box[1]); Ly = T(box[2]); Lz = T(box[3])
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly; halfLz = T(0.5)*Lz
     k = CUDA.@cuda launch=false _wca3_csr_kernel_pairs!(
@@ -334,8 +331,7 @@ function wca_forces_soa_pairs!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T
                                sigma_pair::CuArray{T,2}, epsilon_pair::CuArray{T,2}, rcut_pair::CuArray{T,2}
                                ) where {T<:AbstractFloat}
     N = length(rx)
-    threads = (N < 100_000) ? 128 : 256
-    blocks  = cld(N, threads)
+    threads, blocks = _launch_config_energy(N)
     Lx = T(box[1]); Ly = T(box[2]); Lz = T(box[3])
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly; halfLz = T(0.5)*Lz
     k = CUDA.@cuda launch=false _wca3_csr_kernel_pairs_virial!(
@@ -358,8 +354,7 @@ function wca_forces_soa_noE_pairs!(rx::CuArray{T,1}, ry::CuArray{T,1},
                                    sigma_pair::CuArray{T,2}, epsilon_pair::CuArray{T,2}, rcut_pair::CuArray{T,2}
                                    ) where {T<:AbstractFloat}
     N = length(rx)
-    threads = (N < 50_000) ? 64 : ((N < 200_000) ? 128 : 256)
-    blocks  = cld(N, threads)
+    threads, blocks = _launch_config_force_only(N)
     Lx = T(box[1]); Ly = T(box[2])
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly
     k = CUDA.@cuda launch=false _wca2_csr_noE_kernel_pairs!(
@@ -382,8 +377,7 @@ function wca_forces_soa_noE_pairs!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArr
                                    sigma_pair::CuArray{T,2}, epsilon_pair::CuArray{T,2}, rcut_pair::CuArray{T,2}
                                    ) where {T<:AbstractFloat}
     N = length(rx)
-    threads = (N < 50_000) ? 64 : ((N < 200_000) ? 128 : 256)
-    blocks  = cld(N, threads)
+    threads, blocks = _launch_config_force_only(N)
     Lx = T(box[1]); Ly = T(box[2]); Lz = T(box[3])
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly; halfLz = T(0.5)*Lz
     k = CUDA.@cuda launch=false _wca3_csr_noE_kernel_pairs!(

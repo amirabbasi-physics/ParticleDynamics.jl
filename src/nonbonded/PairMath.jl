@@ -24,6 +24,16 @@ end
            half * dx * fy, half * dx * fz, half * dy * fz
 end
 
+@inline function _launch_config_energy(N::Integer)
+    threads = (N < 100_000) ? 128 : 256
+    return threads, cld(N, threads)
+end
+
+@inline function _launch_config_force_only(N::Integer)
+    threads = (N < 50_000) ? 64 : ((N < 200_000) ? 128 : 256)
+    return threads, cld(N, threads)
+end
+
 # Lennard-Jones, returns force components and pair energy
 @inline function lj_pair_2d(dx::T, dy::T, r2::T, ϵ::T, σ::T) where {T<:AbstractFloat}
     invr2 = one(T) / r2
