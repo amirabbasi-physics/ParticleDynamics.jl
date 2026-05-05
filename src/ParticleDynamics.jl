@@ -40,9 +40,6 @@ filters, bonded polymers, Brownian dynamics, collision histograms, etc.).
 module ParticleDynamics
 
 using CUDA
-using StaticArrays
-using Printf
-using DelimitedFiles
 
 include("Definitions.jl")
 include("Initialize.jl")
@@ -124,9 +121,11 @@ export Filters, BondedForces, ParticleGroups, Thermostats,
        enable_collision_counting!, disable_collision_counting!,
        collisions_reset_counts!, collisions_read_counts!, set_collision_pair_cutoffs!
 
-println("##########################################################")
-println("                  ParticleDynamics Loaded                ")
-println("##########################################################")
+if get(ENV, "PARTICLEDYNAMICS_VERBOSE_LOAD", "0") == "1"
+    println("##########################################################")
+    println("                  ParticleDynamics Loaded                ")
+    println("##########################################################")
+end
 
 function __init__()
     _maybe_set_cuda_compat!()
