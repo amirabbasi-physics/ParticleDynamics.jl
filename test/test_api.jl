@@ -1,42 +1,121 @@
 @testset "API and Filters" begin
     seed_all!(0xA1001)
 
-    exported = Set(names(ParticleDynamics))
-    for sym in (
-        :SimulationState,
-        :build_simulation,
-        :step!,
-        :step_graph!,
-        :sync_unwrapped!,
-        :collect_step_observables,
-        :reset_bath_exchange_accumulators!,
-        :velocityverlet,
-        :baoab,
-        :baoa,
-        :gsm,
-        :eulermaruyama,
-        :eulerheun,
-        :nosehooverchain,
-        :csvr,
-        :NHCSpec,
-        :CSVRSpec,
-        :gsd_open,
-        :gsd_close,
-        :write_gsd_frame!,
-        :read_gsd_frame!,
-    )
-        @test sym in exported
-    end
+    @testset "Release-facing API guard" begin
+        entrypoint = read(joinpath(dirname(@__DIR__), "src", "ParticleDynamics.jl"), String)
+        guard_pos = findfirst("if get(ENV, \"PARTICLEDYNAMICS_VERBOSE_LOAD\", \"0\") == \"1\"", entrypoint)
+        banner_pos = findfirst("ParticleDynamics Loaded", entrypoint)
+        @test guard_pos !== nothing
+        @test banner_pos !== nothing
+        @test first(guard_pos) < first(banner_pos)
 
-    for sym in (
-        :zero_forces!,
-        :accumulate_energies!,
-        :run_integrator_step!,
-        :thermostatted_dof,
-        :thermostatted_particle_mask,
-    )
-        @test sym ∉ exported
-        @test isdefined(ParticleDynamics.Simulation, sym)
+        module_symbols = (
+            :Filters,
+            :BondedForces,
+            :ParticleGroups,
+            :Thermostats,
+        )
+        simulation_symbols = (
+            :SimulationState,
+            :build_simulation,
+            :step!,
+            :step_graph!,
+            :sync_unwrapped!,
+            :collect_step_observables,
+            :reset_bath_exchange_accumulators!,
+            :accumulate_virial!,
+            :virial_components,
+            :virial_tensor,
+        )
+        integrator_symbols = (
+            :velocityverlet,
+            :baoab,
+            :baoa,
+            :gsm,
+            :eulerheun,
+            :eulermaruyama,
+            :nosehooverchain,
+            :csvr,
+            :NHCSpec,
+            :CSVRSpec,
+        )
+        writer_symbols = (
+            :InMemoryLogger,
+            :CSVWriter,
+            :XYZWriter,
+            :write_xyz!,
+            :write_observables_csv!,
+            :gsd_open,
+            :gsd_close,
+            :write_gsd_frame!,
+            :read_gsd_frame!,
+        )
+        group_symbols = (
+            :ParticleSelection,
+            :ParticleGroup,
+            :All,
+            :TypeIDs,
+            :Indices,
+            :materialize,
+            :apply_scalar!,
+            :apply_values!,
+            :gather,
+            :sum_values,
+        )
+        thermostat_symbols = (
+            :AbstractThermostat,
+            :ThermostatState,
+            :NoseHooverChainThermostat,
+            :CSVRThermostat,
+            :n_baths,
+            :target_temperature,
+            :response_time,
+            :set_target_temperature!,
+            :set_response_time!,
+            :cumulative_energy_exchange,
+        )
+        collision_symbols = (
+            :enable_collision_counting!,
+            :disable_collision_counting!,
+            :collisions_reset_counts!,
+            :collisions_read_counts!,
+            :set_collision_pair_cutoffs!,
+        )
+
+        for sym in (
+            module_symbols...,
+            simulation_symbols...,
+            integrator_symbols...,
+            writer_symbols...,
+            group_symbols...,
+            thermostat_symbols...,
+            collision_symbols...,
+        )
+            @test Base.isexported(ParticleDynamics, sym)
+            @test isdefined(ParticleDynamics, sym)
+        end
+
+        for sym in (
+            :zero_forces!,
+            :accumulate_energies!,
+            :run_integrator_step!,
+            :thermostatted_dof,
+            :thermostatted_particle_mask,
+        )
+            @test !Base.isexported(ParticleDynamics, sym)
+        end
+
+        err = try
+            ParticleDynamics.build_simulation(
+                N=8, box=(20f0, 20f0), cutoff=2.5f0, skin=0.3f0, cap=Int32(32), neigh_interval=5,
+                epsilon=1f0, sigma=1f0, gamma=1f0, temperature=1f0, backend=:cpu
+            )
+            nothing
+        catch caught
+            caught
+        end
+        @test err isa ArgumentError
+        @test occursin("CPU backend support is not implemented", sprint(showerror, err))
     end
 
     N = 16
