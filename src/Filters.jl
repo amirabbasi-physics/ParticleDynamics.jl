@@ -7,6 +7,7 @@ module Filters
 using CUDA
 using CUDA: CuArray, CuDeviceVector
 using ..Backends
+import ..ParticleGroups
 import ..Simulation
 using ..Definitions
 using ..Simulation: SimulationState, IntegratorSpec, VVSpec, BAOABSpec, BAOASpec, GSMSpec, BrownianSpec, EMSpec, NHCSpec, CSVRSpec
@@ -62,25 +63,30 @@ function Selection(host::Vector{Int})
     return Selection(host, dev)
 end
 
+Selection(group::ParticleGroups.ParticleGroup) = Selection(group.host, group.device)
+
 count(sel::Selection) = length(sel.host)
+
+_to_particle_selection(::All) = ParticleGroups.All()
+_to_particle_selection(f::TypeIDs) = ParticleGroups.TypeIDs(f.ids)
+_to_particle_selection(f::Indices) = ParticleGroups.Indices(f.idx)
+
+_to_particle_group(sel::Selection) = ParticleGroups.ParticleGroup(sel.host, sel.device)
 
 # -----------------------------------------------------------------------------
 # Index resolution helpers
 # -----------------------------------------------------------------------------
 
 function resolve(::All, st::SimulationState)
-    N = length(st.rx)
-    return collect(1:N)
+    return ParticleGroups.resolve(_to_particle_selection(All()), st)
 end
 
 function resolve(f::Indices, st::SimulationState)
-    idx = Int.(f.idx)
-    _validate_indices(idx, length(st.rx))
-    return idx
+    return ParticleGroups.resolve(_to_particle_selection(f), st)
 end
 
 function resolve(f::TypeIDs, st::SimulationState)
-    return Int.(Array(resolve_gpu(f, st)))
+    return ParticleGroups.resolve(_to_particle_selection(f), st)
 end
 
 """
@@ -113,17 +119,14 @@ function _resolve_typeids_gpu(f::TypeIDs, st::SimulationState)
 end
 
 function resolve_gpu(f::All, st::SimulationState)
-    N = length(st.rx)
-    return CuArray(Int32.(collect(1:N)))
+    return ParticleGroups.resolve_gpu(_to_particle_selection(f), st)
 end
 
 function resolve_gpu(f::Indices, st::SimulationState)
-    idx = Int.(f.idx)
-    _validate_indices(idx, length(st.rx))
-    return CuArray(Int32.(idx))
+    return ParticleGroups.resolve_gpu(_to_particle_selection(f), st)
 end
 
-resolve_gpu(f::TypeIDs, st::SimulationState) = _resolve_typeids_gpu(f, st)
+resolve_gpu(f::TypeIDs, st::SimulationState) = ParticleGroups.resolve_gpu(_to_particle_selection(f), st)
 
 function resolve_gpu(f::Filter, st::SimulationState)
     host = resolve(f, st)
@@ -138,14 +141,11 @@ resolve_gpu(st::SimulationState, f::Filter) = resolve_gpu(f, st)
 Allocate a [`Selection`](@ref) (host+device indices) for repeated use.
 """
 function selection(st::SimulationState, f::Filter)
-    host = resolve(f, st)
-    return Selection(host)
+    return Selection(ParticleGroups.materialize(_to_particle_selection(f), st))
 end
 
 function selection(st::SimulationState, f::TypeIDs)
-    dev = resolve_gpu(f, st)
-    host = Int.(Array(dev))
-    return Selection(host, dev)
+    return Selection(ParticleGroups.materialize(_to_particle_selection(f), st))
 end
 
 function _validate_indices(idx::Vector{Int}, N::Int)
@@ -160,8 +160,8 @@ end
 
 Number of particles matched by `filter`.
 """
-count(f::Filter, st::SimulationState) = length(resolve(f, st))
-count(f::TypeIDs, st::SimulationState) = length(resolve_gpu(f, st))
+count(f::Filter, st::SimulationState) = ParticleGroups.count(_to_particle_selection(f), st)
+count(f::TypeIDs, st::SimulationState) = ParticleGroups.count(_to_particle_selection(f), st)
 count(st::SimulationState, f::Filter) = count(f, st)
 
 # -----------------------------------------------------------------------------
@@ -393,13 +393,14 @@ function assign_scalar!(dest::CuArray{T,1}, idx::CuArray{Int32,1}, value::Real) 
 end
 
 function assign_scalar!(dest::CuArray{T,1}, sel::Selection, value::Real) where {T}
-    return assign_scalar!(dest, sel.device, value)
+    ParticleGroups.apply_scalar!(dest, _to_particle_group(sel), value)
+    return dest
 end
 
 function assign_scalar!(dest::CuArray{T,1}, st::SimulationState, f::Filter, value::Real) where {T}
-    idx = resolve_gpu(f, st)
-    assign_scalar!(dest, idx, value)
-    return idx
+    sel = selection(st, f)
+    ParticleGroups.apply_scalar!(dest, _to_particle_group(sel), value)
+    return sel.device
 end
 
 function assign_scalar!(dest::CuArray{T,1}, st::SimulationState; filter::Filter=All(), value::Real) where {T}
@@ -415,9 +416,9 @@ function assign_scalar!(dest::AbstractVector{T}, idx::Vector{Int}, value::Real) 
 end
 
 function assign_scalar!(dest::AbstractVector{T}, st::SimulationState, f::Filter, value::Real) where {T}
-    idx = resolve(f, st)
-    assign_scalar!(dest, idx, value)
-    return idx
+    sel = selection(st, f)
+    ParticleGroups.apply_scalar!(dest, _to_particle_group(sel), value)
+    return sel.host
 end
 
 function assign_scalar!(dest::AbstractVector{T}, st::SimulationState; filter::Filter=All(), value::Real) where {T}
@@ -442,8 +443,8 @@ function assign_values!(dest::CuArray{T,1}, idx::CuArray{Int32,1}, values::CuArr
 end
 
 function assign_values!(dest::CuArray{T,1}, sel::Selection, values::AbstractVector{<:Real}) where {T}
-    vals_gpu = CuArray(T.(values))
-    return assign_values!(dest, sel.device, vals_gpu)
+    ParticleGroups.apply_values!(dest, _to_particle_group(sel), values)
+    return dest
 end
 
 function assign_values!(dest::CuArray{T,1}, idx::CuArray{Int32,1}, values::AbstractVector{<:Real}) where {T}
@@ -452,9 +453,9 @@ function assign_values!(dest::CuArray{T,1}, idx::CuArray{Int32,1}, values::Abstr
 end
 
 function assign_values!(dest::CuArray{T,1}, st::SimulationState, f::Filter, values::AbstractVector{<:Real}) where {T}
-    idx = resolve_gpu(f, st)
-    assign_values!(dest, idx, values)
-    return idx
+    sel = selection(st, f)
+    ParticleGroups.apply_values!(dest, _to_particle_group(sel), values)
+    return sel.device
 end
 
 function assign_values!(dest::CuArray{T,1}, st::SimulationState; filter::Filter=All(), values::AbstractVector{<:Real}) where {T}
@@ -470,9 +471,9 @@ function assign_values!(dest::AbstractVector{T}, idx::Vector{Int}, values::Abstr
 end
 
 function assign_values!(dest::AbstractVector{T}, st::SimulationState, f::Filter, values::AbstractVector{<:Real}) where {T}
-    idx = resolve(f, st)
-    assign_values!(dest, idx, values)
-    return idx
+    sel = selection(st, f)
+    ParticleGroups.apply_values!(dest, _to_particle_group(sel), values)
+    return sel.host
 end
 
 function assign_values!(dest::AbstractVector{T}, st::SimulationState; filter::Filter=All(), values::AbstractVector{<:Real}) where {T}
@@ -501,12 +502,11 @@ function gather(src::CuArray{T,1}, idx::CuArray{Int32,1}) where {T}
 end
 
 function gather(src::CuArray{T,1}, sel::Selection) where {T}
-    return gather(src, sel.device)
+    return ParticleGroups.gather(src, _to_particle_group(sel))
 end
 
 function gather(src::CuArray{T,1}, st::SimulationState, f::Filter) where {T}
-    idx = resolve_gpu(f, st)
-    return gather(src, idx)
+    return ParticleGroups.gather(src, _to_particle_group(selection(st, f)))
 end
 
 function gather(src::AbstractVector{T}, idx::Vector{Int}) where {T}
@@ -514,12 +514,11 @@ function gather(src::AbstractVector{T}, idx::Vector{Int}) where {T}
 end
 
 function gather(src::AbstractVector{T}, sel::Selection) where {T}
-    return gather(src, sel.host)
+    return ParticleGroups.gather(src, _to_particle_group(sel))
 end
 
 function gather(src::AbstractVector{T}, st::SimulationState, f::Filter) where {T}
-    idx = resolve(f, st)
-    return gather(src, idx)
+    return ParticleGroups.gather(src, _to_particle_group(selection(st, f)))
 end
 
 """
@@ -540,12 +539,11 @@ function sum(src::CuArray{T,1}, idx::CuArray{Int32,1}) where {T<:Real}
 end
 
 function sum(src::CuArray{T,1}, sel::Selection) where {T<:Real}
-    return sum(src, sel.device)
+    return ParticleGroups.sum_values(src, _to_particle_group(sel))
 end
 
 function sum(src::CuArray{T,1}, st::SimulationState, f::Filter) where {T<:Real}
-    idx = resolve_gpu(f, st)
-    return sum(src, idx)
+    return ParticleGroups.sum_values(src, _to_particle_group(selection(st, f)))
 end
 
 function sum(src::AbstractVector{T}, idx::Vector{Int}) where {T<:Real}
@@ -557,12 +555,11 @@ function sum(src::AbstractVector{T}, idx::Vector{Int}) where {T<:Real}
 end
 
 function sum(src::AbstractVector{T}, sel::Selection) where {T<:Real}
-    return sum(src, sel.host)
+    return ParticleGroups.sum_values(src, _to_particle_group(sel))
 end
 
 function sum(src::AbstractVector{T}, st::SimulationState, f::Filter) where {T<:Real}
-    idx = resolve(f, st)
-    return sum(src, idx)
+    return ParticleGroups.sum_values(src, _to_particle_group(selection(st, f)))
 end
 
 # -----------------------------------------------------------------------------
