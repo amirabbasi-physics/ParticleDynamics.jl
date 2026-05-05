@@ -59,6 +59,8 @@ struct NonBondedInteraction{P<:AbstractPotential,C<:AbstractCoefficientStyle,X<:
     exclusions::X
 end
 
+# 2D dispatch
+
 function compute_nonbonded!(rx::CuArray{T,1}, ry::CuArray{T,1},
                             fx::CuArray{T,1}, fy::CuArray{T,1},
                             nbh::NeighborLists.AbstractNeighborMatrix,
@@ -266,6 +268,8 @@ function compute_nonbonded!(rx::CuArray{T,1}, ry::CuArray{T,1},
     NonBondedForces.wca_forces_soa_pairs!(rx, ry, fx, fy, Epot, V, nbh, box, c.typeid, c.sigma_pair, c.epsilon_pair, c.rcut_pair)
     return nothing
 end
+
+# 3D dispatch
 
 function compute_nonbonded!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
                             fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1},
