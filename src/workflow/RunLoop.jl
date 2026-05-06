@@ -8,6 +8,9 @@ function prepare!(sim::Simulation)
         materialized[group.name] = materialize_group(sim.system, group)
     end
     sim.metadata[:materialized_groups] = materialized
+    if sim.integrator !== nothing && hasproperty(sim.integrator, :forces) && !isempty(sim.integrator.forces)
+        sim.metadata[:compiled_forces] = compile_forces(sim.system, sim.integrator.forces; precision=sim.precision)
+    end
     sim.prepared = true
     return sim
 end
