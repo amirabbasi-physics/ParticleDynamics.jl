@@ -4,6 +4,7 @@
     @test ParticleDynamics.SimulationState === Simulation.SimulationState
     @test ParticleDynamics.build_simulation === Simulation.build_simulation
     @test ParticleDynamics.Backends.normalize_backend(:cuda) isa ParticleDynamics.Backends.CUDABackend
+    @test ParticleDynamics.Backends.storage_backend(CUDA.zeros(Float32, 1)) isa ParticleDynamics.Backends.CUDABackend
 
     st2 = build_tiny2d(N=9, T=Float32, nonbonded=:wca, unwrapped_positions=true)
     @test st2.rz === nothing
@@ -28,6 +29,10 @@
 
     st_dense = build_tiny2d(N=8, T=Float32, use_neighborlist=true)
     @test st_dense.nbh isa ParticleDynamics.NeighborLists.NeighborMatrix{Float32}
+    @test Simulation.backend(st_dense) isa ParticleDynamics.Backends.CUDABackend
+    @test ParticleDynamics.Backends.storage_backend(st_dense) isa ParticleDynamics.Backends.CUDABackend
+    @test ParticleDynamics.Backends.storage_backend(st_dense.rx) isa ParticleDynamics.Backends.CUDABackend
+    @test ParticleDynamics.Backends.storage_backend(st_dense.Epot) isa ParticleDynamics.Backends.CUDABackend
 
     st_allpairs = build_tiny2d(N=8, T=Float32, use_neighborlist=false)
     @test st_allpairs.nbh isa ParticleDynamics.NeighborLists.AllPairsNeighborMatrix{Float32}
@@ -37,6 +42,7 @@
         epsilon=1f0, sigma=1f0, gamma=1f0, temperature=1f0, backend=:cuda
     )
     @test st_explicit.rx isa CuArray{Float32,1}
+    @test Simulation.backend(st_explicit) isa ParticleDynamics.Backends.CUDABackend
 
     st_object = Simulation.build_simulation(
         N=8, box=(20f0, 20f0), cutoff=2.5f0, skin=0.3f0, cap=Int32(32), neigh_interval=5,

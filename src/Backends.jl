@@ -56,7 +56,11 @@ zeros_matrix(::CUDABackend, ::Type{T}, m::Integer, n::Integer) where {T} = CUDA.
 from_host(::CUDABackend, values) = CuArray(values)
 sum_elements(::CUDABackend, arr) = CUDA.sum(arr)
 
+# Backend inference is currently limited to build/storage decisions.
+# Neighbor, force, and integrator kernels remain CUDA.jl implementations, so
+# `backend=:cpu` still errors early until those execution paths are generalized.
 storage_backend(x) = error("No storage backend registered for $(typeof(x)).")
+storage_backend(::CuArray) = CUDABackend()
 
 # Allow legacy GPUs (e.g. Pascal cc 6.x) to run by pinning to a CUDA runtime
 # below the 13.x cutoff on drivers that default to newer runtimes.
