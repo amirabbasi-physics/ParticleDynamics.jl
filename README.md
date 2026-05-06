@@ -89,6 +89,18 @@ Build docs locally:
 julia --project=docs -e 'using Pkg; Pkg.instantiate(); include("docs/make.jl")'
 ```
 
+Manual pages currently include:
+
+- `docs/src/manual/getting_started.md`
+- `docs/src/manual/simulation_state.md`
+- `docs/src/manual/integrators.md`
+- `docs/src/manual/forces.md`
+- `docs/src/manual/groups_filters.md`
+- `docs/src/manual/thermostats.md`
+- `docs/src/manual/observables.md`
+- `docs/src/manual/io.md`
+- `docs/src/manual/restarts.md`
+
 ## Curated top-level API
 
 The supported top-level `using ParticleDynamics` surface is centered on:

@@ -3,6 +3,15 @@
 # =========================
 @inline _virial_ncomponents(st::SimulationState) = st.rz === nothing ? 3 : 6
 
+"""
+    virial_components(st)
+
+Return the component ordering used by the current simulation state's virial
+tensors.
+
+- 2D: `(:xx, :yy, :xy)`
+- 3D: `(:xx, :yy, :zz, :xy, :xz, :yz)`
+"""
 virial_components(st::SimulationState) =
     st.rz === nothing ? (:xx, :yy, :xy) : (:xx, :yy, :zz, :xy, :xz, :yz)
 

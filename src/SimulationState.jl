@@ -16,7 +16,7 @@ Key fields that user code may read or mutate:
 - `rx_unwrap, ry_unwrap[, rz_unwrap]`: optional unwrapped positions that track
   continuous motion across periodic boundaries (enabled via `unwrapped_positions`).
 - `nbh`: neighbor matrix (either dense cell list or sentinel all-pairs) built
-  with [`NeighborLists.build_neighbors_*`](@ref) using the requested cutoff,
+  with the `NeighborLists.build_neighbors_*` family using the requested cutoff,
   skin, and capacity.
 - `mass`, `dt`: universal particle mass and nominal build-time timestep used by
   deterministic integrators and by explicit stochastic spec constructors.
