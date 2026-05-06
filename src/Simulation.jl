@@ -55,8 +55,6 @@ include("simulation/LangevinSpecConstructors.jl")
 include("simulation/BrownianSpecConstructors.jl")
 include("simulation/ThermostatSpecConstructors.jl")
 
-Backends.storage_backend(::SimulationState) = Backends.CUDABackend()
-
 @inline function _device_particle_buffer(backend::Backends.AbstractBackend,
                                          ::Type{T},
                                          N::Integer,

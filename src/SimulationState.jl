@@ -35,6 +35,8 @@ Key fields that user code may read or mutate:
 
 All other fields are internal implementation details (neighbor rebuild state,
 bond lists, cached LJ parameters, etc.) and should be treated as read-only.
+Current backend abstraction is storage-level only: `SimulationState` remains
+CuArray-backed today, and the execution kernels are still CUDA-specific.
 """
 mutable struct SimulationState{T<:AbstractFloat}
     # SoA arrays
@@ -117,6 +119,9 @@ mutable struct SimulationState{T<:AbstractFloat}
     coll_counts::Union{Nothing,CuArray{Int64,1}}
     coll_bins::Union{Nothing,CuArray{Int32,2}}
 end
+
+@inline backend(st::SimulationState) = storage_backend(st.rx)
+Backends.storage_backend(st::SimulationState) = backend(st)
 
 """
     zero_forces!(st)

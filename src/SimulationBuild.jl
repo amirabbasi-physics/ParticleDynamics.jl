@@ -71,6 +71,9 @@ function build_simulation(;N::Int,
 
     backend_impl = Backends.normalize_backend(backend)
     Backends.ensure_available(backend_impl)
+    # Backend selection is currently a build/storage boundary only.
+    # The execution path below still allocates CuArray-backed state and relies
+    # on CUDA-specific kernels in neighbor, force, and integrator code.
 
     D = length(box)
 

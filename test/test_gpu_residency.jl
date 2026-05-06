@@ -12,6 +12,9 @@
         )
 
         @test ParticleDynamics.Backends.storage_backend(st) isa ParticleDynamics.Backends.CUDABackend
+        @test Simulation.backend(st) isa ParticleDynamics.Backends.CUDABackend
+        @test ParticleDynamics.Backends.storage_backend(st.rx) isa ParticleDynamics.Backends.CUDABackend
+        @test ParticleDynamics.Backends.storage_backend(st.virial_tensor) isa ParticleDynamics.Backends.CUDABackend
         @test st.rx isa CuArray{T,1}
         @test st.ry isa CuArray{T,1}
         @test st.vx isa CuArray{T,1}
