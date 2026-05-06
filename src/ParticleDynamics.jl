@@ -58,6 +58,7 @@ include("Simulation.jl")
 include("Filters.jl")
 include("Writers.jl")
 include("InitGenerators.jl")
+include("Workflow.jl")
  
 # Re-export commonly used APIs to simplify user code
 using .Definitions: LJParams, SoftRepulsiveParams,
@@ -86,6 +87,15 @@ using .InitGenerators: box_from_phi_2d, box_from_phi_3d,
     hex_slab_coexistence_2d, fcc_sites_in_box_3d, fcc_random_3d, fcc_slab_coexistence_3d
 using .Collisions: enable_collision_counting!, disable_collision_counting!,
     collisions_reset_counts!, collisions_read_counts!, set_collision_pair_cutoffs!
+using .Workflow: Simulation, ParticleSystem, Particles, Topology, PeriodicBox,
+    Group, Groups, AllSelection, TypeSelection, IndexSelection,
+    Force, ForceField, LennardJones, WCA, SoftRepulsive, HarmonicBondForce, FENEBondForce,
+    Integrator, Method, ConstantVolume, Langevin, Brownian, ActiveOrnsteinUhlenbeck,
+    Thermostat, CSVR, NoseHooverChain,
+    Observable, ThermodynamicObservable, BathExchangeObservable, VirialObservable, CollisionObservable, MSDObservable, VACFObservable,
+    Writer, TableWriter, GSDWriter,
+    Every, AtSteps, Between,
+    Stage, prepare!, run!, reset_step!, reset_observables!, state
 
 export Filters, BondedForces, ParticleGroups, Thermostats, SimulationCore,
        # Definitions / parameters
@@ -119,7 +129,18 @@ export Filters, BondedForces, ParticleGroups, Thermostats, SimulationCore,
        hex_slab_coexistence_2d, fcc_sites_in_box_3d, fcc_random_3d, fcc_slab_coexistence_3d,
        # Collisions API
        enable_collision_counting!, disable_collision_counting!,
-       collisions_reset_counts!, collisions_read_counts!, set_collision_pair_cutoffs!
+       collisions_reset_counts!, collisions_read_counts!, set_collision_pair_cutoffs!,
+       # High-level workflow facade
+       Simulation, ParticleSystem, Particles, Topology, PeriodicBox,
+       Group, Groups, AllSelection, TypeSelection, IndexSelection,
+       Force, ForceField, LennardJones, WCA, SoftRepulsive, HarmonicBondForce, FENEBondForce,
+       Integrator, Method, ConstantVolume, Langevin, Brownian, ActiveOrnsteinUhlenbeck,
+       Thermostat, CSVR, NoseHooverChain,
+       Observable, ThermodynamicObservable, BathExchangeObservable, VirialObservable, CollisionObservable, MSDObservable, VACFObservable,
+       Writer, TableWriter, GSDWriter,
+       Every, AtSteps, Between,
+       Stage,
+       prepare!, run!, reset_step!, reset_observables!, state
 
 if get(ENV, "PARTICLEDYNAMICS_VERBOSE_LOAD", "0") == "1"
     println("##########################################################")
