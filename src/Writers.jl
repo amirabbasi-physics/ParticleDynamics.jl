@@ -4,7 +4,6 @@ using CUDA
 using Printf
 using StaticArrays
 using GSDFiles
-using DelimitedFiles
 using ..Simulation
 
 export InMemoryLogger, CSVWriter, XYZWriter
