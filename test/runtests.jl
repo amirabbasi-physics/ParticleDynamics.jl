@@ -21,6 +21,7 @@ using .ParamsFromExamples
         include("test_api.jl")
         include("test_workflow_system.jl")
         include("test_workflow_groups.jl")
+        include("test_workflow_forces.jl")
         include("test_build.jl")
         include("test_particle_groups.jl")
         include("test_thermostats.jl")
