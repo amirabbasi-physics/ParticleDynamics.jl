@@ -105,6 +105,20 @@
             @test !Base.isexported(ParticleDynamics, sym)
         end
 
+        for sym in (
+            :zero_forces!,
+            :accumulate_energies!,
+            :run_integrator_step!,
+            :thermostatted_dof,
+            :thermostatted_particle_mask,
+            :evaluate_forces_into_f!,
+            :evaluate_forces_into_f0!,
+            :evaluate_midpoint_forces_into_f0!,
+        )
+            @test isdefined(ParticleDynamics.Simulation, sym)
+            @test !Base.isexported(ParticleDynamics.Simulation, sym)
+        end
+
         err = try
             ParticleDynamics.build_simulation(
                 N=8, box=(20f0, 20f0), cutoff=2.5f0, skin=0.3f0, cap=Int32(32), neigh_interval=5,
