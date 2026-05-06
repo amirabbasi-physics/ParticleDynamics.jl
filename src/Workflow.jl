@@ -2,7 +2,7 @@ module Workflow
 
 using Base: @kwdef
 using ..Filters
-using ..SimulationCore: SimulationState
+using ..SimulationCore: SimulationState, step!
 
 include("workflow/System.jl")
 include("workflow/Selections.jl")
