@@ -104,7 +104,7 @@ function main(phi::Float64, temperature::Float64)
         for step in 1:nsteps
             write_output = step % log_interval == 0
             step!(st, thermostat, dt; compute_energy=true)
-            ParticleDynamics.Simulation.accumulate_energies!(st)
+            ParticleDynamics.SimulationCore.accumulate_energies!(st)
             accumulate_virial!(st)
 
             if write_output

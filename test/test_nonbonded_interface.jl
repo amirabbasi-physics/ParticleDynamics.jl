@@ -34,7 +34,7 @@
 
     function run_interface!(st, compute_energy::Bool)
         zero_nonbonded!(st)
-        interaction = Simulation._nonbonded_interaction(st)
+        interaction = SimulationCore._nonbonded_interaction(st)
         if st.rz === nothing
             if compute_energy
                 NBI.compute_nonbonded!(st.rx, st.ry, st.fx, st.fy,
@@ -65,7 +65,7 @@
     function run_direct!(st, compute_energy::Bool)
         zero_nonbonded!(st)
         if st.rz === nothing
-            if st.nb_kind == Simulation.NB_KIND_LJ && st.sigma_pair !== nothing
+            if st.nb_kind == SimulationCore.NB_KIND_LJ && st.sigma_pair !== nothing
                 if compute_energy
                     NBF.lj_forces_soa_pairs!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.virial_nonbonded,
                                              st.nbh, st.box2, st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
@@ -73,7 +73,7 @@
                     NBF.lj_forces_soa_noE_pairs!(st.rx, st.ry, st.fx, st.fy,
                                                  st.nbh, st.box2, st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
                 end
-            elseif st.nb_kind == Simulation.NB_KIND_LJ && st.sigma_particle !== nothing
+            elseif st.nb_kind == SimulationCore.NB_KIND_LJ && st.sigma_particle !== nothing
                 if compute_energy
                     NBF.lj_forces_soa_mixed!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.virial_nonbonded,
                                              st.nbh, st.box2, st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
@@ -81,7 +81,7 @@
                     NBF.lj_forces_soa_noE_mixed!(st.rx, st.ry, st.fx, st.fy,
                                                  st.nbh, st.box2, st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
                 end
-            elseif st.nb_kind == Simulation.NB_KIND_WCA && st.sigma_pair !== nothing
+            elseif st.nb_kind == SimulationCore.NB_KIND_WCA && st.sigma_pair !== nothing
                 if compute_energy
                     NBF.wca_forces_soa_pairs!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.virial_nonbonded,
                                               st.nbh, st.box2, st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
@@ -89,7 +89,7 @@
                     NBF.wca_forces_soa_noE_pairs!(st.rx, st.ry, st.fx, st.fy,
                                                   st.nbh, st.box2, st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
                 end
-            elseif st.nb_kind == Simulation.NB_KIND_WCA && st.sigma_particle !== nothing
+            elseif st.nb_kind == SimulationCore.NB_KIND_WCA && st.sigma_particle !== nothing
                 if compute_energy
                     NBF.wca_forces_soa_mixed!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.virial_nonbonded,
                                               st.nbh, st.box2, st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
@@ -97,7 +97,7 @@
                     NBF.wca_forces_soa_noE_mixed!(st.rx, st.ry, st.fx, st.fy,
                                                   st.nbh, st.box2, st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
                 end
-            elseif st.nb_kind == Simulation.NB_KIND_LJ
+            elseif st.nb_kind == SimulationCore.NB_KIND_LJ
                 if compute_energy
                     if st.bonds === nothing
                         NBF.lj_forces_soa!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.virial_nonbonded,
@@ -113,7 +113,7 @@
                         NBF.lj_forces_soa_noE_excl!(st.rx, st.ry, st.fx, st.fy, st.nbh, st.bonds, st.box2, st.pair_lj)
                     end
                 end
-            elseif st.nb_kind == Simulation.NB_KIND_WCA
+            elseif st.nb_kind == SimulationCore.NB_KIND_WCA
                 if compute_energy
                     if st.bonds === nothing
                         NBF.wca_forces_soa!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.virial_nonbonded,
@@ -147,7 +147,7 @@
                 end
             end
         else
-            if st.nb_kind == Simulation.NB_KIND_LJ && st.sigma_pair !== nothing
+            if st.nb_kind == SimulationCore.NB_KIND_LJ && st.sigma_pair !== nothing
                 if compute_energy
                     NBF.lj_forces_soa_pairs!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.virial_nonbonded,
                                              st.nbh, st.box3, st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
@@ -155,7 +155,7 @@
                     NBF.lj_forces_soa_noE_pairs!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz,
                                                  st.nbh, st.box3, st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
                 end
-            elseif st.nb_kind == Simulation.NB_KIND_LJ && st.sigma_particle !== nothing
+            elseif st.nb_kind == SimulationCore.NB_KIND_LJ && st.sigma_particle !== nothing
                 if compute_energy
                     NBF.lj_forces_soa_mixed!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.virial_nonbonded,
                                              st.nbh, st.box3, st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
@@ -163,7 +163,7 @@
                     NBF.lj_forces_soa_noE_mixed!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz,
                                                  st.nbh, st.box3, st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
                 end
-            elseif st.nb_kind == Simulation.NB_KIND_WCA && st.sigma_pair !== nothing
+            elseif st.nb_kind == SimulationCore.NB_KIND_WCA && st.sigma_pair !== nothing
                 if compute_energy
                     NBF.wca_forces_soa_pairs!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.virial_nonbonded,
                                               st.nbh, st.box3, st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
@@ -171,7 +171,7 @@
                     NBF.wca_forces_soa_noE_pairs!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz,
                                                   st.nbh, st.box3, st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
                 end
-            elseif st.nb_kind == Simulation.NB_KIND_WCA && st.sigma_particle !== nothing
+            elseif st.nb_kind == SimulationCore.NB_KIND_WCA && st.sigma_particle !== nothing
                 if compute_energy
                     NBF.wca_forces_soa_mixed!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.virial_nonbonded,
                                               st.nbh, st.box3, st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
@@ -179,7 +179,7 @@
                     NBF.wca_forces_soa_noE_mixed!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz,
                                                   st.nbh, st.box3, st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor)
                 end
-            elseif st.nb_kind == Simulation.NB_KIND_LJ
+            elseif st.nb_kind == SimulationCore.NB_KIND_LJ
                 if compute_energy
                     if st.bonds === nothing
                         NBF.lj_forces_soa!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.virial_nonbonded,
@@ -195,7 +195,7 @@
                         NBF.lj_forces_soa_noE_excl!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.nbh, st.bonds, st.box3, st.pair_lj)
                     end
                 end
-            elseif st.nb_kind == Simulation.NB_KIND_WCA
+            elseif st.nb_kind == SimulationCore.NB_KIND_WCA
                 if compute_energy
                     if st.bonds === nothing
                         NBF.wca_forces_soa!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.virial_nonbonded,
@@ -243,20 +243,20 @@
 
     @testset "Descriptor classification" begin
         st_lj = build_tiny2d(N=6, T=Float64, nonbonded=:lj, temperature=0.0)
-        inter_lj = Simulation._nonbonded_interaction(st_lj)
+        inter_lj = SimulationCore._nonbonded_interaction(st_lj)
         @test inter_lj.potential isa NBI.LennardJonesPotential
         @test inter_lj.coefficients isa NBI.UniformLJCoefficients{Float64}
         @test inter_lj.exclusions isa NBI.NoExclusions
 
         bonds = Tuple{Int32,Int32}[(Int32(1), Int32(2)), (Int32(2), Int32(3))]
-        st_soft = Simulation.build_simulation(
+        st_soft = SimulationCore.build_simulation(
             N=4, box=(20.0, 20.0), cutoff=1.0, skin=0.3, cap=Int32(16), neigh_interval=2,
             use_neighborlist=true, epsilon=8.0, sigma=1.0, gamma=0.0, temperature=0.0,
             bonds=bonds, nonbonded=:soft_repulsive, precision=:f64,
         )
         set_positions_2d!(st_soft, [0.0, 0.6, 1.2, 0.6], [0.0, 0.0, 0.0, 0.6])
         ParticleDynamics.NeighborLists.update_neighbors_inplace!(st_soft.nbh, st_soft.rx, st_soft.ry; box=st_soft.box2, step=st_soft.step)
-        inter_soft = Simulation._nonbonded_interaction(st_soft)
+        inter_soft = SimulationCore._nonbonded_interaction(st_soft)
         @test inter_soft.potential isa NBI.SoftRepulsivePotential
         @test inter_soft.coefficients isa NBI.UniformSoftRepCoefficients{Float64}
         @test inter_soft.exclusions isa NBI.BondExclusions
@@ -266,13 +266,13 @@
         st_pair.sigma_pair = CuArray(Float64[0.90 1.10; 1.10 0.95])
         st_pair.epsilon_pair = CuArray(Float64[1.00 2.50; 2.50 1.20])
         st_pair.rcut_pair = CuArray(Float64[1.01 1.60; 1.60 1.01])
-        inter_pair = Simulation._nonbonded_interaction(st_pair)
+        inter_pair = SimulationCore._nonbonded_interaction(st_pair)
         @test inter_pair.potential isa NBI.WCAPotential
         @test inter_pair.coefficients isa NBI.PairMatrixCoefficients{Float64}
 
         st_mixed = build_tiny2d(N=4, T=Float64, nonbonded=:lj, cutoff=3.0, temperature=0.0)
         st_mixed.sigma_particle = CuArray(Float64[0.8, 1.0, 1.2, 1.1])
-        inter_mixed = Simulation._nonbonded_interaction(st_mixed)
+        inter_mixed = SimulationCore._nonbonded_interaction(st_mixed)
         @test inter_mixed.potential isa NBI.LennardJonesPotential
         @test inter_mixed.coefficients isa NBI.MixedSigmaCoefficients{Float64}
 
@@ -292,7 +292,7 @@
 
         push!(cases, "2D LJ exclusions" => function ()
             bonds = Tuple{Int32,Int32}[(Int32(1), Int32(2)), (Int32(2), Int32(3))]
-            st = Simulation.build_simulation(
+            st = SimulationCore.build_simulation(
                 N=4, box=(20.0, 20.0), cutoff=2.5, skin=0.3, cap=Int32(16), neigh_interval=2,
                 use_neighborlist=true, epsilon=1.7, sigma=1.1, gamma=0.0, temperature=0.0,
                 bonds=bonds, nonbonded=:lj, precision=:f64,
@@ -312,7 +312,7 @@
 
         push!(cases, "2D WCA exclusions" => function ()
             bonds = Tuple{Int32,Int32}[(Int32(1), Int32(2)), (Int32(2), Int32(3))]
-            st = Simulation.build_simulation(
+            st = SimulationCore.build_simulation(
                 N=4, box=(18.0, 18.0), cutoff=2.2, skin=0.3, cap=Int32(16), neigh_interval=2,
                 use_neighborlist=true, epsilon=1.4, sigma=1.0, gamma=0.0, temperature=0.0,
                 bonds=bonds, nonbonded=:wca, precision=:f64,
@@ -374,7 +374,7 @@
 
         push!(cases, "2D soft-repulsive exclusions" => function ()
             bonds = Tuple{Int32,Int32}[(Int32(1), Int32(2)), (Int32(2), Int32(3))]
-            st = Simulation.build_simulation(
+            st = SimulationCore.build_simulation(
                 N=4, box=(20.0, 20.0), cutoff=1.0, skin=0.3, cap=Int32(16), neigh_interval=2,
                 use_neighborlist=true, epsilon=8.0, sigma=1.0, gamma=0.0, temperature=0.0,
                 bonds=bonds, nonbonded=:soft_repulsive, precision=:f64,
@@ -394,7 +394,7 @@
 
         push!(cases, "3D LJ exclusions" => function ()
             bonds = Tuple{Int32,Int32}[(Int32(1), Int32(2)), (Int32(2), Int32(3))]
-            st = Simulation.build_simulation(
+            st = SimulationCore.build_simulation(
                 N=4, box=(24.0, 24.0, 24.0), cutoff=3.0, skin=0.3, cap=Int32(16), neigh_interval=2,
                 use_neighborlist=true, epsilon=1.2, sigma=1.0, gamma=0.0, temperature=0.0,
                 bonds=bonds, nonbonded=:lj, precision=:f64,
@@ -414,7 +414,7 @@
 
         push!(cases, "3D WCA exclusions" => function ()
             bonds = Tuple{Int32,Int32}[(Int32(1), Int32(2)), (Int32(2), Int32(3))]
-            st = Simulation.build_simulation(
+            st = SimulationCore.build_simulation(
                 N=4, box=(20.0, 20.0, 20.0), cutoff=2.2, skin=0.3, cap=Int32(16), neigh_interval=2,
                 use_neighborlist=true, epsilon=1.3, sigma=1.0, gamma=0.0, temperature=0.0,
                 bonds=bonds, nonbonded=:wca, precision=:f64,
@@ -476,7 +476,7 @@
 
         push!(cases, "3D soft-repulsive exclusions" => function ()
             bonds = Tuple{Int32,Int32}[(Int32(1), Int32(2)), (Int32(2), Int32(3))]
-            st = Simulation.build_simulation(
+            st = SimulationCore.build_simulation(
                 N=4, box=(20.0, 20.0, 20.0), cutoff=1.0, skin=0.3, cap=Int32(16), neigh_interval=2,
                 use_neighborlist=true, epsilon=8.0, sigma=1.0, gamma=0.0, temperature=0.0,
                 bonds=bonds, nonbonded=:soft_repulsive, precision=:f64,

@@ -7,7 +7,7 @@
     )
     set_positions_2d!(st_lj, Float32[-0.75, 0.75], Float32[0.0, 0.0])
     set_velocities_2d!(st_lj, zeros(Float32, 2), zeros(Float32, 2))
-    Simulation.step!(st_lj, Simulation.velocityverlet(st_lj; gamma=0f0, temperature=0f0, dt=1f-3), 1f-3; compute_energy=true)
+    SimulationCore.step!(st_lj, SimulationCore.velocityverlet(st_lj; gamma=0f0, temperature=0f0, dt=1f-3), 1f-3; compute_energy=true)
     @test state_allfinite(st_lj)
     @test abs(Float64(CUDA.sum(st_lj.fx))) <= 1e-5
     @test abs(Float64(CUDA.sum(st_lj.fy))) <= 1e-5
@@ -16,20 +16,20 @@
         N=4, T=Float32, box=(16f0, 16f0), use_neighborlist=true,
         nonbonded=:wca, gamma=1f0, temperature=0.2f0, epsilon=2f0, sigma=1f0
     )
-    Simulation.step!(st_wca, Simulation.velocityverlet(st_wca; gamma=1f0, temperature=0.2f0, dt=1f-3), 1f-3; compute_energy=true)
+    SimulationCore.step!(st_wca, SimulationCore.velocityverlet(st_wca; gamma=1f0, temperature=0.2f0, dt=1f-3), 1f-3; compute_energy=true)
     @test state_allfinite(st_wca)
 
     st_soft = build_tiny2d(
         N=4, T=Float32, box=(16f0, 16f0), use_neighborlist=true,
         nonbonded=:soft_repulsive, gamma=1f0, temperature=0.2f0, epsilon=10f0, sigma=1f0
     )
-    Simulation.step!(st_soft, Simulation.velocityverlet(st_soft; gamma=1f0, temperature=0.2f0, dt=1f-3), 1f-3; compute_energy=true)
+    SimulationCore.step!(st_soft, SimulationCore.velocityverlet(st_soft; gamma=1f0, temperature=0.2f0, dt=1f-3), 1f-3; compute_energy=true)
     @test state_allfinite(st_soft)
 
     @testset "Direct force evaluation matches zero-dt step with freeze spring" begin
         function build_force_eval_state()
             T = Float64
-            st = Simulation.build_simulation(
+            st = SimulationCore.build_simulation(
                 N=2,
                 box=(T(12), T(12)),
                 cutoff=T(2.5),
@@ -50,15 +50,15 @@
             set_velocities_2d!(st, T[0.0, 0.0], T[0.0, 0.0])
             ParticleDynamics.NeighborLists.update_neighbors_inplace!(st.nbh, st.rx, st.ry; box=st.box2, step=st.step)
             Filters.freeze_particles!(st; filter=Filters.Indices([1]), mode=:spring, k=T(7.5), include_energy=true)
-            Simulation.zero_forces!(st)
+            SimulationCore.zero_forces!(st)
             return st
         end
 
         st_direct = build_force_eval_state()
         st_step = build_force_eval_state()
 
-        Simulation.evaluate_forces_into_f!(st_direct, true; freeze_spring=true)
-        Simulation.step!(st_step, Simulation.velocityverlet(st_step; gamma=0.0, temperature=0.0, dt=0.0), 0.0; compute_energy=true)
+        SimulationCore.evaluate_forces_into_f!(st_direct, true; freeze_spring=true)
+        SimulationCore.step!(st_step, SimulationCore.velocityverlet(st_step; gamma=0.0, temperature=0.0, dt=0.0), 0.0; compute_energy=true)
         CUDA.synchronize()
 
         @test isapprox(Array(st_direct.fx), Array(st_step.fx); atol=1e-12, rtol=1e-12)

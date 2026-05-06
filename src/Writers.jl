@@ -4,7 +4,7 @@ using CUDA
 using Printf
 using StaticArrays
 using GSDFiles
-using ..Simulation
+using ..SimulationCore
 
 export InMemoryLogger, CSVWriter, XYZWriter
 export write_xyz!, write_observables_csv!

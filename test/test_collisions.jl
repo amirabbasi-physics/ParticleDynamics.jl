@@ -12,10 +12,10 @@
     @test st.coll_prev !== nothing
     @test st.coll_counts !== nothing
     @test length(st.coll_counts) == 3
-    vv = Simulation.velocityverlet(st; gamma=1f0, temperature=0.5f0, dt=1f-3)
+    vv = SimulationCore.velocityverlet(st; gamma=1f0, temperature=0.5f0, dt=1f-3)
 
     for _ in 1:4
-        Simulation.step!(st, vv, 1f-3; compute_energy=false)
+        SimulationCore.step!(st, vv, 1f-3; compute_energy=false)
     end
     counts = ParticleDynamics.collisions_read_counts!(st)
     @test length(counts) == 3
@@ -42,7 +42,7 @@ end
     T = Float32
 
     function _make_state(; bonds=nothing)
-        st = Simulation.build_simulation(
+        st = SimulationCore.build_simulation(
             N=2,
             box=(T(10), T(10)),
             cutoff=T(1),
@@ -96,10 +96,10 @@ end
     st.typeid .= CuArray(Int32[1, 1, 1, 1, 2, 2, 2, 2])
     ParticleDynamics.enable_collision_counting!(st; ntypes=2, bins=:all_pairs)
     ParticleDynamics.set_collision_pair_cutoffs!(st, T[1.0 1.1; 1.1 1.2])
-    vv = Simulation.velocityverlet(st; gamma=T(1), temperature=T(0.5), dt=T(1e-3))
+    vv = SimulationCore.velocityverlet(st; gamma=T(1), temperature=T(0.5), dt=T(1e-3))
 
     for _ in 1:2
-        Simulation.step!(st, vv, T(1e-3); compute_energy=false)
+        SimulationCore.step!(st, vv, T(1e-3); compute_energy=false)
     end
 
     counts = ParticleDynamics.collisions_read_counts!(st)

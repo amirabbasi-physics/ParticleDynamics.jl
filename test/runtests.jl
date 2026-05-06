@@ -2,7 +2,7 @@ using Test
 using Random
 using CUDA
 using ParticleDynamics
-using ParticleDynamics: Simulation, BrownianIntegrators, LangevinIntegrators, Filters
+using ParticleDynamics: SimulationCore, BrownianIntegrators, LangevinIntegrators, Filters
 
 CUDA.allowscalar(false)
 

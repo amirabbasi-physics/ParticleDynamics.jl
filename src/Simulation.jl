@@ -1,4 +1,4 @@
-module Simulation
+module SimulationCore
 
 using CUDA
 import ..IntegratorInterfaces

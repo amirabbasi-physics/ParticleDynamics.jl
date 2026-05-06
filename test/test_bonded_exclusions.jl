@@ -37,7 +37,7 @@
     @testset "2D soft-repulsive exclusions match CPU reference" begin
         T = Float64
         bonds = Tuple{Int32,Int32}[(Int32(1), Int32(2)), (Int32(2), Int32(3))]
-        st = Simulation.build_simulation(
+        st = SimulationCore.build_simulation(
             N=4,
             box=(T(20), T(20)),
             cutoff=T(1),
@@ -83,7 +83,7 @@
         N = 2000
         bonds = Tuple{Int32,Int32}[(Int32(i), Int32(i+1)) for i in 1:(N÷2 - 1)]
 
-        st_poly = Simulation.build_simulation(
+        st_poly = SimulationCore.build_simulation(
             N=N,
             box=(T(90), T(90)),
             cutoff=T(1),
@@ -100,7 +100,7 @@
             nonbonded=:soft_repulsive,
             precision=:f32,
         )
-        st_gas = Simulation.build_simulation(
+        st_gas = SimulationCore.build_simulation(
             N=N,
             box=(T(90), T(90)),
             cutoff=T(1),
@@ -134,12 +134,12 @@
         ParticleDynamics.NeighborLists.update_neighbors_inplace!(st_gas.nbh, st_gas.rx, st_gas.ry; box=st_gas.box2, step=st_gas.step)
 
         dt = T(2.5e-6)
-        spec_poly = Simulation.velocityverlet(st_poly; gamma=T(1), temperature=T(0), dt=dt)
-        spec_gas = Simulation.velocityverlet(st_gas; gamma=T(1), temperature=T(0), dt=dt)
+        spec_poly = SimulationCore.velocityverlet(st_poly; gamma=T(1), temperature=T(0), dt=dt)
+        spec_gas = SimulationCore.velocityverlet(st_gas; gamma=T(1), temperature=T(0), dt=dt)
 
         for _ in 1:8
-            Simulation.step!(st_poly, spec_poly, dt; compute_energy=true)
-            Simulation.step!(st_gas, spec_gas, dt; compute_energy=true)
+            SimulationCore.step!(st_poly, spec_poly, dt; compute_energy=true)
+            SimulationCore.step!(st_gas, spec_gas, dt; compute_energy=true)
         end
         CUDA.synchronize()
 
@@ -153,7 +153,7 @@
         function step_ms!(st, spec)
             CUDA.synchronize()
             t0 = time_ns()
-            Simulation.step!(st, spec, dt; compute_energy=true)
+            SimulationCore.step!(st, spec, dt; compute_energy=true)
             CUDA.synchronize()
             return (time_ns() - t0) / 1e6
         end

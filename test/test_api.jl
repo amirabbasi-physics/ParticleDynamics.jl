@@ -115,8 +115,8 @@
             :evaluate_forces_into_f0!,
             :evaluate_midpoint_forces_into_f0!,
         )
-            @test isdefined(ParticleDynamics.Simulation, sym)
-            @test !Base.isexported(ParticleDynamics.Simulation, sym)
+            @test isdefined(ParticleDynamics.SimulationCore, sym)
+            @test !Base.isexported(ParticleDynamics.SimulationCore, sym)
         end
 
         err = try
@@ -144,7 +144,7 @@
 
     cold_sel = Filters.selection(st, cold_filter)
     hot_sel = Filters.selection(st, hot_filter)
-    vv = Simulation.velocityverlet(st; gamma=1f0, temperature=1f0, dt=dt)
+    vv = SimulationCore.velocityverlet(st; gamma=1f0, temperature=1f0, dt=dt)
 
     @test Filters.count(st, cold_filter) == N ÷ 2
     @test Filters.count(st, hot_filter) == N - N ÷ 2
@@ -209,7 +209,7 @@
     @test all(dq_host[idx_sel.host] .== 5.0f0)
 
     @testset "Integrator-spec controls and observables" begin
-        spec = Simulation.velocityverlet(st; gamma=1f0, temperature=1f0, dt=dt)
+        spec = SimulationCore.velocityverlet(st; gamma=1f0, temperature=1f0, dt=dt)
         @test ParticleDynamics.IntegratorInterfaces.stage_sequence(spec) == (:kick1, :drift, :force, :kick2)
 
         Filters.set_friction!(spec, st, 1.5f0; filter=cold_filter)
@@ -237,8 +237,8 @@
         @test size(spec.params.ou.coeff_a, 1) == 2
         @test spec.params.corr_time === nothing
 
-        Simulation.step!(st, spec, dt; compute_energy=true)
-        obs = Simulation.collect_step_observables(st, spec)
+        SimulationCore.step!(st, spec, dt; compute_energy=true)
+        obs = SimulationCore.collect_step_observables(st, spec)
         @test obs.integrator == :velocity_verlet
         @test obs.step == st.step
         @test isfinite(obs.Etot)
@@ -247,10 +247,10 @@
     end
 
     @testset "NHC controls" begin
-        nhc = Simulation.nosehooverchain(st; temperature=1.0f0, tau=0.5f0, chain_length=4, substeps=3)
+        nhc = SimulationCore.nosehooverchain(st; temperature=1.0f0, tau=0.5f0, chain_length=4, substeps=3)
         @test ParticleDynamics.IntegratorInterfaces.stage_sequence(nhc) ==
               (:thermostat_pre, :kick1, :drift, :force, :kick2, :thermostat_post)
-        @test nhc.params.propagator == Simulation.NHC_PROPAGATOR_GROMACS
+        @test nhc.params.propagator == SimulationCore.NHC_PROPAGATOR_GROMACS
 
         old_q = copy(nhc.params.chain_masses)
         Filters.set_thermostat_temperature!(nhc, 1.25f0)
@@ -272,21 +272,21 @@
         @test_throws ArgumentError Filters.set_noise_scale!(nhc, 1.0f0)
         @test_throws ArgumentError Filters.set_corr_time!(nhc, 0.1f0)
 
-        nhc_legacy = Simulation.nosehooverchain(
+        nhc_legacy = SimulationCore.nosehooverchain(
             st; temperature=1.0f0, tau=0.5f0, chain_length=4, substeps=5, propagator=:legacy
         )
         @test nhc_legacy.params.propagator != nhc.params.propagator
-        nhc_lammps = Simulation.nosehooverchain(
+        nhc_lammps = SimulationCore.nosehooverchain(
             st; temperature=1.0f0, tau=0.5f0, chain_length=4, substeps=1, propagator=:lammps
         )
-        @test nhc_lammps.params.propagator == Simulation.NHC_PROPAGATOR_LAMMPS
-        @test_throws ArgumentError Simulation.nosehooverchain(
+        @test nhc_lammps.params.propagator == SimulationCore.NHC_PROPAGATOR_LAMMPS
+        @test_throws ArgumentError SimulationCore.nosehooverchain(
             st; temperature=1.0f0, tau=0.5f0, chain_length=4, substeps=5, propagator=:invalid
         )
     end
 
     @testset "CSVR controls" begin
-        csvr_spec = Simulation.csvr(st; temperature=1.0f0, tau=0.5f0)
+        csvr_spec = SimulationCore.csvr(st; temperature=1.0f0, tau=0.5f0)
         @test ParticleDynamics.IntegratorInterfaces.stage_sequence(csvr_spec) ==
               (:kick1, :drift, :force, :kick2, :thermostat)
 
@@ -307,6 +307,6 @@
         @test_throws ArgumentError Filters.set_friction!(csvr_spec, 1.0f0)
         @test_throws ArgumentError Filters.set_noise_scale!(csvr_spec, 1.0f0)
         @test_throws ArgumentError Filters.set_corr_time!(csvr_spec, 0.1f0)
-        @test_throws ArgumentError Simulation.csvr(st; temperature=1.0f0, tau=0.0f0)
+        @test_throws ArgumentError SimulationCore.csvr(st; temperature=1.0f0, tau=0.0f0)
     end
 end

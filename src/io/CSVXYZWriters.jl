@@ -28,13 +28,13 @@ end
 """
     write_observables_csv!(path, st, spec)
 
-Write observables collected through `Simulation.collect_step_observables`,
+Write observables collected through `SimulationCore.collect_step_observables`,
 including a compatibility `Qtot` column.
 """
 function write_observables_csv!(path::AbstractString,
                                 st,
                                 spec)
-    obs = Simulation.collect_step_observables(st, spec)
+    obs = SimulationCore.collect_step_observables(st, spec)
     hdr = !isfile(path)
     headers = String[
         "step", "integrator", "Etot", "Epot_total", "Ekin_total",
