@@ -8,9 +8,9 @@
         )
         err = nothing
         try
-            vv = Simulation.velocityverlet(st; gamma=1f0, temperature=1f0, dt=1f-3)
-            Simulation.step_graph!(st, vv, 1f-3; compute_energy=false)
-            Simulation.step_graph!(st, vv.params, 1f-3; compute_energy=false)
+            vv = SimulationCore.velocityverlet(st; gamma=1f0, temperature=1f0, dt=1f-3)
+            SimulationCore.step_graph!(st, vv, 1f-3; compute_energy=false)
+            SimulationCore.step_graph!(st, vv.params, 1f-3; compute_energy=false)
         catch e
             err = e
         end
@@ -24,7 +24,7 @@
         st32 = nothing
         err32 = nothing
         try
-            st32 = Simulation.build_simulation(
+            st32 = SimulationCore.build_simulation(
                 N=6, box=(18f0, 18f0), cutoff=2.5f0, skin=0.3f0, cap=Int32(32),
                 neigh_interval=2, use_neighborlist=true, nonbonded=:softrep,
                 softrep_params=sp32, gamma=1f0, temperature=1f0, dt=1f-3, precision=:f32
@@ -44,7 +44,7 @@
         st64 = nothing
         err64 = nothing
         try
-            st64 = Simulation.build_simulation(
+            st64 = SimulationCore.build_simulation(
                 N=6, box=(18.0, 18.0), cutoff=2.5, skin=0.3, cap=Int32(32),
                 neigh_interval=2, use_neighborlist=true, nonbonded=:softrep,
                 softrep_params=sp64, gamma=1.0, temperature=1.0, dt=1e-3, precision=:f64
@@ -68,7 +68,7 @@
         end
 
         missing_root = missing_exports(ParticleDynamics)
-        missing_sim = missing_exports(Simulation)
+        missing_sim = missing_exports(SimulationCore)
         missing_writers = missing_exports(ParticleDynamics.Writers)
 
         @test isempty(missing_root)
@@ -102,10 +102,10 @@
         fill!(st.coll_prev, UInt8(0x07))
         prev_len = length(st.coll_prev)
 
-        em = Simulation.eulermaruyama(st; gamma=1f0, temperature=0.5f0, dt=1f-3)
+        em = SimulationCore.eulermaruyama(st; gamma=1f0, temperature=0.5f0, dt=1f-3)
         err = nothing
         try
-            Simulation.step!(st, em, 1f-3; compute_energy=false)
+            SimulationCore.step!(st, em, 1f-3; compute_energy=false)
         catch e
             err = e
         end
@@ -131,10 +131,10 @@
             cap=Int32(32), neigh_interval=1, use_neighborlist=true,
             nonbonded=:wca, gamma=0f0, temperature=1f0, dt=1f-3
         )
-        spec = Simulation.baoab(st; gamma=0f0, temperature=1f0, dt=1f-3)
+        spec = SimulationCore.baoab(st; gamma=0f0, temperature=1f0, dt=1f-3)
         err = nothing
         try
-            Simulation.step!(st, spec, 1f-3; compute_energy=false)
+            SimulationCore.step!(st, spec, 1f-3; compute_energy=false)
         catch e
             err = e
         end
@@ -152,10 +152,10 @@
             cap=Int32(32), neigh_interval=1, use_neighborlist=true,
             nonbonded=:wca, gamma=0f0, temperature=1f0, dt=1f-3
         )
-        mid = Simulation.eulerheun(st_mid; gamma=0f0, temperature=1f0, dt=1f-3)
+        mid = SimulationCore.eulerheun(st_mid; gamma=0f0, temperature=1f0, dt=1f-3)
         err_mid = nothing
         try
-            Simulation.step!(st_mid, mid, 1f-3; compute_energy=false)
+            SimulationCore.step!(st_mid, mid, 1f-3; compute_energy=false)
         catch e
             err_mid = e
         end
@@ -169,10 +169,10 @@
             cap=Int32(32), neigh_interval=1, use_neighborlist=true,
             nonbonded=:wca, gamma=0f0, temperature=1f0, dt=1f-3
         )
-        em = Simulation.eulermaruyama(st_em; gamma=0f0, temperature=1f0, dt=1f-3)
+        em = SimulationCore.eulermaruyama(st_em; gamma=0f0, temperature=1f0, dt=1f-3)
         err_em = nothing
         try
-            Simulation.step!(st_em, em, 1f-3; compute_energy=false)
+            SimulationCore.step!(st_em, em, 1f-3; compute_energy=false)
         catch e
             err_em = e
         end

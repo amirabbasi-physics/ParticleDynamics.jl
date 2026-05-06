@@ -302,7 +302,7 @@ function set_temperature!(spec::NHCSpec{T},
         Tb = T(pairs[b].second)
         Tb > zero(T) || throw(ArgumentError("NHC target temperature for bath $(b) must be > 0."))
         spec.params.target_temperature[b] = Tb
-        spec.params.chain_masses[:, b] .= Simulation._default_nhc_chain_masses(T,
+        spec.params.chain_masses[:, b] .= SimulationCore._default_nhc_chain_masses(T,
                                                                                 dof_guess,
                                                                                 Tb,
                                                                                 spec.params.tau[b],

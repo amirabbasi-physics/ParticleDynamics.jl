@@ -3,7 +3,7 @@
         invT = let s = Array(spec.params.noise_scale), g = Array(spec.params.gamma)
             (2 .* g .* eltype(s)(dt)) ./ (s .^ 2)
         end
-        sign = spec isa Simulation.VVSpec ? 1.0 : -1.0
+        sign = spec isa SimulationCore.VVSpec ? 1.0 : -1.0
         heat_total = sign * sum(Array(st.dq)) * dt
         entropy_total = sign * sum(Array(st.dq) .* invT) * dt
         return heat_total, entropy_total
@@ -11,10 +11,10 @@
 
     @testset "Langevin family totals and reset helper" begin
         for (seed, builder) in (
-            (0xE5001, st -> Simulation.velocityverlet(st; gamma=1f0, temperature=1f0, dt=1f-3)),
-            (0xE5002, st -> Simulation.baoab(st; gamma=1f0, temperature=1f0, dt=1f-3)),
-            (0xE5003, st -> Simulation.baoa(st; gamma=1f0, temperature=1f0, dt=1f-3)),
-            (0xE5004, st -> Simulation.gsm(st; gamma=1f0, temperature=1f0, dt=1f-3)),
+            (0xE5001, st -> SimulationCore.velocityverlet(st; gamma=1f0, temperature=1f0, dt=1f-3)),
+            (0xE5002, st -> SimulationCore.baoab(st; gamma=1f0, temperature=1f0, dt=1f-3)),
+            (0xE5003, st -> SimulationCore.baoa(st; gamma=1f0, temperature=1f0, dt=1f-3)),
+            (0xE5004, st -> SimulationCore.gsm(st; gamma=1f0, temperature=1f0, dt=1f-3)),
         )
             seed_all!(seed)
             dt = 1f-3
@@ -38,10 +38,10 @@
             Filters.set_temperature!(spec, st, dt, cold => 0.8f0, hot => 1.4f0)
 
             for _ in 1:400
-                Simulation.step!(st, spec, dt; compute_energy=false)
+                SimulationCore.step!(st, spec, dt; compute_energy=false)
             end
 
-            obs = Simulation.collect_step_observables(st, spec)
+            obs = SimulationCore.collect_step_observables(st, spec)
             manual_heat, manual_entropy = _ld_manual_totals(spec, st, dt)
 
             @test hasproperty(obs, :bath_heat_total)
@@ -52,7 +52,7 @@
             @test obs.bath_entropy_total ≈ manual_entropy atol=5f-3 rtol=5f-5
 
             ParticleDynamics.reset_bath_exchange_accumulators!(st, spec)
-            obs_reset = Simulation.collect_step_observables(st, spec)
+            obs_reset = SimulationCore.collect_step_observables(st, spec)
             @test obs_reset.bath_heat_total == 0f0
             @test obs_reset.bath_entropy_total == 0f0
             @test obs_reset.dq_total == 0f0
@@ -80,14 +80,14 @@
         cold = Filters.TypeIDs(1)
         hot = Filters.TypeIDs(2)
 
-        spec = Simulation.nosehooverchain(st; temperature=1.0f0, tau=0.2f0, chain_length=5, substeps=6)
+        spec = SimulationCore.nosehooverchain(st; temperature=1.0f0, tau=0.2f0, chain_length=5, substeps=6)
         Filters.set_temperature!(spec, st, dt, cold => 0.8f0, hot => 1.4f0)
 
         for _ in 1:120
-            Simulation.step!(st, spec, dt; compute_energy=false)
+            SimulationCore.step!(st, spec, dt; compute_energy=false)
         end
 
-        obs = Simulation.collect_step_observables(st, spec)
+        obs = SimulationCore.collect_step_observables(st, spec)
         heat_b = Array(spec.workspace.cumulative_energy_exchange_per_bath)
         entropy_b = heat_b ./ spec.params.target_temperature
 
@@ -105,7 +105,7 @@
         @test obs.bath_entropy_total ≈ sum(entropy_b) atol=5f-4 rtol=5f-5
 
         ParticleDynamics.reset_bath_exchange_accumulators!(st, spec)
-        obs_reset = Simulation.collect_step_observables(st, spec)
+        obs_reset = SimulationCore.collect_step_observables(st, spec)
         @test obs_reset.bath_heat_total == 0f0
         @test obs_reset.bath_entropy_total == 0f0
         @test all(iszero, obs_reset.bath_heat_per_bath)
@@ -132,14 +132,14 @@
         cold = Filters.TypeIDs(1)
         hot = Filters.TypeIDs(2)
 
-        spec = Simulation.csvr(st; temperature=1.0f0, tau=0.2f0)
+        spec = SimulationCore.csvr(st; temperature=1.0f0, tau=0.2f0)
         Filters.set_temperature!(spec, st, dt, cold => 0.8f0, hot => 1.4f0)
 
         for _ in 1:120
-            Simulation.step!(st, spec, dt; compute_energy=false)
+            SimulationCore.step!(st, spec, dt; compute_energy=false)
         end
 
-        obs = Simulation.collect_step_observables(st, spec)
+        obs = SimulationCore.collect_step_observables(st, spec)
         heat_b = Array(spec.workspace.cumulative_energy_exchange_per_bath)
         entropy_b = heat_b ./ spec.params.target_temperature
 
@@ -157,7 +157,7 @@
         @test obs.bath_entropy_total ≈ sum(entropy_b) atol=5f-4 rtol=5f-5
 
         ParticleDynamics.reset_bath_exchange_accumulators!(st, spec)
-        obs_reset = Simulation.collect_step_observables(st, spec)
+        obs_reset = SimulationCore.collect_step_observables(st, spec)
         @test obs_reset.bath_heat_total == 0f0
         @test obs_reset.bath_entropy_total == 0f0
         @test all(iszero, obs_reset.bath_heat_per_bath)

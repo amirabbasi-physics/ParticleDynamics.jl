@@ -7,7 +7,7 @@ research scripts can copy validated parameter sets from `examples/` and run
 production simulations without touching CUDA code. The top-level module keeps a
 curated public API (`SimulationState`, `build_simulation`, integrator builders,
 filters, writers, and setup helpers), while lower-level execution helpers stay
-under qualified submodules such as `ParticleDynamics.Simulation`.
+under qualified submodules such as `ParticleDynamics.SimulationCore`.
 
 # Example
 The snippet below mirrors `examples/2D_allpairs_quicktest.jl`, which checks the
@@ -74,10 +74,10 @@ using .Thermostats: AbstractThermostat, ThermostatState,
     n_baths, target_temperature, response_time,
     set_target_temperature!, set_response_time!, cumulative_energy_exchange
 
-using .Simulation: SimulationState, build_simulation, step!, step_graph!, sync_unwrapped!, accumulate_virial!, virial_components, virial_tensor
-using .Simulation: collect_step_observables, reset_bath_exchange_accumulators!
-using .Simulation: IntegratorSpec, VVSpec, BAOABSpec, BAOASpec, GSMSpec, BrownianSpec, EMSpec, NHCParams, NHCSpec, CSVRParams, CSVRSpec
-using .Simulation: velocityverlet, baoab, baoa, gsm, eulerheun, eulermaruyama, nosehooverchain, csvr
+using .SimulationCore: SimulationState, build_simulation, step!, step_graph!, sync_unwrapped!, accumulate_virial!, virial_components, virial_tensor
+using .SimulationCore: collect_step_observables, reset_bath_exchange_accumulators!
+using .SimulationCore: IntegratorSpec, VVSpec, BAOABSpec, BAOASpec, GSMSpec, BrownianSpec, EMSpec, NHCParams, NHCSpec, CSVRParams, CSVRSpec
+using .SimulationCore: velocityverlet, baoab, baoa, gsm, eulerheun, eulermaruyama, nosehooverchain, csvr
 using .Writers: InMemoryLogger, CSVWriter, XYZWriter,
     write_xyz!, write_observables_csv!, gsd_open, gsd_close, write_gsd_frame!, read_gsd_frame!
 using .BondedForces: BondList, build_bondlist
@@ -87,7 +87,7 @@ using .InitGenerators: box_from_phi_2d, box_from_phi_3d,
 using .Collisions: enable_collision_counting!, disable_collision_counting!,
     collisions_reset_counts!, collisions_read_counts!, set_collision_pair_cutoffs!
 
-export Filters, BondedForces, ParticleGroups, Thermostats,
+export Filters, BondedForces, ParticleGroups, Thermostats, SimulationCore,
        # Definitions / parameters
        LJParams, SoftRepulsiveParams,
        HarmonicBondParams, FENEParams,

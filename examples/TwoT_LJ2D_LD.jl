@@ -190,7 +190,7 @@ function main()
         write_output = (step % log_interval == 0)
         # Explicit integrator selection: Langevin (GJF/Velocity-Verlet)
         step!(st, vv, dt; compute_energy=true)
-            ParticleDynamics.Simulation.accumulate_energies!(st)
+            ParticleDynamics.SimulationCore.accumulate_energies!(st)
         accumulate_virial!(st)
 
         if write_output

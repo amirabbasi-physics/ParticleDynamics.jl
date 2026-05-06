@@ -3,7 +3,7 @@ module TestUtils
 using Random
 using CUDA
 using ParticleDynamics
-using ParticleDynamics: Simulation
+using ParticleDynamics: SimulationCore
 
 export gpu_required, seed_all!,
        build_tiny2d, build_tiny3d,
@@ -113,7 +113,7 @@ function build_tiny2d(;
     precision::Symbol=(T == Float64 ? :f64 : :f32),
     unwrapped_positions::Bool=false,
 )
-    st = Simulation.build_simulation(
+    st = SimulationCore.build_simulation(
         N=N, box=box, cutoff=cutoff, skin=skin, cap=cap, neigh_interval=neigh_interval,
         use_neighborlist=use_neighborlist, epsilon=epsilon, sigma=sigma, gamma=gamma,
         temperature=temperature, dt=dt,
@@ -124,7 +124,7 @@ function build_tiny2d(;
     set_velocities_2d!(st, fill(zero(T), N), fill(zero(T), N))
     ParticleDynamics.NeighborLists.update_neighbors_inplace!(st.nbh, st.rx, st.ry; box=st.box2, step=st.step)
     if unwrapped_positions
-        Simulation.sync_unwrapped!(st)
+        SimulationCore.sync_unwrapped!(st)
     end
     return st
 end
@@ -148,7 +148,7 @@ function build_tiny3d(;
     precision::Symbol=(T == Float64 ? :f64 : :f32),
     unwrapped_positions::Bool=false,
 )
-    st = Simulation.build_simulation(
+    st = SimulationCore.build_simulation(
         N=N, box=box, cutoff=cutoff, skin=skin, cap=cap, neigh_interval=neigh_interval,
         use_neighborlist=use_neighborlist, epsilon=epsilon, sigma=sigma, gamma=gamma,
         temperature=temperature, dt=dt,
@@ -159,7 +159,7 @@ function build_tiny3d(;
     set_velocities_3d!(st, fill(zero(T), N), fill(zero(T), N), fill(zero(T), N))
     ParticleDynamics.NeighborLists.update_neighbors_inplace!(st.nbh, st.rx, st.ry, st.rz; box=st.box3, step=st.step)
     if unwrapped_positions
-        Simulation.sync_unwrapped!(st)
+        SimulationCore.sync_unwrapped!(st)
     end
     return st
 end

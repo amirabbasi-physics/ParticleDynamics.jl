@@ -208,11 +208,11 @@ function set_ou_spectrum!(spec::IntegratorSpec{T},
     sel = selection(st, filter)
     backend = Backends.storage_backend(st)
     dtT = convert(T, dt)
-    tau_vals, scale_vals = Simulation._canonical_mode_vectors(T, taus, scales)
+    tau_vals, scale_vals = SimulationCore._canonical_mode_vectors(T, taus, scales)
     if length(tau_vals) == 1 && length(scale_vals) == 1
         assign_scalar!(_noise_scale_view(spec), sel.device, scale_vals[1])
     end
-    ou = Simulation._build_mode_ou(backend, T, sel.device, tau_vals, scale_vals, dtT)
+    ou = SimulationCore._build_mode_ou(backend, T, sel.device, tau_vals, scale_vals, dtT)
     corr = _compat_corr_time_for_selection(backend, T, length(_gamma_view(spec)), sel.device, tau_vals, scale_vals)
     _set_dt_view!(spec, dtT)
     _set_corr_time_view!(spec, corr)
@@ -266,14 +266,14 @@ end
 function set_corr_time!(bp::BrownianIntegrators.BrownianParams{T}, value::Real) where {T<:AbstractFloat}
     bp2 = _ensure_corr_time_array(bp)
     fill!(bp2.corr_time, T(value))
-    ou = Simulation._build_single_mode_ou(Backends.CUDABackend(), T, bp2.noise_scale, bp2.corr_time, bp2.dt)
+    ou = SimulationCore._build_single_mode_ou(Backends.CUDABackend(), T, bp2.noise_scale, bp2.corr_time, bp2.dt)
     return BrownianIntegrators.BrownianParams{T}(bp2.gamma, bp2.dt, bp2.noise_scale, bp2.corr_time, ou)
 end
 
 function set_corr_time!(em::BrownianIntegrators.EMParams{T}, value::Real) where {T<:AbstractFloat}
     em2 = _ensure_corr_time_array(em)
     fill!(em2.corr_time, T(value))
-    ou = Simulation._build_single_mode_ou(Backends.CUDABackend(), T, em2.noise_scale, em2.corr_time, em2.dt)
+    ou = SimulationCore._build_single_mode_ou(Backends.CUDABackend(), T, em2.noise_scale, em2.corr_time, em2.dt)
     return BrownianIntegrators.EMParams{T}(em2.gamma, em2.dt, em2.noise_scale, em2.corr_time, ou)
 end
 
