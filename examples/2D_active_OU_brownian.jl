@@ -1,15 +1,17 @@
 using ParticleDynamics
 using ParticleDynamics: step!, eulermaruyama
 
+include(joinpath(@__DIR__, "_example_utils.jl"))
+
 # Active Ornstein–Uhlenbeck particles in 2D (overdamped limit, Fodor et al. PRL 117, 038103)
 # Parameters follow the paper: N=10000, box 250×250, D=100, τ=20, μ=1 (γ=1).
 # In the τ → 0 limit this reduces to overdamped Brownian dynamics at temperature T = D = 100.
 
-N = 10000
+N = maybe_override_int(10_000, "SIM_NPARTICLES")
 L = 125.0
 dt = 2e-4             # small enough to resolve τ and steep forces
-n_steps = 1e5
-write_interval = 1e4
+n_steps = maybe_override_int(1e5, "SIM_MAX_STEPS")
+write_interval = maybe_override_interval(1e4, n_steps)
 
 function initialize_square_lattice!(st, box::NTuple{2,Real})
     N = length(st.rx)
