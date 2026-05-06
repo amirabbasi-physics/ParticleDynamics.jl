@@ -40,6 +40,22 @@ function reset_observables!(sim::Simulation)
     return sim
 end
 
-function run!(sim::Simulation, args...)
-    throw(ArgumentError("The high-level workflow run loop is not implemented yet."))
+function run!(sim::Simulation, nsteps::Integer; 
+              every::Integer=1,
+              verbose::Bool=false)
+    !sim.prepared && throw(ArgumentError("Simulation must be prepared before running. Call prepare!(sim) first."))
+    sim.state === nothing && throw(ArgumentError("Simulation state is not initialized."))
+    sim.lowlevel_integrator === nothing && throw(ArgumentError("Lowlevel integrator is not initialized."))
+    
+    # Run the integration loop
+    for step in 1:nsteps
+        step!(sim.state, sim.lowlevel_integrator, sim.integrator.dt; compute_energy=true)
+        
+        # Collect observables at specified intervals
+        if mod(step, every) == 0 && verbose
+            println("Step $step / $nsteps")
+        end
+    end
+    
+    return sim
 end
