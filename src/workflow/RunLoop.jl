@@ -11,6 +11,20 @@ function prepare!(sim::Simulation)
     if sim.integrator !== nothing && hasproperty(sim.integrator, :forces) && !isempty(sim.integrator.forces)
         sim.metadata[:compiled_forces] = compile_forces(sim.system, sim.integrator.forces; precision=sim.precision)
     end
+    if sim.integrator !== nothing && hasproperty(sim.integrator, :methods) && !isempty(sim.integrator.methods)
+        sim.metadata[:compiled_integrator] = compile_integrator(sim.system, sim.integrator; precision=sim.precision)
+    end
+    if sim.state !== nothing
+        if haskey(sim.metadata, :compiled_forces)
+            post_build!(sim.metadata[:compiled_forces], sim.state)
+        end
+        if haskey(sim.metadata, :compiled_integrator)
+            sim.lowlevel_integrator = build_lowlevel_integrator(sim.metadata[:compiled_integrator],
+                                                                sim.state;
+                                                                system=sim.system,
+                                                                materialized_groups=materialized)
+        end
+    end
     sim.prepared = true
     return sim
 end
