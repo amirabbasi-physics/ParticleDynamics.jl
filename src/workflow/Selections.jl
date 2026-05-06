@@ -50,3 +50,50 @@ Base.iterate(groups::Groups, state::Int=1) =
 Base.getindex(groups::Groups, name::Symbol) = groups.entries[groups.byname[name]]
 Base.getindex(groups::Groups, idx::Int) = groups.entries[idx]
 Base.keys(groups::Groups) = keys(groups.byname)
+
+_particle_count(system::ParticleSystem) = length(system.positions)
+
+function _selection_typeid(system::ParticleSystem, value::Symbol)
+    idx = findfirst(==(value), system.types)
+    idx === nothing &&
+        throw(ArgumentError("Unknown particle type $(value). Known types: $(join(string.(system.types), ", "))."))
+    return idx
+end
+
+_selection_typeid(::ParticleSystem, value::Integer) = Int(value)
+
+function _selection_indices(system::ParticleSystem, ::AllSelection)
+    return collect(1:_particle_count(system))
+end
+
+function _selection_indices(system::ParticleSystem, selection::TypeSelection)
+    system.typeids === nothing &&
+        throw(ArgumentError("TypeSelection requires `ParticleSystem.typeids` to be defined."))
+    tid = _selection_typeid(system, selection.value)
+    return findall(==(tid), Int.(system.typeids))
+end
+
+function _selection_indices(system::ParticleSystem, selection::IndexSelection)
+    n = _particle_count(system)
+    for idx in selection.indices
+        1 <= idx <= n ||
+            throw(ArgumentError("IndexSelection index $(idx) is out of bounds for $(n) particles."))
+    end
+    return selection.indices
+end
+
+materialize_selection(::ParticleSystem, ::AllSelection) = Filters.All()
+
+function materialize_selection(system::ParticleSystem, selection::TypeSelection)
+    return Filters.TypeIDs(_selection_typeid(system, selection.value))
+end
+
+materialize_selection(::ParticleSystem, selection::IndexSelection) = Filters.Indices(selection.indices)
+
+function materialize_group(system::ParticleSystem, group::Group)
+    group.domain == :particles ||
+        throw(ArgumentError("Only particle groups are supported right now; got domain=$(group.domain)."))
+    indices = _selection_indices(system, group.selection)
+    isempty(indices) && throw(ArgumentError("Group $(group.name) selects no particles."))
+    return materialize_selection(system, group.selection)
+end

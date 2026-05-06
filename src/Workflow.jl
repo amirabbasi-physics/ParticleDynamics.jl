@@ -1,10 +1,11 @@
 module Workflow
 
 using Base: @kwdef
+using ..Filters
 using ..SimulationCore: SimulationState
 
-include("workflow/Selections.jl")
 include("workflow/System.jl")
+include("workflow/Selections.jl")
 include("workflow/Forces.jl")
 include("workflow/Integrator.jl")
 include("workflow/Thermostats.jl")

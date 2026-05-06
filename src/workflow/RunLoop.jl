@@ -3,7 +3,12 @@ function state(sim::Simulation)
 end
 
 function prepare!(sim::Simulation)
-    sim.prepared = sim.state !== nothing
+    materialized = Dict{Symbol,Any}()
+    for group in sim.groups
+        materialized[group.name] = materialize_group(sim.system, group)
+    end
+    sim.metadata[:materialized_groups] = materialized
+    sim.prepared = true
     return sim
 end
 
