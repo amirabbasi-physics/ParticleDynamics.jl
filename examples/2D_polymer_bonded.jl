@@ -1,6 +1,8 @@
 using ParticleDynamics
 using CUDA
 
+include(joinpath(@__DIR__, "_example_utils.jl"))
+
 # Simple 2D polymer chain with bonded interactions (FENE or harmonic)
 
 function make_linear_chain_bonds(N::Int)
@@ -27,7 +29,7 @@ function init_chain_line!(st, box::NTuple{2,Float32}; spacing::Float32=0.97f0)
 end
 
 # ---- Params ----
-N   = 200
+N   = maybe_override_int(200, "SIM_NPARTICLES")
 box = (200.0f0, 50.0f0)
 
 # LJ parameters (purely repulsive WCA)
@@ -39,8 +41,8 @@ cap = Int32(96)
 gamma = 1f0
 temperature = 1f0
 dt = 0.00001f0
-N_steps = 1000000
-N_log = 10000
+N_steps = maybe_override_int(1_000_000, "SIM_MAX_STEPS")
+N_log = maybe_override_interval(10_000, N_steps)
 
 # Bonds: linear chain
 bonds = make_linear_chain_bonds(N)

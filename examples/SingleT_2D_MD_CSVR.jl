@@ -2,6 +2,8 @@ using ParticleDynamics
 using ParticleDynamics: Filters, csvr, hex_random_2d, collect_step_observables, reset_bath_exchange_accumulators!
 using Printf
 
+include(joinpath(@__DIR__, "_example_utils.jl"))
+
 centerstr(s, w) = begin
     len = length(s)
     pad = max(w - len, 0)
@@ -11,7 +13,7 @@ centerstr(s, w) = begin
 end
 
 function main(phi::Float64, temperature::Float64)
-    n = 10_000
+    n = maybe_override_int(10_000, "SIM_NPARTICLES")
     sigma = 1.0
 
     cfg = hex_random_2d(n, sigma, phi; T=Float64)
@@ -21,11 +23,11 @@ function main(phi::Float64, temperature::Float64)
     rcut = sigma
 
     dt = 1e-5
-    nsteps = 10_000_000
-    log_interval = 500_000
+    nsteps = maybe_override_int(10_000_000, "SIM_MAX_STEPS")
+    log_interval = maybe_override_interval(500_0, nsteps)
 
     warmup_enable = true
-    warmup_steps = 1_000_000
+    warmup_steps = maybe_override_int(1_000_0, "SIM_WARMUP_STEPS"; lower=0)
     warmup_dt = dt * 0.1
     warmup_neigh_interval = 5
 
@@ -97,14 +99,12 @@ function main(phi::Float64, temperature::Float64)
         end
 
         start_time = time()
-        max_runtime = let v = get(ENV, "NEQSIM_MAX_SECONDS", "")
-            isempty(v) ? Inf : parse(Float64, v)
-        end
+        max_runtime = maybe_override_runtime()
 
         for step in 1:nsteps
             write_output = step % log_interval == 0
             step!(st, thermostat, dt; compute_energy=true)
-            accumulate_energies!(st)
+            ParticleDynamics.Simulation.accumulate_energies!(st)
             accumulate_virial!(st)
 
             if write_output

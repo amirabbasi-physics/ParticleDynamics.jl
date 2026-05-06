@@ -31,7 +31,7 @@ end
 
 function main()
     # simulation parameters (local scope, no globals)
-    n = maybe_override_int(10_000, "NEQSIM_NPARTICLES")
+    n = maybe_override_int(10_000, "SIM_NPARTICLES")
     ϕ = 0.7
     sigma = 1.0
     # Random hexagonal-lattice placement at target area fraction ϕ
@@ -45,18 +45,18 @@ function main()
     tau_nhc = 100 * dt
     gamma = 1 / (2 * tau_nhc)
     #gamma = 10000.0
-    nsteps = maybe_override_int(500_000, "NEQSIM_MAX_STEPS")
-    log_interval = maybe_override_int(10_000, "NEQSIM_LOG_INTERVAL")
+    nsteps = maybe_override_int(500_000, "SIM_MAX_STEPS")
+    log_interval = maybe_override_int(10_000, "SIM_LOG_INTERVAL")
     log_interval = min(log_interval, max(1, nsteps))
 
     # Optional warmup (relaxation) configuration
     warmup_enable = true
-    warmup_steps = maybe_override_int(10_000, "NEQSIM_WARMUP_STEPS"; lower=0)
+    warmup_steps = maybe_override_int(10_000, "SIM_WARMUP_STEPS"; lower=0)
     warmup_enable = warmup_enable && warmup_steps > 0
     warmup_dt = dt * 0.1
     warmup_neigh_interval = 1
-    init_steps = maybe_override_int(50_000, "NEQSIM_INIT_STEPS"; lower=0)
-    relax_steps = maybe_override_int(0, "NEQSIM_RELAX_STEPS"; lower=0)
+    init_steps = maybe_override_int(50_000, "SIM_INIT_STEPS"; lower=0)
+    relax_steps = maybe_override_int(0, "SIM_RELAX_STEPS"; lower=0)
 
     # Two different bath temperatures per type (cold=type 1, hot=type 2)
     t_cold = 10000.0/500
@@ -182,7 +182,7 @@ function main()
     avg_epr_per_part = 0.0
 
     start_time = time()
-    max_runtime = let v = get(ENV, "NEQSIM_MAX_SECONDS", "")
+    max_runtime = let v = get(ENV, "SIM_MAX_SECONDS", "")
         isempty(v) ? Inf : parse(Float64, v)
     end
 
@@ -190,7 +190,7 @@ function main()
         write_output = (step % log_interval == 0)
         # Explicit integrator selection: Langevin (GJF/Velocity-Verlet)
         step!(st, vv, dt; compute_energy=true)
-        accumulate_energies!(st)
+            ParticleDynamics.Simulation.accumulate_energies!(st)
         accumulate_virial!(st)
 
         if write_output

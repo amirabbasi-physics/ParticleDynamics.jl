@@ -1,6 +1,8 @@
 using ParticleDynamics
 using CUDA
 
+include(joinpath(@__DIR__, "_example_utils.jl"))
+
 """
 Tiny 2D example that writes the total per-particle configurational virial tensor
 into a GSD trajectory.
@@ -35,14 +37,16 @@ function initialize_square_lattice!(st, box::NTuple{2,T}) where {T<:AbstractFloa
     return st
 end
 
-N = 256
+N = maybe_override_int(256, "SIM_NPARTICLES")
 box = (40.0f0, 40.0f0)
 r_cut = Float32(2^(1 / 6))
 sigma = 1.0f0
 epsilon = 10.0f0
 dt = 2.0f-4
-N_steps = 1000
-N_log = 100
+gamma = 50.0f0
+temperature = 1.0f0
+N_steps = maybe_override_int(1000, "SIM_MAX_STEPS")
+N_log = maybe_override_interval(100, N_steps)
 
 st = build_simulation(
     N = N,
@@ -54,8 +58,8 @@ st = build_simulation(
     neigh_interval = 25,
     epsilon = epsilon,
     sigma = sigma,
-    gamma = 50.0f0,
-    temperature = 1.0f0,
+    gamma = gamma,
+    temperature = temperature,
     nonbonded = :wca,
     precision = :f32,
 )

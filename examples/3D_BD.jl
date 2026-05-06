@@ -2,6 +2,8 @@ using ParticleDynamics
 using ParticleDynamics: Filters, eulermaruyama
 using CUDA
 
+include(joinpath(@__DIR__, "_example_utils.jl"))
+
 function initialize_simple_cubic_lattice!(st, box::NTuple{3,Float32})
     N = length(st.rx)
     n_side = ceil(Int, cbrt(Float64(N)))
@@ -32,7 +34,7 @@ function initialize_simple_cubic_lattice!(st, box::NTuple{3,Float32})
 end
 
 # ---- Params ----
-N = 40_000
+N = maybe_override_int(40_000, "SIM_NPARTICLES")
 box = (50.0f0, 50.0f0, 50.0f0)
 
 # LJ parameters
@@ -64,8 +66,11 @@ types = ["C"]
 write_gsd_frame!(gsdh, st; diameter=sigma, types_names=types, step=st.step)
 
 # ---- Run ----
-@time for s in 1:10_000_000
-    compute_E = (s % 1000_000 == 0)
+N_steps = maybe_override_int(10_000_000, "SIM_MAX_STEPS")
+N_log = maybe_override_interval(1_000_000, N_steps)
+
+@time for s in 1:N_steps
+    compute_E = (s % N_log == 0)
     step!(st, eh, dt; compute_energy=compute_E)
     if compute_E
         write_observables_csv!(joinpath(@__DIR__, "obs3d_bd.csv"), s; Epot=st.Epot, Ekin=st.Ekin, dq=st.dq)
