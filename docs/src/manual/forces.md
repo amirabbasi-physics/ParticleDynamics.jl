@@ -33,7 +33,7 @@ The stable user surface is the parameter/topology layer plus
 
 ## Example scripts
 
-- `examples/2D_softrep_nl_check.jl`: soft-repulsive neighbor-list path
+- `examples/2D_soft_repulsive.jl`: soft-repulsive neighbor-list path
 - `examples/3D_stencil_two_sizes.jl`: mixed-size cutoff workflow
 - bonded polymer examples under `examples/` remain GPU-first today and should
   only be treated as future CPU-compatible candidates after a real CPU backend lands

@@ -7,7 +7,7 @@ Date: 2026-02-13
 - Scanned files: `37` Julia scripts under `examples/` (recursive).
 - Read failures: none.
 - Parse-fallback files (no simple scalar assignment matched by conservative regex):  
-  `examples/2D_allpairs_quicktest.jl`, `examples/2D_example_forces.jl`, `examples/2D_polymer_bonded.jl`, `examples/2D_softrep_nl_check.jl`, `examples/3D_example.jl`, `examples/3D_quicktest.jl`, `examples/restart_jobfile/alpha_50_phi_0.4_in.jl`.
+  `examples/2D_allpairs_quicktest.jl`, `examples/2D_example_forces.jl`, `examples/2D_polymer_bonded.jl`, `examples/2D_soft_repulsive.jl`, `examples/3D_quicktest.jl`, `examples/restart_jobfile/alpha_50_phi_0.4_in.jl`.
 
 ## 2) Extracted recommendations (raw medians/modes)
 - Brownian group: `dt=2.0e-7`, `gamma=615.985`, `temperature=1.0`, `tau=100.0`, `boxL=125.0`, integrator mode `:eulerheun`.
