@@ -98,3 +98,25 @@ end
         @test frame_last.step == 5
     end
 end
+
+@testset "Workflow GSDWriter virial writes require energy" begin
+    mktempdir() do tmp
+        system = _workflow_writer_system(N=8, T=Float64)
+        _, _, all_particles, groups = _workflow_writer_groups()
+        st = build_tiny2d(N=8, T=Float64, nonbonded=:wca, temperature=0.2, dt=1e-3)
+        copyto!(st.typeid, system.typeids)
+
+        path = joinpath(tmp, "workflow_virial.gsd")
+        writer = GSDWriter(path; every=1, write_start=false, write_virial=true, diameter=:automatic, group=all_particles)
+        sim = _workflow_writer_sim(system, groups, st; writers=[writer])
+        prepare!(sim)
+
+        @test ParticleDynamics.Workflow.active_writer_requires_energy(sim, st.step + 1)
+
+        run!(sim, Stage(:virial, steps=1; progress=false))
+        frame = ParticleDynamics.read_gsd_frame!(path)
+        @test frame.step == 1
+        @test haskey(frame.particle_properties, :virial)
+        @test size(frame.particle_properties[:virial], 1) == length(system)
+    end
+end
