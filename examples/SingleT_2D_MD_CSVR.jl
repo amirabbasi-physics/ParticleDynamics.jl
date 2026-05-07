@@ -12,7 +12,7 @@ function main(phi::Float64, temperature::Float64)
     rcut = sigma
 
     dt = 1e-5
-    nsteps = maybe_override_int(10_000_000, "SIM_MAX_STEPS")
+    nsteps = maybe_override_int(20_000, "SIM_MAX_STEPS")
     log_interval = maybe_override_interval(5_000, nsteps)
 
     warmup_steps = maybe_override_int(10_000, "SIM_WARMUP_STEPS"; lower=0)

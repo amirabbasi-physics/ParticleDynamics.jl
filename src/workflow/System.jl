@@ -408,6 +408,12 @@ function ParticleSystem_from_gsd(frame::GSDFrameData;
         :per_type_properties => frame.per_type_properties,
         :configuration => frame.configuration,
     )
+    if haskey(frame.particle_properties, :diameter)
+        auto_metadata[:diameters] = frame.particle_properties[:diameter]
+    end
+    if haskey(frame.per_type_properties, :diameter)
+        auto_metadata[:diameter] = frame.per_type_properties[:diameter]
+    end
     return _particle_system_from_positions(positions;
                                            box=box === nothing ? frame.box : box,
                                            types=types_data,

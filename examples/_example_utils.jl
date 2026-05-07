@@ -1,8 +1,19 @@
 using Random
 
+function _env_with_legacy_fallback(env_name::AbstractString)
+    value = get(ENV, env_name, "")
+    if !isempty(value)
+        return value
+    end
+    if startswith(env_name, "SIM_")
+        return get(ENV, "NEQSIM_" * env_name[5:end], "")
+    end
+    return value
+end
+
 function maybe_override_int(default::Real, env_name::AbstractString; lower::Int=1)
     default_int = max(lower, round(Int, default))
-    value = strip(get(ENV, env_name, ""))
+    value = strip(_env_with_legacy_fallback(env_name))
     isempty(value) && return default_int
     parsed = tryparse(Int, value)
     return parsed === nothing ? default_int : max(lower, parsed)
@@ -13,21 +24,21 @@ function maybe_override_interval(default::Real, nsteps::Integer; env_name::Abstr
 end
 
 function maybe_override_runtime()
-    value = strip(get(ENV, "SIM_MAX_SECONDS", ""))
+    value = strip(_env_with_legacy_fallback("SIM_MAX_SECONDS"))
     isempty(value) && return Inf
     parsed = tryparse(Float64, value)
     return parsed === nothing ? Inf : parsed
 end
 
 function maybe_override_float(default::Real, env_name::AbstractString; lower::Real=-Inf)
-    value = strip(get(ENV, env_name, ""))
+    value = strip(_env_with_legacy_fallback(env_name))
     isempty(value) && return max(lower, float(default))
     parsed = tryparse(Float64, value)
     return parsed === nothing ? max(lower, float(default)) : max(lower, parsed)
 end
 
 function maybe_override_bool(default::Bool, env_name::AbstractString)
-    value = lowercase(strip(get(ENV, env_name, "")))
+    value = lowercase(strip(_env_with_legacy_fallback(env_name)))
     isempty(value) && return default
     if value in ("1", "true", "yes", "y", "on")
         return true
@@ -123,6 +134,56 @@ function random_typeids(N::Integer; fractions::Dict{Symbol,<:Real}, seed::Intege
     end
     Random.seed!(seed)
     return host[randperm(N)]
+end
+
+function binary_typeids(N::Integer; cold_fraction::Real=0.5, seed::Integer=0x5A17,
+                        cold_id::Integer=1, hot_id::Integer=2)
+    N > 0 || return Int32[]
+    n_cold = round(Int, clamp(float(cold_fraction), 0.0, 1.0) * N)
+    host = fill(Int32(hot_id), N)
+    Random.seed!(seed)
+    if n_cold > 0
+        host[randperm(N)[1:n_cold]] .= Int32(cold_id)
+    end
+    return host
+end
+
+function binary_typeids_from_indices(N::Integer, cold_indices;
+                                     cold_id::Integer=1,
+                                     hot_id::Integer=2)
+    host = fill(Int32(hot_id), N)
+    host[collect(cold_indices)] .= Int32(cold_id)
+    return host
+end
+
+function cubic_box_for_volume_fraction(N::Integer, sigma::Real, ϕ::Real)
+    particle_volume = (4.0 / 3.0) * pi * (sigma / 2)^3
+    total_volume = (N * particle_volume) / ϕ
+    L = cbrt(total_volume)
+    return (L, L, L)
+end
+
+function diameters_from_typeids(typeids::AbstractVector{<:Integer},
+                                types::AbstractVector,
+                                mapping)
+    host = Vector{Float64}(undef, length(typeids))
+    for i in eachindex(typeids)
+        tid = Int(typeids[i])
+        key = tid <= length(types) ? Symbol(types[tid]) : tid
+        value = if mapping isa AbstractDict
+            if haskey(mapping, key)
+                mapping[key]
+            elseif haskey(mapping, tid)
+                mapping[tid]
+            else
+                throw(KeyError(key))
+            end
+        else
+            mapping[tid]
+        end
+        host[i] = Float64(value)
+    end
+    return host
 end
 
 function run_equilibration!(sim;
