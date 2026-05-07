@@ -30,3 +30,24 @@ struct Between <: AbstractSchedule
         new(first_i, last_i, every_i)
     end
 end
+
+schedule_matches(schedule::Every, step::Integer) = (Int(step) % schedule.interval) == 0
+schedule_matches(schedule::AtSteps, step::Integer) = Int(step) in schedule.steps
+function schedule_matches(schedule::Between, step::Integer)
+    host = Int(step)
+    schedule.first <= host <= schedule.last || return false
+    return ((host - schedule.first) % schedule.every) == 0
+end
+
+function normalize_schedule(; every=nothing, schedule=nothing, default=Every(1))
+    if every !== nothing && schedule !== nothing
+        throw(ArgumentError("Specify either `every` or `schedule`, not both."))
+    elseif schedule !== nothing
+        schedule isa AbstractSchedule || throw(ArgumentError("schedule must be an AbstractSchedule; got $(typeof(schedule))."))
+        return schedule
+    elseif every !== nothing
+        return Every(Int(every))
+    else
+        return default
+    end
+end
