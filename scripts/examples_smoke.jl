@@ -69,7 +69,7 @@ function example_env(path::String)
 end
 
 function example_paths()
-    paths = filter(path -> endswith(path, ".jl") && basename(path) != "_example_utils.jl",
+    paths = filter(path -> endswith(path, ".jl") && !startswith(basename(path), "_"),
                    readdir(EXAMPLES_DIR; join=true))
     sort!(paths)
 

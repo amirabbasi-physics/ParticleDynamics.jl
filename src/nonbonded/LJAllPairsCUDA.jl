@@ -362,7 +362,7 @@ structure-of-arrays buffers. Dispatches on the neighbor matrix:
 total potential energy without double counting.
 
 # Examples
-The 3D LJ example (`examples/3D_example.jl`) uses the same parameter
+The compact 3D example (`examples/3D_quicktest.jl`) uses the same parameter
 relationships; the snippet below scales `N` down to 4096 for a quick check:
 
 ```julia
@@ -534,4 +534,3 @@ function lj_forces_soa_noE_excl!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray
     k(rx, ry, rz, fx, fy, fz, bonds.index, bonds.flat, bonds.counts, Lx, Ly, Lz, halfLx, halfLy, halfLz, params.ϵ, params.σ, cutoff2; threads, blocks)
     return nothing
 end
-
