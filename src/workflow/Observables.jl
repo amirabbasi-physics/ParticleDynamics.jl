@@ -58,7 +58,7 @@ observable_default_fields(::BathExchangeObservable) = (
     :extended_hamiltonian,
 )
 observable_default_fields(::VirialObservable) = (:virial, :virial_accumulated)
-observable_default_fields(::CollisionObservable) = (:counts, :pair_counts)
+observable_default_fields(::CollisionObservable) = (:counts, :rate, :pair_counts, :pair_rates)
 observable_default_fields(::MSDObservable) = (:msd, :elapsed_time, :elapsed_steps)
 observable_default_fields(::VACFObservable) = (:vacf, :elapsed_time, :elapsed_steps)
 
@@ -105,6 +105,20 @@ function _ensure_observable_registry!(sim)
 end
 
 _workflow_time(sim) = get(sim.metadata, :workflow_time, sim.state === nothing ? 0.0 : Float64(sim.state.step) * _current_dt(sim))
+
+function _set_interval_reference!(sim)
+    sim.metadata[:workflow_interval_reference_step] = sim.state === nothing ? 0 : sim.state.step
+    sim.metadata[:workflow_interval_reference_time] = _workflow_time(sim)
+    return sim
+end
+
+function _interval_elapsed(sim)
+    dt = _current_dt(sim)
+    current_time = _workflow_time(sim)
+    reference_time = get(sim.metadata, :workflow_interval_reference_time, current_time - dt)
+    elapsed = current_time - reference_time
+    return elapsed > 0 ? elapsed : dt
+end
 
 function _current_dt(sim)
     if sim.integrator !== nothing && hasproperty(sim.integrator, :dt)
@@ -175,6 +189,10 @@ function _ensure_observable_context!(sim, obs::Observable)
             if !st.coll_enabled
                 Collisions.enable_collision_counting!(st; ntypes=length(sim.system.types))
             end
+            compiled = get(sim.metadata, :compiled_forces, nothing)
+            if compiled isa CompiledForces && haskey(compiled.metadata, :cutoff_pair)
+                Collisions.set_collision_pair_cutoffs!(st, compiled.metadata[:cutoff_pair])
+            end
         end
     end
     return ctx
@@ -184,6 +202,7 @@ function prepare_observables!(sim, observables=sim.observables)
     for obs in observables
         _ensure_observable_context!(sim, obs)
     end
+    _set_interval_reference!(sim)
     return sim
 end
 
@@ -224,6 +243,7 @@ function _reset_interval_buffers!(sim)
     if st.coll_enabled
         Collisions.collisions_reset_counts!(st)
     end
+    _set_interval_reference!(sim)
     return sim
 end
 
@@ -270,8 +290,7 @@ function _bath_exchange_data(sim, ::BathExchangeObservable)
     spec = sim.lowlevel_integrator
     spec === nothing && throw(ArgumentError("BathExchangeObservable requires a prepared low-level integrator."))
     obs = SimulationCore.collect_step_observables(st, spec)
-    dt = _current_dt(sim)
-    elapsed = max(_workflow_time(sim), dt)
+    elapsed = _interval_elapsed(sim)
     heat = hasproperty(obs, :bath_heat_total) ? obs.bath_heat_total : zero(eltype(st.rx))
     entropy = hasproperty(obs, :bath_entropy_total) ? obs.bath_entropy_total : zero(eltype(st.rx))
     return (
@@ -310,12 +329,18 @@ function _collision_data(sim, ::CollisionObservable)
     counts = Collisions.collisions_read_counts!(st)
     labels = _collision_pair_labels(sim)
     named = Dict{Symbol,Int64}()
+    rate_named = Dict{Symbol,Float64}()
+    elapsed = _interval_elapsed(sim)
     for (idx, label) in pairs(labels)
-        named[label] = idx <= length(counts) ? counts[idx] : Int64(0)
+        count = idx <= length(counts) ? counts[idx] : Int64(0)
+        named[label] = count
+        rate_named[label] = count / elapsed
     end
     return (
         counts = Base.sum(counts),
+        rate = Base.sum(counts) / elapsed,
         pair_counts = named,
+        pair_rates = rate_named,
     )
 end
 

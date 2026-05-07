@@ -232,6 +232,8 @@ function reset_step!(sim, step::Integer=0)
     if sim.state !== nothing
         sim.state.step = Int(step)
         sim.metadata[:workflow_time] = Float64(step) * _current_dt(sim)
+        sim.metadata[:workflow_interval_reference_step] = sim.state.step
+        sim.metadata[:workflow_interval_reference_time] = sim.metadata[:workflow_time]
     end
     return sim
 end

@@ -2,28 +2,6 @@ using ParticleDynamics
 
 include(joinpath(@__DIR__, "_example_utils.jl"))
 
-function simple_cubic_positions(N::Integer, box::NTuple{3,<:Real})
-    n_side = ceil(Int, cbrt(Float64(N)))
-    spacing_x = box[1] / n_side
-    spacing_y = box[2] / n_side
-    spacing_z = box[3] / n_side
-    n_side_sq = n_side^2
-    return [
-        begin
-            linear = i - 1
-            ix = mod(linear, n_side)
-            iy = mod(div(linear, n_side), n_side)
-            iz = div(linear, n_side_sq)
-            (
-                (ix + 0.5) * spacing_x - box[1] / 2,
-                (iy + 0.5) * spacing_y - box[2] / 2,
-                (iz + 0.5) * spacing_z - box[3] / 2,
-            )
-        end
-        for i in 1:N
-    ]
-end
-
 N = maybe_override_int(40_000, "SIM_NPARTICLES")
 box = (50.0, 50.0, 50.0)
 r_cut = 2^(1 / 6)
@@ -32,8 +10,8 @@ epsilon = 10.0
 gamma = 10.0
 temperature = 1.0
 dt = 2.5e-4
-nsteps = maybe_override_int(10_000_000, "SIM_MAX_STEPS")
-log_interval = maybe_override_interval(1_000_000, nsteps)
+nsteps = maybe_override_int(10_000, "SIM_MAX_STEPS")
+log_interval = maybe_override_interval(1_000, nsteps)
 
 system = ParticleSystem(
     simple_cubic_positions(N, box);
