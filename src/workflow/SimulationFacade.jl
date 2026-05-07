@@ -16,8 +16,8 @@ end
 function Simulation(system::ParticleSystem;
                     groups::Groups=Groups(),
                     integrator=nothing,
-                    observables::AbstractVector{<:Observable}=Observable[],
-                    writers::AbstractVector{<:Writer}=Writer[],
+                    observables=Observable[],
+                    writers=Writer[],
                     device=nothing,
                     precision=Float64,
                     seed=nothing,
@@ -25,16 +25,18 @@ function Simulation(system::ParticleSystem;
                     lowlevel_integrator=nothing,
                     prepared::Bool=false,
                     metadata::Dict{Symbol,Any}=Dict{Symbol,Any}())
-    return Simulation(system=system,
-                      groups=groups,
-                      integrator=integrator,
-                      observables=Observable[observables...],
-                      writers=Writer[writers...],
-                      device=device,
-                      precision=precision,
-                      seed=seed,
-                      state=state,
-                      lowlevel_integrator=lowlevel_integrator,
-                      prepared=prepared,
-                      metadata=metadata)
+    observables_norm = observables isa Observable ? Observable[observables] : Observable[collect(observables)...]
+    writers_norm = writers isa Writer ? Writer[writers] : Writer[collect(writers)...]
+    return Simulation(system,
+                      groups,
+                      integrator,
+                      observables_norm,
+                      writers_norm,
+                      device,
+                      precision,
+                      seed,
+                      state,
+                      lowlevel_integrator,
+                      prepared,
+                      metadata)
 end

@@ -69,7 +69,7 @@ end
 _observable_field_requires_energy(::ThermodynamicObservable, ::Symbol) = true
 _observable_field_requires_energy(::VirialObservable, ::Symbol) = true
 _observable_field_requires_energy(::BathExchangeObservable, field::Symbol) =
-    field in (:extended_hamiltonian, :temperature_error)
+    field in (:extended_hamiltonian, :temperature_error, :thermostat_kinetic, :thermostat_potential)
 _observable_field_requires_energy(::CollisionObservable, ::Symbol) = false
 _observable_field_requires_energy(::MSDObservable, ::Symbol) = false
 _observable_field_requires_energy(::VACFObservable, ::Symbol) = false
@@ -81,7 +81,8 @@ end
 _observable_field_is_interval(::ThermodynamicObservable, field::Symbol) =
     field in (:kinetic_energy_accumulated, :potential_energy_accumulated, :virial_accumulated)
 _observable_field_is_interval(::BathExchangeObservable, field::Symbol) =
-    field in (:heat, :entropy, :entropy_production_rate, :temperature_error, :extended_hamiltonian)
+    field in (:heat, :entropy, :entropy_production_rate, :temperature_error, :extended_hamiltonian,
+              :thermostat_kinetic, :thermostat_potential)
 _observable_field_is_interval(::VirialObservable, field::Symbol) =
     field in (:virial_accumulated,)
 _observable_field_is_interval(::CollisionObservable, ::Symbol) = true
@@ -279,6 +280,8 @@ function _bath_exchange_data(sim, ::BathExchangeObservable)
         entropy_production_rate = elapsed > 0 ? entropy / elapsed : zero(eltype(st.rx)),
         temperature_error = hasproperty(obs, :thermostat_temperature_error) ? obs.thermostat_temperature_error : zero(eltype(st.rx)),
         extended_hamiltonian = hasproperty(obs, :extended_hamiltonian) ? obs.extended_hamiltonian : obs.Etot,
+        thermostat_kinetic = hasproperty(obs, :thermostat_kinetic) ? obs.thermostat_kinetic : zero(eltype(st.rx)),
+        thermostat_potential = hasproperty(obs, :thermostat_potential) ? obs.thermostat_potential : zero(eltype(st.rx)),
     )
 end
 
