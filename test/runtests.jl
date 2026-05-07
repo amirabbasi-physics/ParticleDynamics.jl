@@ -24,6 +24,7 @@ using .ParamsFromExamples
         include("test_workflow_forces.jl")
         include("test_workflow_integrators.jl")
         include("test_workflow_observables.jl")
+        include("test_workflow_writers.jl")
         include("test_build.jl")
         include("test_particle_groups.jl")
         include("test_thermostats.jl")

@@ -29,6 +29,7 @@ function prepare!(sim::Simulation)
         end
     end
     prepare_observables!(sim)
+    prepare_writers!(sim)
     sim.prepared = true
     return sim
 end
