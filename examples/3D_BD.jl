@@ -1,83 +1,85 @@
 using ParticleDynamics
-using ParticleDynamics: Filters, eulermaruyama
-using CUDA
 
 include(joinpath(@__DIR__, "_example_utils.jl"))
 
-function initialize_simple_cubic_lattice!(st, box::NTuple{3,Float32})
-    N = length(st.rx)
+function simple_cubic_positions(N::Integer, box::NTuple{3,<:Real})
     n_side = ceil(Int, cbrt(Float64(N)))
     spacing_x = box[1] / n_side
     spacing_y = box[2] / n_side
     spacing_z = box[3] / n_side
-
-    rx_host = Vector{Float32}(undef, N)
-    ry_host = Vector{Float32}(undef, N)
-    rz_host = Vector{Float32}(undef, N)
-
     n_side_sq = n_side^2
-    for i in 1:N
-        linear = i - 1
-        ix = linear % n_side
-        iy = (linear ÷ n_side) % n_side
-        iz = linear ÷ n_side_sq
-
-        rx_host[i] = (ix + 0.5f0) * spacing_x - box[1] / 2
-        ry_host[i] = (iy + 0.5f0) * spacing_y - box[2] / 2
-        rz_host[i] = (iz + 0.5f0) * spacing_z - box[3] / 2
-    end
-
-    copyto!(st.rx, rx_host)
-    copyto!(st.ry, ry_host)
-    copyto!(st.rz, rz_host)
-    return st
+    return [
+        begin
+            linear = i - 1
+            ix = mod(linear, n_side)
+            iy = mod(div(linear, n_side), n_side)
+            iz = div(linear, n_side_sq)
+            (
+                (ix + 0.5) * spacing_x - box[1] / 2,
+                (iy + 0.5) * spacing_y - box[2] / 2,
+                (iz + 0.5) * spacing_z - box[3] / 2,
+            )
+        end
+        for i in 1:N
+    ]
 end
 
-# ---- Params ----
 N = maybe_override_int(40_000, "SIM_NPARTICLES")
-box = (50.0f0, 50.0f0, 50.0f0)
+box = (50.0, 50.0, 50.0)
+r_cut = 2^(1 / 6)
+sigma = 1.0
+epsilon = 10.0
+gamma = 10.0
+temperature = 1.0
+dt = 2.5e-4
+nsteps = maybe_override_int(10_000_000, "SIM_MAX_STEPS")
+log_interval = maybe_override_interval(1_000_000, nsteps)
 
-# LJ parameters
-r_cut = Float32(2^(1/6))
-sigma = 1f0
-epsilon = 10f0
+system = ParticleSystem(
+    simple_cubic_positions(N, box);
+    box=PeriodicBox(box),
+    types=[:C],
+    typeids=fill(Int32(1), N),
+    masses=Dict(:C => 1.0),
+)
 
-cap = Int32(100)
-gamma = 10f0
-temperature = 1f0
-dt = 0.00025f0
+all_particles = Group(:all, AllSelection())
+groups = Groups(all_particles)
+thermo = ThermodynamicObservable(all_particles; name=:all)
+bath = BathExchangeObservable(name=:bath)
 
-# ---- Build ----
-st = build_simulation(N=N, box=box, cutoff=r_cut, skin=0.4f0, cap=cap,
-                                neigh_interval=10,
-                                epsilon=epsilon, sigma=sigma,
-                                gamma=gamma, temperature=temperature, dt=dt)
+sim = Simulation(
+    system;
+    groups=groups,
+    integrator=Integrator(
+        dt=dt,
+        scheme=EulerMaruyama(),
+        forces=[WCA(epsilon=epsilon, sigma=sigma, pairs=:neighborlist,
+                    neighborlist=CellList(buffer=0.4, capacity=100, rebuild_interval=10))],
+        methods=[Brownian(all_particles; gamma=gamma, kT=temperature)],
+    ),
+    observables=[thermo, bath],
+    writers=[
+        TableWriter(
+            joinpath(@__DIR__, "obs3d_bd.csv");
+            every=log_interval,
+            observables=[
+                thermo => [:kinetic_energy, :potential_energy, :total_energy],
+                bath => [:heat],
+            ],
+            mode=:replace,
+        ),
+        GSDWriter(
+            joinpath(@__DIR__, "traj3d_bd.gsd");
+            every=log_interval,
+            group=all_particles,
+            write_start=true,
+            mode=:replace,
+            diameter=sigma,
+        ),
+    ],
+    precision=Float32,
+)
 
-# ---- Initialize positions ----
-initialize_simple_cubic_lattice!(st, box)
-
-# ---- Brownian parameters ----
-eh = eulermaruyama(st; gamma=gamma, temperature=temperature, dt=dt)
-
-# ---- GSD writer ----
-gsd_path = joinpath(@__DIR__, "traj3d_bd.gsd")
-gsdh = gsd_open(gsd_path)
-types = ["C"]
-write_gsd_frame!(gsdh, st; diameter=sigma, types_names=types, step=st.step)
-
-# ---- Run ----
-N_steps = maybe_override_int(10_000_000, "SIM_MAX_STEPS")
-N_log = maybe_override_interval(1_000_000, N_steps)
-
-@time for s in 1:N_steps
-    compute_E = (s % N_log == 0)
-    step!(st, eh, dt; compute_energy=compute_E)
-    if compute_E
-        write_observables_csv!(joinpath(@__DIR__, "obs3d_bd.csv"), s; Epot=st.Epot, Ekin=st.Ekin, dq=st.dq)
-        write_gsd_frame!(gsdh, st; diameter=sigma, types_names=types, step=st.step)
-        @info "wrote frame (bd)" step=s Epot_sum=sum(st.Epot) Ekin_sum=sum(st.Ekin)
-    end
-end
-
-gsd_close(gsdh)
-println("Done. GSD (bd): $gsd_path")
+run!(sim, nsteps)
+println("Done. GSD (bd): ", joinpath(@__DIR__, "traj3d_bd.gsd"))

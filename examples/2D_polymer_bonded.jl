@@ -1,83 +1,67 @@
 using ParticleDynamics
-using CUDA
 
 include(joinpath(@__DIR__, "_example_utils.jl"))
 
-# Simple 2D polymer chain with bonded interactions (FENE or harmonic)
+N = maybe_override_int(200, "SIM_NPARTICLES")
+box = (200.0, 50.0)
+r_cut = 2^(1 / 6)
+sigma = 1.0
+epsilon = 1.0
+gamma = 1.0
+temperature = 1.0
+dt = 1.0e-5
+nsteps = maybe_override_int(1_000_000, "SIM_MAX_STEPS")
+log_interval = maybe_override_interval(10_000, nsteps)
 
-function make_linear_chain_bonds(N::Int)
-    bonds = Vector{Tuple{Int32,Int32}}()
-    for i in 1:(N-1)
-        push!(bonds, (Int32(i), Int32(i+1)))
-    end
-    return bonds
-end
+bonds = [(Int32(i), Int32(i + 1)) for i in 1:(N - 1)]
+use_fene = maybe_override_bool(true, "SIM_USE_FENE")
 
-function init_chain_line!(st, box::NTuple{2,Float32}; spacing::Float32=0.97f0)
-    N = length(st.rx)
-    x0 = -0.5f0*box[1] + 1.0f0
-    y0 = 0.0f0
-    rx_h = Vector{Float32}(undef, N)
-    ry_h = Vector{Float32}(undef, N)
-    for i in 1:N
-        rx_h[i] = x0 + (i-1)*spacing
-        ry_h[i] = y0
-    end
-    copyto!(st.rx, rx_h)
-    copyto!(st.ry, ry_h)
-    return st
-end
+system = ParticleSystem(
+    linear_chain_positions(N; spacing=0.97, origin=(-0.5 * box[1] + 1.0, 0.0));
+    box=PeriodicBox(box),
+    types=[:C],
+    typeids=fill(Int32(1), N),
+    masses=Dict(:C => 1.0),
+    topology=Topology(bonds=bonds),
+)
 
-# ---- Params ----
-N   = maybe_override_int(200, "SIM_NPARTICLES")
-box = (200.0f0, 50.0f0)
+all_particles, groups = single_particle_groups()
+thermo = ThermodynamicObservable(all_particles; name=:all)
 
-# LJ parameters (purely repulsive WCA)
-r_cut = Float32(2^(1/6))
-sigma = 1f0
-epsilon = 1f0
+forces = Force[
+    WCA(epsilon=epsilon, sigma=sigma, pairs=:neighborlist,
+        neighborlist=CellList(buffer=r_cut / 2, capacity=96, rebuild_interval=100)),
+    use_fene ? FENEBondForce(k=300.0, R0=1.5) : HarmonicBondForce(k=300.0, r0=1.0),
+]
 
-cap = Int32(96)
-gamma = 1f0
-temperature = 1f0
-dt = 0.00001f0
-N_steps = maybe_override_int(1_000_000, "SIM_MAX_STEPS")
-N_log = maybe_override_interval(10_000, N_steps)
+sim = Simulation(
+    system;
+    groups=groups,
+    integrator=Integrator(
+        dt=dt,
+        scheme=VelocityVerlet(),
+        forces=forces,
+        methods=[Langevin(all_particles; gamma=gamma, kT=temperature)],
+    ),
+    observables=[thermo],
+    writers=[
+        TableWriter(
+            joinpath(@__DIR__, "obs2d_polymer.csv");
+            every=log_interval,
+            observables=[thermo => [:kinetic_energy, :potential_energy, :total_energy]],
+            mode=:replace,
+        ),
+        GSDWriter(
+            joinpath(@__DIR__, "polymer2d.gsd");
+            every=log_interval,
+            group=all_particles,
+            write_start=true,
+            mode=:replace,
+            diameter=sigma,
+        ),
+    ],
+    precision=Float32,
+)
 
-# Bonds: linear chain
-bonds = make_linear_chain_bonds(N)
-
-# Choose one type of bonded interaction
-use_fene = true
-bonding = use_fene ? fene_bond(k = 300, r0 = 1.5) : harmonic_bond(k = 300, r0 = 1.0)
-
-# ---- Build ----
-st = build_simulation(N=N, box=box, cutoff=r_cut, skin= r_cut/2, cap=cap,
-                                 neigh_interval=100,
-                                 epsilon=epsilon, sigma=sigma,
-                                 gamma=gamma, temperature=temperature, dt=dt,
-                                 bonds=bonds, bonding=bonding,
-                                 nonbonded=:wca, precision=:f32)
-
-# ---- Initialize positions ----
-init_chain_line!(st, box)
-vv = velocityverlet(st; gamma=gamma, temperature=temperature, dt=dt)
-
-gsd_path = joinpath(@__DIR__, "polymer2d.gsd")
-gsdh = gsd_open(gsd_path)
-types = ["C"]
-write_gsd_frame!(gsdh, st; diameter=sigma, types_names=types, step=st.step)
-
-@time for s in 1:N_steps
-    if s % N_log == 0
-        step!(st, vv, dt)
-        write_observables_csv!(joinpath(@__DIR__, "obs2d_polymer.csv"), s; Epot=st.Epot, Ekin=st.Ekin, dq=st.dq)
-        write_gsd_frame!(gsdh, st; diameter=sigma, types_names=types, step=st.step)
-        @info "polymer step" step=s Epot_sum=sum(st.Epot) Ekin_sum=sum(st.Ekin)
-    else
-        step!(st, vv, dt, compute_energy=false)
-    end
-end
-
-gsd_close(gsdh)
-println("Done. GSD: $gsd_path")
+run!(sim, nsteps)
+println("Done. GSD: ", joinpath(@__DIR__, "polymer2d.gsd"))

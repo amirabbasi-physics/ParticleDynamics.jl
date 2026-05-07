@@ -1,79 +1,67 @@
 using ParticleDynamics
-using ParticleDynamics: step!, eulermaruyama
 
 include(joinpath(@__DIR__, "_example_utils.jl"))
 
-# Active Ornstein–Uhlenbeck particles in 2D (overdamped limit, Fodor et al. PRL 117, 038103)
+# Active Ornstein-Uhlenbeck particles in 2D (overdamped limit, Fodor et al. PRL 117, 038103)
 # Parameters follow the paper: N=10000, box 250×250, D=100, τ=20, μ=1 (γ=1).
-# In the τ → 0 limit this reduces to overdamped Brownian dynamics at temperature T = D = 100.
 
-N = maybe_override_int(10_000, "SIM_NPARTICLES")
-L = 125.0
-dt = 2e-4             # small enough to resolve τ and steep forces
-n_steps = maybe_override_int(1e5, "SIM_MAX_STEPS")
-write_interval = maybe_override_interval(1e4, n_steps)
-
-function initialize_square_lattice!(st, box::NTuple{2,Real})
-    N = length(st.rx)
+function square_lattice_positions(N::Integer, box::NTuple{2,<:Real})
     n_side = ceil(Int, sqrt(N))
     spacing_x = box[1] / n_side
     spacing_y = box[2] / n_side
-    rx_host = Vector{Float32}(undef, N)
-    ry_host = Vector{Float32}(undef, N)
-    for i in 1:N
-        linear = i - 1
-        ix = linear % n_side
-        iy = linear ÷ n_side
-        rx_host[i] = (ix + 0.5f0) * spacing_x - box[1] / 2
-        ry_host[i] = (iy + 0.5f0) * spacing_y - box[2] / 2
-    end
-    copyto!(st.rx, rx_host); copyto!(st.ry, ry_host)
-    return st
+    return [
+        (
+            (mod(i - 1, n_side) + 0.5) * spacing_x - box[1] / 2,
+            (div(i - 1, n_side) + 0.5) * spacing_y - box[2] / 2,
+        )
+        for i in 1:N
+    ]
 end
 
-# Fodor et al. parameters (PRL 117, 038103)
-gamma = 1.0f0                # mobility μ = 1/γ = 1
-temperature = 0.0      # D = 100 => T = D when γ = 1
-corr_time = 100.0           # persistence time τ
+N = maybe_override_int(10_000, "SIM_NPARTICLES")
+L = 125.0
+dt = 2e-4
+nsteps = maybe_override_int(100_000, "SIM_MAX_STEPS")
+write_interval = maybe_override_interval(10_000, nsteps)
+
+gamma = 1.0
+temperature = 0.0
+corr_time = 100.0
 active_impulse = 10.0
-# Use the steep short-range repulsion from the paper (A = 100, a = 2). Approximate with soft_repulsive.
 epsilon = 1.0e6
 sigma = 1.0
 
-st = build_simulation(
-    N = N,
-    box = (L, L),
-    cutoff = sigma,
-    skin = 0.5f0,
-    cap = Int32(256),
-    neigh_interval = 20,
-    epsilon = epsilon,
-    sigma = sigma,
-    gamma = gamma,
-    temperature = temperature,
-    dt = dt,
-    nonbonded = :soft_repulsive,
-    precision = :f64,
+system = ParticleSystem(
+    square_lattice_positions(N, (L, L));
+    box=PeriodicBox((L, L)),
+    types=[:C],
+    typeids=fill(Int32(1), N),
+    masses=Dict(:C => 1.0),
 )
 
-initialize_square_lattice!(st, (L, L))
+all_particles = Group(:all, AllSelection())
+sim = Simulation(
+    system;
+    groups=Groups(all_particles),
+    integrator=Integrator(
+        dt=dt,
+        scheme=EulerMaruyama(),
+        forces=[SoftRepulsive(epsilon=epsilon, sigma=sigma, cutoff=sigma, pairs=:neighborlist,
+                              neighborlist=CellList(buffer=0.5, capacity=256, rebuild_interval=20))],
+        methods=[ActiveOrnsteinUhlenbeck(all_particles; gamma=gamma, kT=temperature, tau=corr_time, noise_scale=active_impulse)],
+    ),
+    writers=[
+        GSDWriter(
+            joinpath(@__DIR__, "traj2d_active_OU_bd.gsd");
+            every=write_interval,
+            group=all_particles,
+            write_start=true,
+            mode=:replace,
+            diameter=1.0,
+        ),
+    ],
+    precision=Float64,
+)
 
-spec = eulermaruyama(st; gamma=gamma, temperature=temperature,
-                     noise_corr_time=corr_time, dt=dt)
-Filters.set_noise_scale!(spec, active_impulse)
-
-gsd_path = joinpath(@__DIR__, "traj2d_active_OU_bd.gsd")
-gsdh = ParticleDynamics.Writers.gsd_open(gsd_path)
-types = ["C"]
-ParticleDynamics.Writers.write_gsd_frame!(gsdh, st; diameter=1f0, types_names=types, step=st.step)
-
-for s in 1:n_steps
-    step!(st, spec, dt; compute_energy=false)
-    if s % write_interval == 0
-        ParticleDynamics.Writers.write_gsd_frame!(gsdh, st; diameter=1f0, types_names=types, step=st.step)
-        @info "wrote BD frame" step=s
-    end
-end
-
-ParticleDynamics.Writers.gsd_close(gsdh)
-println("Finished $(n_steps) BD steps with correlated OU noise (τ=$(corr_time)). GSD: $(gsd_path)")
+run!(sim, nsteps)
+println("Finished $(nsteps) BD steps with correlated OU noise (τ=$(corr_time)). GSD: ", joinpath(@__DIR__, "traj2d_active_OU_bd.gsd"))
