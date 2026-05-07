@@ -9,3 +9,5 @@
     progress::Bool = true
     max_seconds::Real = Inf
 end
+
+Stage(name::Symbol; kwargs...) = Stage(; name=name, kwargs...)
