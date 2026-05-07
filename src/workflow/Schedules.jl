@@ -1,5 +1,10 @@
 abstract type AbstractSchedule end
 
+"""
+    Every(interval)
+
+Trigger a workflow writer or observable action every `interval` steps.
+"""
 struct Every <: AbstractSchedule
     interval::Int
     function Every(interval::Integer)
@@ -8,6 +13,11 @@ struct Every <: AbstractSchedule
     end
 end
 
+"""
+    AtSteps(steps)
+
+Trigger a workflow action at an explicit set of step indices.
+"""
 struct AtSteps <: AbstractSchedule
     steps::Vector{Int}
     function AtSteps(steps::AbstractVector{<:Integer})
@@ -17,6 +27,11 @@ struct AtSteps <: AbstractSchedule
     end
 end
 
+"""
+    Between(first, last; every)
+
+Trigger a workflow action on a regular interval between two step bounds.
+"""
 struct Between <: AbstractSchedule
     first::Int
     last::Int

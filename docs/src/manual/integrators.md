@@ -48,7 +48,7 @@ end
 
 ## Example scripts
 
-- `examples/SingleT_2D_LD_VV.jl`
+- `examples/2D_example.jl`
 - `examples/TwoT_2D_LD_BAOAB.jl`
 - `examples/TwoT_2D_LD_GSM.jl`
 - `examples/TwoT_2D_BD_EH.jl`

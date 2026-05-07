@@ -1,41 +1,46 @@
 """
 GPU-accelerated non-equilibrium particle simulations with Langevin/Brownian/Molecular dynamics.
 
-`ParticleDynamics` orchestrates SoA GPU buffers, neighbor lists, nonbonded and
-bonded force kernels, integrators, collision counters, and writers so that
-research scripts can copy validated parameter sets from `examples/` and run
-production simulations without touching CUDA code. The top-level module keeps a
-curated public API (`SimulationState`, `build_simulation`, integrator builders,
-filters, writers, and setup helpers), while lower-level execution helpers stay
-under qualified submodules such as `ParticleDynamics.SimulationCore`.
+`ParticleDynamics` provides a high-level workflow API centered on
+[`Simulation`](@ref), [`ParticleSystem`](@ref), workflow forces, methods,
+observables, writers, and staged `run!` execution on CUDA-backed state. The
+older low-level API (`build_simulation`, `step!`, explicit integrator specs,
+and `SimulationCore`) remains available for expert use.
 
 # Example
-The snippet below mirrors `examples/2D_allpairs_quicktest.jl`, which checks the
-all-pairs WCA path with `N = 256` particles and a WCA cutoff of `2^(1/6)σ`.
+The snippet below mirrors the recommended workflow style used by the modern
+examples.
 
 ```julia
 using ParticleDynamics
 
 N = 256
-box = (80.0f0, 80.0f0)
-dt = 2.0f-4
-rcut = Float32(2^(1/6))
+sigma = 1.0
+cfg = hex_random_2d(N, sigma, 0.25; T=Float64)
 
-st = build_simulation(N=N, box=box, dt=dt,
-                      cutoff=rcut, skin=0.4f0, cap=Int32(64),
-                      neigh_interval=10, use_neighborlist=false,
-                      epsilon=10f0, sigma=1f0,
-                      gamma=50f0, temperature=1f0,
-                      nonbonded=:wca, precision=:f32)
+system = ParticleSystem(cfg; types=[:A], typeids=fill(Int32(1), N), masses=Dict(:A => 1.0))
+all_particles = Group(:all, AllSelection())
+thermo = ThermodynamicObservable(all_particles; name=:all)
 
-vv = velocityverlet(st; gamma=50f0, temperature=1f0, dt=dt)
-for _ in 1:50
-    step!(st, vv, dt; compute_energy=true)
-end
+sim = Simulation(
+    system;
+    groups=Groups(all_particles),
+    integrator=Integrator(
+        dt=2.0e-4,
+        scheme=VelocityVerlet(),
+        forces=[WCA(epsilon=10.0, sigma=sigma, pairs=:all)],
+        methods=[Langevin(all_particles; gamma=50.0, kT=1.0)],
+    ),
+    observables=[thermo],
+    writers=[TableWriter("obs.csv"; every=50, observables=[thermo => [:temperature, :potential_energy]])],
+)
+
+run!(sim, Stage(:production, steps=200; progress=false))
 ```
 
-See the README and the scripts under `examples/` for richer setups (two-temperature
-filters, bonded polymers, Brownian dynamics, collision histograms, etc.).
+Use the README and `examples/` for richer setups such as two-temperature baths,
+bonded polymers, Brownian dynamics, active noise, collision histograms, and
+restart workflows.
 """
 module ParticleDynamics
 

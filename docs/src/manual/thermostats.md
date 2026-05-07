@@ -30,7 +30,8 @@ Those constructors remain the recommended entrypoints for stepping.
 ## Example scripts
 
 - `examples/TwoT_SR2D_MD_CSVR_slab.jl`
-- `examples/SingleT_2D_MD_NHC.jl` if present in your local tree
+- `examples/SingleT_2D_MD_CSVR.jl`
+- `examples/TwoT_LJ2D_MD_NHC.jl`
 
 The thermostat examples remain GPU-first. Bath-control logic is a likely later
 candidate for CPU-compatible validation only after kernel portability work.

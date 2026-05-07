@@ -2,8 +2,18 @@ using Printf: @sprintf
 using ..SimulationCore
 using ..Writers: gsd_open, gsd_close, write_gsd_frame!, read_gsd_frame!
 
+"""
+    Writer
+
+Abstract workflow output writer.
+"""
 abstract type Writer end
 
+"""
+    TableWriter(filename; every=nothing, schedule=nothing, observables=[], mode=:replace, delimiter=",", format=:scientific, append=false)
+
+Scheduled text-table writer for workflow observables.
+"""
 @kwdef struct TableWriter <: Writer
     filename::String
     every = nothing
@@ -33,6 +43,11 @@ function TableWriter(filename::AbstractString;
                        append=append)
 end
 
+"""
+    GSDWriter(filename; every=nothing, schedule=nothing, group=Group(:all, AllSelection()), write_start=true, mode=:replace, append=false, types=:automatic, diameter=:automatic, write_unwrapped=false, sync_on_write=true, write_forces=false, write_virial=false, observables=[])
+
+Scheduled GSD trajectory writer for workflow simulations.
+"""
 @kwdef struct GSDWriter <: Writer
     filename::String
     every = nothing

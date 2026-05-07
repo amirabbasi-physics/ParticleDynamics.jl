@@ -49,4 +49,4 @@ st = build_simulation(
 
 - `examples/2D_allpairs_quicktest.jl`: smallest force-path smoke example, and a likely future CPU-compatible smoke candidate once a CPU backend exists.
 - `examples/3D_quicktest.jl`: small 3D stepping/output example, also a likely future CPU-compatible smoke candidate.
-- `examples/SingleT_2D_LD_VV.jl`: larger production-style Langevin setup.
+- `examples/TwoT_2D_LD_VV.jl`: larger production-style Langevin setup on the workflow API.

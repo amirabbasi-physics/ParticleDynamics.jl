@@ -3,8 +3,19 @@ using ..Definitions
 using ..SimulationCore
 using ..NeighborLists
 
+"""
+    Force
+
+Abstract workflow force descriptor. Concrete force objects describe physical
+interactions and compile onto the existing low-level engine.
+"""
 abstract type Force end
 
+"""
+    ForceField(; forces=Force[])
+
+Future-compatible container for a set of workflow force objects.
+"""
 @kwdef mutable struct ForceField
     forces::Vector{Force} = Force[]
 end
@@ -18,12 +29,22 @@ function add!(ff::ForceField, force::Force)
     return ff
 end
 
+"""
+    CellList(; buffer=0.4, capacity=96, rebuild_interval=20)
+
+Neighbor-list policy for workflow nonbonded forces.
+"""
 @kwdef struct CellList
     buffer::Float64 = 0.4
     capacity::Int = 96
     rebuild_interval::Int = 20
 end
 
+"""
+    PairTable(; sigma, epsilon, cutoff, type_names)
+
+Per-type parameter table for workflow Lennard-Jones and WCA forces.
+"""
 struct PairTable
     sigma
     epsilon
@@ -37,6 +58,11 @@ function PairTable(; sigma, epsilon, cutoff, type_names)
     return PairTable(sigma, epsilon, cutoff, names)
 end
 
+"""
+    LennardJones(; epsilon, sigma, cutoff, pairs=:all, mode=:standard, pair_table=nothing, neighborlist=nothing)
+
+Workflow Lennard-Jones force descriptor.
+"""
 @kwdef struct LennardJones <: Force
     epsilon = nothing
     sigma = nothing
@@ -47,6 +73,11 @@ end
     neighborlist = nothing
 end
 
+"""
+    WCA(; epsilon, sigma, cutoff=nothing, pairs=:all, mode=:standard, pair_table=nothing, neighborlist=nothing)
+
+Workflow Weeks-Chandler-Andersen force descriptor.
+"""
 @kwdef struct WCA <: Force
     epsilon = nothing
     sigma = nothing
@@ -57,6 +88,11 @@ end
     neighborlist = nothing
 end
 
+"""
+    SoftRepulsive(; epsilon, sigma, cutoff, params=nothing, pairs=:all, pair_table=nothing, neighborlist=nothing)
+
+Workflow soft-repulsive force descriptor.
+"""
 @kwdef struct SoftRepulsive <: Force
     epsilon = nothing
     sigma = nothing
@@ -67,12 +103,22 @@ end
     neighborlist = nothing
 end
 
+"""
+    HarmonicBondForce(; k, r0, type=:default)
+
+Workflow harmonic bond force descriptor.
+"""
 @kwdef struct HarmonicBondForce <: Force
     k
     r0
     type = :default
 end
 
+"""
+    FENEBondForce(; k, R0, type=:default)
+
+Workflow FENE bond force descriptor.
+"""
 @kwdef struct FENEBondForce <: Force
     k
     R0

@@ -33,5 +33,6 @@ frame = read_gsd_frame!("traj.gsd")
 ## Related scripts
 
 - `examples/3D_quicktest.jl` for write-side GSD usage
+- `examples/restart_from_gsd.jl` for the high-level restart workflow wrapper
 - restart-oriented user workflows should treat current examples as GPU-first;
   later CPU-compatible restart smoke tests can be added after a CPU backend exists
