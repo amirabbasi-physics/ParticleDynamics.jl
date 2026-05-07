@@ -1,7 +1,18 @@
 abstract type AbstractSelectionSpec end
 
+"""
+    AllSelection()
+
+Select all particles in a workflow [`Group`](@ref).
+"""
 struct AllSelection <: AbstractSelectionSpec end
 
+"""
+    TypeSelection(value)
+
+Select particles by type. `value` may be a symbolic type name such as `:A` or
+an integer type id such as `1`.
+"""
 struct TypeSelection{T} <: AbstractSelectionSpec
     value::T
 end
@@ -9,6 +20,11 @@ end
 TypeSelection(value::Symbol) = TypeSelection{Symbol}(value)
 TypeSelection(value::Integer) = TypeSelection{Int}(Int(value))
 
+"""
+    IndexSelection(indices)
+
+Select an explicit list of 1-based particle indices.
+"""
 struct IndexSelection <: AbstractSelectionSpec
     indices::Vector{Int}
     function IndexSelection(indices::AbstractVector{<:Integer})
@@ -18,6 +34,12 @@ struct IndexSelection <: AbstractSelectionSpec
     end
 end
 
+"""
+    Group(name, selection; domain=:particles)
+
+Named workflow selection. Groups target particle subsets today and are designed
+to grow into bond/angle/dihedral selections later.
+"""
 struct Group{S<:AbstractSelectionSpec}
     name::Symbol
     domain::Symbol
@@ -27,6 +49,11 @@ end
 Group(name::Symbol, selection::AbstractSelectionSpec; domain::Symbol=:particles) =
     Group{typeof(selection)}(name, domain, selection)
 
+"""
+    Groups(groups...)
+
+Name-indexed collection of workflow [`Group`](@ref) objects.
+"""
 struct Groups
     entries::Vector{Group}
     byname::Dict{Symbol,Int}

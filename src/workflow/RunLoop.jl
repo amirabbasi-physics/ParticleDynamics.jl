@@ -4,6 +4,12 @@ using ..Backends
 using ..NeighborLists
 using ..SimulationCore
 
+"""
+    state(sim)
+
+Return the prepared low-level [`SimulationState`](@ref) backing a workflow
+[`Simulation`](@ref).
+"""
 function state(sim)
     return sim.state
 end
@@ -180,6 +186,13 @@ function _build_workflow_state!(sim, compiled_forces::Union{Nothing,CompiledForc
     return st
 end
 
+"""
+    prepare!(sim)
+
+Prepare a workflow [`Simulation`](@ref) by building or validating its
+low-level state, materializing groups, compiling workflow forces/integrators,
+and preparing observable and writer contexts.
+"""
 function prepare!(sim)
     _apply_workflow_seed!(sim.seed)
     built_state = false
@@ -228,6 +241,11 @@ function prepare!(sim)
     return sim
 end
 
+"""
+    reset_step!(sim, step=0)
+
+Reset the visible workflow step counter.
+"""
 function reset_step!(sim, step::Integer=0)
     if sim.state !== nothing
         sim.state.step = Int(step)
@@ -285,6 +303,14 @@ function _maybe_print_stage_end(stage::Stage, executed::Int)
     end
 end
 
+"""
+    run!(sim, nsteps)
+    run!(sim, stage::Stage)
+    run!(sim, stages::AbstractVector{<:Stage})
+
+Run a workflow [`Simulation`](@ref). `run!` owns the timestep loop, prepares
+the simulation on first use, and drives scheduled writers automatically.
+"""
 function run!(sim, nsteps::Integer)
     return run!(sim, Stage(:run, steps=Int(nsteps); progress=false))
 end

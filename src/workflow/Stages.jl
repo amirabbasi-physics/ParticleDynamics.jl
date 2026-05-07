@@ -1,3 +1,8 @@
+"""
+    Stage(name; steps, dt=nothing, neighbor_rebuild_interval=nothing, compute_energy=:auto, reset_observables=false, reset_step=nothing, progress=true, max_seconds=Inf)
+
+Describe a named block of simulation steps for [`run!`](@ref).
+"""
 @kwdef struct Stage
     name::Symbol
     steps::Int

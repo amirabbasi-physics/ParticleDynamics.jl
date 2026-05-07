@@ -12,8 +12,9 @@ makedocs(
     remotes=nothing,
     pages=[
         "Home" => "index.md",
+        "Quickstart" => "quickstart.md",
         "Manual" => [
-            "Getting Started" => "manual/getting_started.md",
+            "Low-Level API" => "manual/getting_started.md",
             "Simulation State" => "manual/simulation_state.md",
             "Integrators" => "manual/integrators.md",
             "Forces" => "manual/forces.md",

@@ -3,13 +3,25 @@ using ..SimulationCore
 
 abstract type AbstractWorkflowScheme end
 
+"""`VelocityVerlet()` selects the workflow velocity-Verlet stepping scheme."""
 struct VelocityVerlet <: AbstractWorkflowScheme end
+"""`BAOAB()` selects the workflow BAOAB Langevin splitting."""
 struct BAOAB <: AbstractWorkflowScheme end
+"""`BAOA()` selects the workflow BAOA Langevin splitting."""
 struct BAOA <: AbstractWorkflowScheme end
+"""`GSM()` selects the workflow Grønbech-Jensen/Farago style scheme."""
 struct GSM <: AbstractWorkflowScheme end
+"""`EulerHeun()` selects the workflow Brownian midpoint scheme."""
 struct EulerHeun <: AbstractWorkflowScheme end
+"""`EulerMaruyama()` selects the workflow Euler-Maruyama scheme."""
 struct EulerMaruyama <: AbstractWorkflowScheme end
 
+"""
+    OUSpectrum(taus, scales)
+
+Multi-mode Ornstein-Uhlenbeck spectrum used by
+[`ActiveOrnsteinUhlenbeck`](@ref).
+"""
 struct OUSpectrum
     taus::Vector{Float64}
     scales::Vector{Float64}
@@ -23,14 +35,30 @@ struct OUSpectrum
     end
 end
 
+"""
+    Method
+
+Abstract workflow method applied to a [`Group`](@ref).
+"""
 abstract type Method end
 
+"""
+    ConstantVolume(group; thermostat=nothing)
+
+Molecular-dynamics method for a particle group, optionally coupled to a
+workflow thermostat.
+"""
 @kwdef struct ConstantVolume <: Method
     group
     thermostat = nothing
 end
 ConstantVolume(group; thermostat=nothing) = ConstantVolume(group=group, thermostat=thermostat)
 
+"""
+    Langevin(group; gamma, kT)
+
+Langevin method applied to a workflow group.
+"""
 @kwdef struct Langevin <: Method
     group
     gamma
@@ -38,6 +66,11 @@ ConstantVolume(group; thermostat=nothing) = ConstantVolume(group=group, thermost
 end
 Langevin(group; gamma, kT) = Langevin(group=group, gamma=gamma, kT=kT)
 
+"""
+    Brownian(group; gamma, kT)
+
+Brownian dynamics method applied to a workflow group.
+"""
 @kwdef struct Brownian <: Method
     group
     gamma
@@ -45,6 +78,11 @@ Langevin(group; gamma, kT) = Langevin(group=group, gamma=gamma, kT=kT)
 end
 Brownian(group; gamma, kT) = Brownian(group=group, gamma=gamma, kT=kT)
 
+"""
+    ActiveOrnsteinUhlenbeck(group; gamma, kT, tau=nothing, noise_scale=nothing, spectrum=nothing)
+
+Active Ornstein-Uhlenbeck method applied to a workflow group.
+"""
 @kwdef struct ActiveOrnsteinUhlenbeck <: Method
     group
     gamma
@@ -62,6 +100,12 @@ function ActiveOrnsteinUhlenbeck(group; gamma, kT, tau=nothing, noise_scale=noth
                                    spectrum=spectrum)
 end
 
+"""
+    Integrator(; dt, scheme=nothing, forces=Force[], methods=Method[], metadata=Dict())
+
+High-level workflow integrator object. It owns the timestep, force objects,
+methods, and thermostat-bearing methods that define the simulation dynamics.
+"""
 @kwdef struct Integrator
     dt
     scheme = nothing

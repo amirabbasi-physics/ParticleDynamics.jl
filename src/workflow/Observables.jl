@@ -2,28 +2,58 @@ using CUDA
 using ..SimulationCore
 using ..Collisions
 
+"""
+    Observable
+
+Abstract workflow observable descriptor.
+"""
 abstract type Observable end
 
+"""
+    ThermodynamicObservable(group; name=:thermo)
+
+Compute thermodynamic quantities for a workflow group.
+"""
 @kwdef struct ThermodynamicObservable <: Observable
     group
     name::Symbol = :thermo
 end
 ThermodynamicObservable(group; name::Symbol=:thermo) = ThermodynamicObservable(group=group, name=name)
 
+"""
+    BathExchangeObservable(; name=:bath)
+
+Compute bath heat and entropy-exchange diagnostics.
+"""
 @kwdef struct BathExchangeObservable <: Observable
     name::Symbol = :bath
 end
 
+"""
+    VirialObservable(group; name=:virial)
+
+Compute scalar virial diagnostics for a workflow group.
+"""
 @kwdef struct VirialObservable <: Observable
     group
     name::Symbol = :virial
 end
 VirialObservable(group; name::Symbol=:virial) = VirialObservable(group=group, name=name)
 
+"""
+    CollisionObservable(; name=:collisions)
+
+Compute collision-count diagnostics from the low-level collision counters.
+"""
 @kwdef struct CollisionObservable <: Observable
     name::Symbol = :collisions
 end
 
+"""
+    MSDObservable(group; name=:msd, reference=:start)
+
+Mean-squared-displacement observable for a workflow group.
+"""
 @kwdef struct MSDObservable <: Observable
     group
     name::Symbol = :msd
@@ -31,6 +61,11 @@ end
 end
 MSDObservable(group; name::Symbol=:msd, reference=:start) = MSDObservable(group=group, name=name, reference=reference)
 
+"""
+    VACFObservable(group; name=:vacf, reference=:start)
+
+Velocity-autocorrelation observable for a workflow group.
+"""
 @kwdef struct VACFObservable <: Observable
     group
     name::Symbol = :vacf

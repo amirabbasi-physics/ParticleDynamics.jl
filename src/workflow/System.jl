@@ -1,6 +1,12 @@
 using StaticArrays: SVector, StaticVector
 using ..Writers: read_gsd_frame!, GSDFrameData, GSDTopology
 
+"""
+    PeriodicBox(lengths)
+
+High-level periodic box descriptor for a workflow [`ParticleSystem`](@ref).
+Supports 2D and 3D boxes.
+"""
 struct PeriodicBox{T,N}
     lengths::NTuple{N,T}
 end
@@ -67,6 +73,13 @@ function _normalize_molecules(values)
     return molecules
 end
 
+"""
+    Topology(; bonds=[], bond_types=[], angles=[], dihedrals=[], impropers=[], exclusions=[], molecules=[], metadata=Dict())
+
+Future-ready topology container used by the workflow API. Current compiled
+support covers bond connectivity and bond forces; higher-order terms are stored
+as metadata for future force-field work.
+"""
 struct Topology
     bonds::Vector{Tuple{Int32,Int32}}
     bond_types::Vector{Symbol}
@@ -284,6 +297,13 @@ function _topology_from_gsd(topology::GSDTopology)
     )
 end
 
+"""
+    ParticleSystem(data; box, types, typeids, masses, velocities, topology=Topology(), metadata=Dict())
+
+High-level particle/topology container used to build a workflow
+[`Simulation`](@ref). `data` may be positions directly, an initializer result
+with `.positions`/`.box`, or a GSD frame.
+"""
 struct ParticleSystem
     positions
     box::PeriodicBox
@@ -424,6 +444,12 @@ function ParticleSystem_from_gsd(frame::GSDFrameData;
                                            metadata=merge(auto_metadata, _metadata_dict(metadata)))
 end
 
+"""
+    ParticleSystem.from_gsd(path; frame=-1)
+
+Load a workflow [`ParticleSystem`](@ref) from a GSD file. By default the last
+frame is used.
+"""
 function from_gsd(::Type{ParticleSystem}, path::AbstractString; frame::Integer=-1)
     frame_data = frame == -1 ? read_gsd_frame!(path) : read_gsd_frame!(path; step=frame)
     return ParticleSystem_from_gsd(frame_data; metadata=Dict(:source_path => path))
@@ -441,4 +467,9 @@ function Base.getproperty(::Type{ParticleSystem}, name::Symbol)
     return getfield(ParticleSystem, name)
 end
 
+"""
+    Particles
+
+Alias for [`ParticleSystem`](@ref).
+"""
 const Particles = ParticleSystem
