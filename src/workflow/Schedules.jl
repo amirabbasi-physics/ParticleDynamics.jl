@@ -46,7 +46,11 @@ function normalize_schedule(; every=nothing, schedule=nothing, default=Every(1))
         schedule isa AbstractSchedule || throw(ArgumentError("schedule must be an AbstractSchedule; got $(typeof(schedule))."))
         return schedule
     elseif every !== nothing
-        return Every(Int(every))
+        if every isa AbstractSchedule
+            return every
+        else
+            return Every(Int(every))
+        end
     else
         return default
     end
