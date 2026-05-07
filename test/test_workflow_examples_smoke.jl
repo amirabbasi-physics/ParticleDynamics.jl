@@ -138,6 +138,27 @@ end
         @test sim.lowlevel_integrator.params.ou !== nothing
     end
 
+    @testset "VelocityVerlet Active OU" begin
+        system = _workflow_smoke_system_2d_single(N=12, T=T)
+        all_particles, groups = _workflow_smoke_groups_single()
+        sim = Simulation(
+            system;
+            groups=groups,
+            integrator=Integrator(
+                dt=5e-4,
+                scheme=VelocityVerlet(),
+                forces=[SoftRepulsive(epsilon=1.0e3, sigma=1.0, cutoff=1.0,
+                                      pairs=:neighborlist, neighborlist=CellList(buffer=0.25, capacity=48, rebuild_interval=4))],
+                methods=[ActiveOrnsteinUhlenbeck(all_particles; gamma=2.0, kT=0.0, tau=0.05, noise_scale=0.2)],
+            ),
+            precision=Float64,
+            seed=0xA3B,
+        )
+        _run_workflow_smoke(sim)
+        @test sim.lowlevel_integrator isa SimulationCore.VVSpec{Float64}
+        @test sim.lowlevel_integrator.params.ou !== nothing
+    end
+
     @testset "Pair-table two-size run" begin
         system = _workflow_smoke_system_2d_two_type(N=12, T=T)
         _, _, all_particles, groups = _workflow_smoke_groups_two_type()

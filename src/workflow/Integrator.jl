@@ -169,8 +169,8 @@ function _stochastic_builder(scheme::AbstractWorkflowScheme,
                              dtT)
     family = _scheme_family(scheme)
     if family === :langevin
-        all(method -> method isa Langevin, methods) ||
-            throw(ArgumentError("VelocityVerlet/BAOAB/BAOA/GSM only support Langevin workflow methods right now."))
+        all(method -> method isa Union{Langevin,ActiveOrnsteinUhlenbeck}, methods) ||
+            throw(ArgumentError("VelocityVerlet/BAOAB/BAOA/GSM only support Langevin and ActiveOrnsteinUhlenbeck workflow methods right now."))
         seed = methods[1]
         constructor = if scheme isa VelocityVerlet
             SimulationCore.velocityverlet
@@ -186,6 +186,11 @@ function _stochastic_builder(scheme::AbstractWorkflowScheme,
             for method in methods
                 filter = _materialized_group_filter(system, materialized_groups, method.group)
                 _apply_stochastic_method!(spec, st, filter, method, dtT)
+            end
+            for method in methods
+                method isa ActiveOrnsteinUhlenbeck || continue
+                filter = _materialized_group_filter(system, materialized_groups, method.group)
+                _apply_ou_controls!(spec, st, filter, method, dtT)
             end
             return spec
         end
