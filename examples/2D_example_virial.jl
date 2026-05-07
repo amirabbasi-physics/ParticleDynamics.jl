@@ -1,5 +1,4 @@
 using ParticleDynamics
-using CUDA
 
 include(joinpath(@__DIR__, "_example_utils.jl"))
 
@@ -7,35 +6,10 @@ include(joinpath(@__DIR__, "_example_utils.jl"))
 Tiny 2D example that writes the total per-particle configurational virial tensor
 into a GSD trajectory.
 
-This uses the `write_virial=true` flag of `write_gsd_frame!`, which adds custom
-`particles/virial` and `particles/property/virial` chunks. The component order
-matches `virial_components(st)`, so in 2D each row stores `(xx, yy, xy)`.
-
-Virial buffers are refreshed on steps with `compute_energy=true`, so the example
-logs only after those force evaluations.
+This uses the `write_virial=true` flag of `GSDWriter`, which stores custom
+virial chunks. The component order matches `virial_components(state(sim))`, so
+in 2D each row stores `(xx, yy, xy)`.
 """
-
-function initialize_square_lattice!(st, box::NTuple{2,T}) where {T<:AbstractFloat}
-    N = length(st.rx)
-    n_side = ceil(Int, sqrt(N))
-    spacing_x = box[1] / n_side
-    spacing_y = box[2] / n_side
-
-    rx_host = Vector{T}(undef, N)
-    ry_host = Vector{T}(undef, N)
-
-    for i in 1:N
-        linear = i - 1
-        ix = linear % n_side
-        iy = linear ÷ n_side
-        rx_host[i] = (ix + T(0.5)) * spacing_x - box[1] / 2
-        ry_host[i] = (iy + T(0.5)) * spacing_y - box[2] / 2
-    end
-
-    copyto!(st.rx, rx_host)
-    copyto!(st.ry, ry_host)
-    return st
-end
 
 N = maybe_override_int(256, "SIM_NPARTICLES")
 box = (40.0f0, 40.0f0)
@@ -45,56 +19,49 @@ epsilon = 10.0f0
 dt = 2.0f-4
 gamma = 50.0f0
 temperature = 1.0f0
-N_steps = maybe_override_int(1000, "SIM_MAX_STEPS")
-N_log = maybe_override_interval(100, N_steps)
+nsteps = maybe_override_int(1_000, "SIM_MAX_STEPS")
+log_interval = maybe_override_interval(100, nsteps)
 
-st = build_simulation(
-    N = N,
-    box = box,
-    dt = dt,
-    cutoff = r_cut,
-    skin = 0.4f0,
-    cap = Int32(64),
-    neigh_interval = 25,
-    epsilon = epsilon,
-    sigma = sigma,
-    gamma = gamma,
-    temperature = temperature,
-    nonbonded = :wca,
-    precision = :f32,
+logged_steps = sort!(unique(vcat(1, collect(log_interval:log_interval:nsteps))))
+
+system = ParticleSystem(
+    square_lattice_positions(N, box);
+    box=PeriodicBox(box),
+    types=[:A],
+    typeids=fill(Int32(1), N),
+    masses=Dict(:A => 1.0f0),
 )
 
-initialize_square_lattice!(st, box)
-vv = velocityverlet(st; gamma=gamma, temperature=temperature, dt=dt)
+all_particles = Group(:all, AllSelection())
 
-gsd_path = joinpath(@__DIR__, "traj2d_virial.gsd")
-types = ["A"]
+sim = Simulation(
+    system;
+    groups=Groups(all_particles),
+    integrator=Integrator(
+        dt=dt,
+        scheme=VelocityVerlet(),
+        forces=[WCA(epsilon=epsilon, sigma=sigma, pairs=:neighborlist,
+                    neighborlist=CellList(buffer=0.4, capacity=64, rebuild_interval=25))],
+        methods=[Langevin(all_particles; gamma=gamma, kT=temperature)],
+    ),
+    writers=[
+        GSDWriter(
+            joinpath(@__DIR__, "traj2d_virial.gsd");
+            schedule=AtSteps(logged_steps),
+            group=all_particles,
+            write_start=false,
+            mode=:replace,
+            diameter=sigma,
+            write_virial=true,
+        ),
+    ],
+    precision=Float32,
+)
 
-gsd_open(gsd_path) do gsdh
-    # Populate force and virial buffers before the first dump.
-    step!(st, vv, dt; compute_energy = true)
-    write_gsd_frame!(gsdh, st;
-                     diameter = sigma,
-                     types_names = types,
-                     step = st.step,
-                     write_virial = true)
+run!(sim, Stage(:production, steps=nsteps; progress=false, max_seconds=maybe_override_runtime()))
 
-    @time for s in 2:N_steps
-        if s % N_log == 0
-            step!(st, vv, dt; compute_energy = true)
-            write_gsd_frame!(gsdh, st;
-                             diameter = sigma,
-                             types_names = types,
-                             step = st.step,
-                             write_virial = true)
-        else
-            step!(st, vv, dt; compute_energy = false)
-        end
-    end
-end
-
-frame = ParticleDynamics.read_gsd_frame!(gsd_path)
+frame = ParticleDynamics.read_gsd_frame!(joinpath(@__DIR__, "traj2d_virial.gsd"))
 virial = frame.particle_properties[:virial]
-println("Wrote trajectory with virial tensors to $(gsd_path)")
-println("Virial component order: $(virial_components(st))")
-println("Read back virial matrix with size $(size(virial)) from the last frame")
+println("Wrote trajectory with virial tensors to ", joinpath(@__DIR__, "traj2d_virial.gsd"))
+println("Virial component order: ", virial_components(state(sim)))
+println("Read back virial matrix with size ", size(virial), " from the last frame")

@@ -46,6 +46,7 @@ end
     write_unwrapped::Bool = false
     sync_on_write::Bool = true
     write_forces::Bool = false
+    write_virial::Bool = false
     observables::Vector{Any} = Any[]
 end
 
@@ -61,6 +62,7 @@ function GSDWriter(filename::AbstractString;
                    write_unwrapped::Bool=false,
                    sync_on_write::Bool=true,
                    write_forces::Bool=false,
+                   write_virial::Bool=false,
                    observables=Any[])
     return GSDWriter(filename=String(filename),
                      every=every,
@@ -74,6 +76,7 @@ function GSDWriter(filename::AbstractString;
                      write_unwrapped=write_unwrapped,
                      sync_on_write=sync_on_write,
                      write_forces=write_forces,
+                     write_virial=write_virial,
                      observables=Any[observables...])
 end
 
@@ -148,7 +151,8 @@ function prepare_writers!(sim)
             _ensure_observable_context!(sim, req.observable)
         end
         schedule = normalize_schedule(every=getfield(writer, :every), schedule=getfield(writer, :schedule), default=Every(1))
-        needs_energy = any(req -> observable_requires_energy(req.observable, req.fields), requests)
+        needs_energy = any(req -> observable_requires_energy(req.observable, req.fields), requests) ||
+                       (writer isa GSDWriter && writer.write_virial)
         needs_interval_reset = any(req -> observable_has_interval_fields(req.observable, req.fields), requests)
         push!(contexts, PreparedWriter(writer, schedule, requests, nothing, String[], false, false, needs_energy, needs_interval_reset))
     end
@@ -323,6 +327,7 @@ function _write_gsd!(sim, ctx::PreparedWriter, step::Int)
         types_names=_writer_types_names(sim, writer),
         step=step,
         write_forces=writer.write_forces,
+        write_virial=writer.write_virial,
         write_unwrapped=writer.write_unwrapped,
         sync_on_write=writer.sync_on_write,
     )
