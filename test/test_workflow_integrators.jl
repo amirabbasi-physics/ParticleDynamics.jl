@@ -51,6 +51,33 @@ end
         end
     end
 
+    active_ou_vv = Integrator(
+        dt=dt,
+        scheme=VelocityVerlet(),
+        methods=[
+            ActiveOrnsteinUhlenbeck(cold; gamma=3.0, kT=0.0, tau=0.25, noise_scale=0.4),
+            Langevin(hot; gamma=5.0, kT=1.25),
+        ],
+    )
+    compiled_ou_vv = ParticleDynamics.Workflow.compile_integrator(system, active_ou_vv; precision=:f64)
+    spec_ou_vv = ParticleDynamics.Workflow.build_lowlevel_integrator(compiled_ou_vv, st; system=system, materialized_groups=materialized)
+    @test spec_ou_vv isa SimulationCore.VVSpec{Float64}
+    @test spec_ou_vv.params.ou !== nothing
+    gamma_ou_vv = Array(spec_ou_vv.params.gamma)
+    noise_ou_vv = Array(spec_ou_vv.params.noise_scale)
+    corr_ou_vv = Array(spec_ou_vv.params.corr_time)
+    for i in eachindex(gamma_ou_vv)
+        if isodd(i)
+            @test gamma_ou_vv[i] == 3.0
+            @test noise_ou_vv[i] == 0.4
+            @test corr_ou_vv[i] == 0.25
+        else
+            @test gamma_ou_vv[i] == 5.0
+            @test isapprox(noise_ou_vv[i], sqrt(2 * 5.0 * 1.25 * dt); atol=1e-12)
+            @test corr_ou_vv[i] == 0.0
+        end
+    end
+
     active_ou = Integrator(
         dt=dt,
         scheme=EulerMaruyama(),
