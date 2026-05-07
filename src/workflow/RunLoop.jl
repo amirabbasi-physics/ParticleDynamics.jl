@@ -3,6 +3,9 @@ function state(sim::Simulation)
 end
 
 function prepare!(sim::Simulation)
+    if sim.state !== nothing && !haskey(sim.metadata, :workflow_time)
+        sim.metadata[:workflow_time] = Float64(sim.state.step) * _current_dt(sim)
+    end
     materialized = Dict{Symbol,Any}()
     for group in sim.groups
         materialized[group.name] = materialize_group(sim.system, group)
@@ -25,6 +28,7 @@ function prepare!(sim::Simulation)
                                                                 materialized_groups=materialized)
         end
     end
+    prepare_observables!(sim)
     sim.prepared = true
     return sim
 end
@@ -33,10 +37,6 @@ function reset_step!(sim::Simulation, step::Integer=0)
     if sim.state !== nothing
         sim.state.step = Int(step)
     end
-    return sim
-end
-
-function reset_observables!(sim::Simulation)
     return sim
 end
 
