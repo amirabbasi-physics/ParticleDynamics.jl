@@ -87,6 +87,11 @@ end
     @test compiled_bond.build_kwargs[:bonds] == topo.bonds
     @test compiled_bond.build_kwargs[:bonding] isa ParticleDynamics.HarmonicBond{Float64}
 
+    fene = FENEBondForce(k=30.0, R0=1.5)
+    compiled_fene = ParticleDynamics.Workflow.compile_forces(system, [fene]; precision=:f64)
+    @test compiled_fene.build_kwargs[:bonds] == topo.bonds
+    @test compiled_fene.build_kwargs[:bonding] isa ParticleDynamics.FENEBond{Float64}
+
     kwargs_bond = merge(
         Dict{Symbol,Any}(
             :N => length(system),
@@ -105,6 +110,25 @@ end
     st_bond = SimulationCore.build_simulation(; kwargs_bond...)
     @test st_bond.bonds !== nothing
     @test st_bond.bonding isa ParticleDynamics.HarmonicBond{Float64}
+
+    kwargs_fene = merge(
+        Dict{Symbol,Any}(
+            :N => length(system),
+            :box => Tuple(system.box),
+            :gamma => 1.0,
+            :temperature => 0.0,
+            :dt => 1e-3,
+            :precision => :f64,
+            :cutoff => 2.5,
+            :epsilon => 1.0,
+            :sigma => 1.0,
+            :nonbonded => :wca,
+        ),
+        compiled_fene.build_kwargs,
+    )
+    st_fene = SimulationCore.build_simulation(; kwargs_fene...)
+    @test st_fene.bonds !== nothing
+    @test st_fene.bonding isa ParticleDynamics.FENEBond{Float64}
 end
 
 @testset "Workflow Force Compilation in prepare!" begin
