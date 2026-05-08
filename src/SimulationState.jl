@@ -18,8 +18,9 @@ Key fields that user code may read or mutate:
 - `nbh`: neighbor matrix (either dense cell list or sentinel all-pairs) built
   with the `NeighborLists.build_neighbors_*` family using the requested cutoff,
   skin, and capacity.
-- `mass`, `dt`: universal particle mass and nominal build-time timestep used by
-  deterministic integrators and by explicit stochastic spec constructors.
+- `mass`, `dt`: nominal build-time timestep plus the scalar fast-path mass used
+  when all particles share one mass. Heterogeneous-mass states additionally
+  populate `mass_particle` and `inv_mass_particle` with per-particle data.
 - `Epot`, `Ekin`, `virial`, `dq`, `dU` plus the corresponding `*_accum` buffers:
   energy, virial, and heat observables that can be sampled directly on the GPU.
 - `virial_nonbonded`, `virial_bonded`, `virial_tensor`, `virial_tensor_accum`:
@@ -79,8 +80,10 @@ mutable struct SimulationState{T<:AbstractFloat}
     bonds::Union{Nothing,BondedForces.BondList}
     bonding::Union{Nothing,Definitions.BondPotential{T}}
 
-    # universal integration metadata
+    # integration metadata
     mass::T
+    mass_particle::Union{Nothing,CuArray{T,1}}
+    inv_mass_particle::Union{Nothing,CuArray{T,1}}
     dt::T
 
     # observables buffers
@@ -122,6 +125,7 @@ end
 
 @inline backend(st::SimulationState) = storage_backend(st.rx)
 Backends.storage_backend(st::SimulationState) = backend(st)
+@inline has_uniform_particle_mass(st::SimulationState) = st.mass_particle === nothing
 
 """
     zero_forces!(st)

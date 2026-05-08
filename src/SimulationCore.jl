@@ -169,12 +169,14 @@ include("simulation/Freeze.jl")
 function _init_vel2_kernel!(
     vx::CuDeviceVector{T},
     vy::CuDeviceVector{T},
-    temperature_vec::CuDeviceVector{T}) where {T<:AbstractFloat}
+    temperature_vec::CuDeviceVector{T},
+    inv_mass::T) where {T<:AbstractFloat}
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     N = length(vx); if i > N; return; end
     @inbounds begin
-        vx[i] = randn(T) * sqrt(temperature_vec[i])
-        vy[i] = randn(T) * sqrt(temperature_vec[i])
+        scale = sqrt(max(temperature_vec[i] * inv_mass, zero(T)))
+        vx[i] = randn(T) * scale
+        vy[i] = randn(T) * scale
     end
     return
 end
@@ -183,28 +185,92 @@ function _init_vel3_kernel!(
     vx::CuDeviceVector{T},
     vy::CuDeviceVector{T},
     vz::CuDeviceVector{T},
-    temperature_vec::CuDeviceVector{T}) where {T<:AbstractFloat}
+    temperature_vec::CuDeviceVector{T},
+    inv_mass::T) where {T<:AbstractFloat}
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     N = length(vx); if i > N; return; end
     @inbounds begin
-        vx[i] = randn(T) * sqrt(temperature_vec[i])
-        vy[i] = randn(T) * sqrt(temperature_vec[i])
-        vz[i] = randn(T) * sqrt(temperature_vec[i])
+        scale = sqrt(max(temperature_vec[i] * inv_mass, zero(T)))
+        vx[i] = randn(T) * scale
+        vy[i] = randn(T) * scale
+        vz[i] = randn(T) * scale
     end
     return
 end
 
-function _init_vel2!(vx::CuArray{T,1}, vy::CuArray{T,1}, temperature_vec::CuArray{T,1}) where {T<:AbstractFloat}
+function _init_vel2_kernel!(
+    vx::CuDeviceVector{T},
+    vy::CuDeviceVector{T},
+    temperature_vec::CuDeviceVector{T},
+    inv_mass_vec::CuDeviceVector{T}) where {T<:AbstractFloat}
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    N = length(vx); if i > N; return; end
+    @inbounds begin
+        scale = sqrt(max(temperature_vec[i] * inv_mass_vec[i], zero(T)))
+        vx[i] = randn(T) * scale
+        vy[i] = randn(T) * scale
+    end
+    return
+end
+
+function _init_vel3_kernel!(
+    vx::CuDeviceVector{T},
+    vy::CuDeviceVector{T},
+    vz::CuDeviceVector{T},
+    temperature_vec::CuDeviceVector{T},
+    inv_mass_vec::CuDeviceVector{T}) where {T<:AbstractFloat}
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    N = length(vx); if i > N; return; end
+    @inbounds begin
+        scale = sqrt(max(temperature_vec[i] * inv_mass_vec[i], zero(T)))
+        vx[i] = randn(T) * scale
+        vy[i] = randn(T) * scale
+        vz[i] = randn(T) * scale
+    end
+    return
+end
+
+function _init_vel2!(vx::CuArray{T,1},
+                     vy::CuArray{T,1},
+                     temperature_vec::CuArray{T,1},
+                     mass::T) where {T<:AbstractFloat}
     N = length(vx); threads = min(256, N); blocks = cld(N, threads)
-    k = CUDA.@cuda launch=false _init_vel2_kernel!(vx, vy, temperature_vec)
-    CUDA.@sync k(vx, vy, temperature_vec; threads, blocks)
+    inv_mass = mass > zero(T) ? inv(mass) : zero(T)
+    k = CUDA.@cuda launch=false _init_vel2_kernel!(vx, vy, temperature_vec, inv_mass)
+    CUDA.@sync k(vx, vy, temperature_vec, inv_mass; threads, blocks)
     return nothing
 end
 
-function _init_vel3!(vx::CuArray{T,1}, vy::CuArray{T,1}, vz::CuArray{T,1}, temperature_vec::CuArray{T,1}) where {T<:AbstractFloat}
+function _init_vel2!(vx::CuArray{T,1},
+                     vy::CuArray{T,1},
+                     temperature_vec::CuArray{T,1},
+                     inv_mass_vec::CuArray{T,1}) where {T<:AbstractFloat}
     N = length(vx); threads = min(256, N); blocks = cld(N, threads)
-    k = CUDA.@cuda launch=false _init_vel3_kernel!(vx, vy, vz, temperature_vec)
-    CUDA.@sync k(vx, vy, vz, temperature_vec; threads, blocks)
+    k = CUDA.@cuda launch=false _init_vel2_kernel!(vx, vy, temperature_vec, inv_mass_vec)
+    CUDA.@sync k(vx, vy, temperature_vec, inv_mass_vec; threads, blocks)
+    return nothing
+end
+
+function _init_vel3!(vx::CuArray{T,1},
+                     vy::CuArray{T,1},
+                     vz::CuArray{T,1},
+                     temperature_vec::CuArray{T,1},
+                     mass::T) where {T<:AbstractFloat}
+    N = length(vx); threads = min(256, N); blocks = cld(N, threads)
+    inv_mass = mass > zero(T) ? inv(mass) : zero(T)
+    k = CUDA.@cuda launch=false _init_vel3_kernel!(vx, vy, vz, temperature_vec, inv_mass)
+    CUDA.@sync k(vx, vy, vz, temperature_vec, inv_mass; threads, blocks)
+    return nothing
+end
+
+function _init_vel3!(vx::CuArray{T,1},
+                     vy::CuArray{T,1},
+                     vz::CuArray{T,1},
+                     temperature_vec::CuArray{T,1},
+                     inv_mass_vec::CuArray{T,1}) where {T<:AbstractFloat}
+    N = length(vx); threads = min(256, N); blocks = cld(N, threads)
+    k = CUDA.@cuda launch=false _init_vel3_kernel!(vx, vy, vz, temperature_vec, inv_mass_vec)
+    CUDA.@sync k(vx, vy, vz, temperature_vec, inv_mass_vec; threads, blocks)
     return nothing
 end
 
@@ -273,10 +339,29 @@ function _prepare_brownian_noise!(params::Union{BrownianIntegrators.BrownianPara
 end
 
 """
+    _refresh_kinetic_buffer!(st)
+
+Refresh the per-particle kinetic-energy buffer `st.Ekin` from the current
+velocity field using the mass representation owned by `st`.
+"""
+function _refresh_kinetic_buffer!(st::SimulationState{T}) where {T<:AbstractFloat}
+    if st.mass_particle === nothing
+        return _refresh_kinetic_buffer!(st, st.mass)
+    end
+    mp = st.mass_particle::CuArray{T,1}
+    if _is_3d(st)
+        @. st.Ekin = T(0.5) * mp * (st.vx * st.vx + st.vy * st.vy + st.vz * st.vz)
+    else
+        @. st.Ekin = T(0.5) * mp * (st.vx * st.vx + st.vy * st.vy)
+    end
+    return nothing
+end
+
+"""
     _refresh_kinetic_buffer!(st, mass)
 
 Refresh the per-particle kinetic-energy buffer `st.Ekin` from the current
-velocity field.
+velocity field using an explicit uniform mass override.
 """
 function _refresh_kinetic_buffer!(st::SimulationState{T}, mass::T) where {T<:AbstractFloat}
     if _is_3d(st)
@@ -288,9 +373,21 @@ function _refresh_kinetic_buffer!(st::SimulationState{T}, mass::T) where {T<:Abs
 end
 
 """
+    _refresh_kinetic_energy!(st) -> T
+
+Compatibility helper that refreshes `st.Ekin` with the state-owned mass data
+and returns its total on host.
+"""
+function _refresh_kinetic_energy!(st::SimulationState{T}) where {T<:AbstractFloat}
+    _refresh_kinetic_buffer!(st)
+    return T(CUDA.sum(st.Ekin))
+end
+
+"""
     _refresh_kinetic_energy!(st, mass) -> T
 
-Compatibility helper that refreshes `st.Ekin` and returns its total on host.
+Compatibility helper that refreshes `st.Ekin` using an explicit uniform mass
+override and returns its total on host.
 """
 function _refresh_kinetic_energy!(st::SimulationState{T}, mass::T) where {T<:AbstractFloat}
     _refresh_kinetic_buffer!(st, mass)
@@ -826,20 +923,19 @@ function execute_integrator_stage!(spec::NHCSpec{T},
                                    compute_energy::Bool=true,
                                    freeze_hold::Bool=false,
                                    freeze_spring::Bool=false) where {T<:AbstractFloat}
-    p = spec.params
     ws = spec.workspace
 
     if stage_tag === :thermostat_pre
         _apply_nhc_thermostat_stage!(spec, st, dt / T(2))
     elseif stage_tag === :kick1
-        _nhc_apply_half_kick!(st, st.f0x, st.f0y, st.f0z, dt, p.mass, ws.kinetic_total_per_bath, ws.particle_bath_id)
+        _nhc_apply_half_kick!(st, st.f0x, st.f0y, st.f0z, dt, ws.kinetic_total_per_bath, ws.particle_bath_id)
     elseif stage_tag === :drift
         _nhc_drift_positions!(st, dt)
         apply_post_position_hooks!(st, :after_drift; freeze_hold=freeze_hold)
     elseif stage_tag === :force
         evaluate_forces_into_f!(st, compute_energy; freeze_spring=freeze_spring)
     elseif stage_tag === :kick2
-        _nhc_apply_half_kick!(st, st.fx, st.fy, st.fz, dt, p.mass, ws.kinetic_total_per_bath, ws.particle_bath_id)
+        _nhc_apply_half_kick!(st, st.fx, st.fy, st.fz, dt, ws.kinetic_total_per_bath, ws.particle_bath_id)
     elseif stage_tag === :thermostat_post
         _apply_nhc_thermostat_stage!(spec, st, dt / T(2))
     else
@@ -856,18 +952,17 @@ function execute_integrator_stage!(spec::CSVRSpec{T},
                                    compute_energy::Bool=true,
                                    freeze_hold::Bool=false,
                                    freeze_spring::Bool=false) where {T<:AbstractFloat}
-    p = spec.params
     ws = spec.workspace
 
     if stage_tag === :kick1
-        _nhc_apply_half_kick!(st, st.f0x, st.f0y, st.f0z, dt, p.mass, ws.kinetic_total_per_bath, ws.particle_bath_id)
+        _nhc_apply_half_kick!(st, st.f0x, st.f0y, st.f0z, dt, ws.kinetic_total_per_bath, ws.particle_bath_id)
     elseif stage_tag === :drift
         _nhc_drift_positions!(st, dt)
         apply_post_position_hooks!(st, :after_drift; freeze_hold=freeze_hold)
     elseif stage_tag === :force
         evaluate_forces_into_f!(st, compute_energy; freeze_spring=freeze_spring)
     elseif stage_tag === :kick2
-        _nhc_apply_half_kick!(st, st.fx, st.fy, st.fz, dt, p.mass, ws.kinetic_total_per_bath, ws.particle_bath_id)
+        _nhc_apply_half_kick!(st, st.fx, st.fy, st.fz, dt, ws.kinetic_total_per_bath, ws.particle_bath_id)
     elseif stage_tag === :thermostat
         _apply_csvr_thermostat_stage!(spec, st, dt)
     else

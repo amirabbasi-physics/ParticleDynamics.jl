@@ -116,7 +116,7 @@ function _ensure_nhc_kinetic_initialized!(spec::NHCSpec{T},
                                           st::SimulationState{T}) where {T<:AbstractFloat}
     ws = spec.workspace
     if !ws.kinetic_initialized
-        _refresh_kinetic_buffer!(st, spec.params.mass)
+        _refresh_kinetic_buffer!(st)
         _nhc_reduce_kinetic_by_bath!(ws.kinetic_total_per_bath, st.Ekin, ws.particle_bath_id)
         ws.kinetic_initialized = true
     end
@@ -248,8 +248,72 @@ function _nhc_half_kick3_by_bath_kernel!(vx::CuDeviceVector{T},
     return nothing
 end
 
+function _nhc_half_kick2_by_bath_kernel!(vx::CuDeviceVector{T},
+                                         vy::CuDeviceVector{T},
+                                         fx::CuDeviceVector{T},
+                                         fy::CuDeviceVector{T},
+                                         Ekin::CuDeviceVector{T},
+                                         kinetic_total_per_bath::CuDeviceVector{T},
+                                         particle_bath_id::CuDeviceVector{Int32},
+                                         half_dt::T,
+                                         inv_mass_particle::CuDeviceVector{T},
+                                         mass_particle::CuDeviceVector{T}) where {T<:AbstractFloat}
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    if i <= length(vx)
+        @inbounds begin
+            inv_mass = inv_mass_particle[i]
+            mass = mass_particle[i]
+            vx_new = vx[i] + (half_dt * inv_mass) * fx[i]
+            vy_new = vy[i] + (half_dt * inv_mass) * fy[i]
+            ek = T(0.5) * mass * (vx_new * vx_new + vy_new * vy_new)
+            vx[i] = vx_new
+            vy[i] = vy_new
+            Ekin[i] = ek
+            b = Int(particle_bath_id[i])
+            if 1 <= b <= length(kinetic_total_per_bath)
+                CUDA.@atomic kinetic_total_per_bath[b] += ek
+            end
+        end
+    end
+    return nothing
+end
+
+function _nhc_half_kick3_by_bath_kernel!(vx::CuDeviceVector{T},
+                                         vy::CuDeviceVector{T},
+                                         vz::CuDeviceVector{T},
+                                         fx::CuDeviceVector{T},
+                                         fy::CuDeviceVector{T},
+                                         fz::CuDeviceVector{T},
+                                         Ekin::CuDeviceVector{T},
+                                         kinetic_total_per_bath::CuDeviceVector{T},
+                                         particle_bath_id::CuDeviceVector{Int32},
+                                         half_dt::T,
+                                         inv_mass_particle::CuDeviceVector{T},
+                                         mass_particle::CuDeviceVector{T}) where {T<:AbstractFloat}
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    if i <= length(vx)
+        @inbounds begin
+            inv_mass = inv_mass_particle[i]
+            mass = mass_particle[i]
+            vx_new = vx[i] + (half_dt * inv_mass) * fx[i]
+            vy_new = vy[i] + (half_dt * inv_mass) * fy[i]
+            vz_new = vz[i] + (half_dt * inv_mass) * fz[i]
+            ek = T(0.5) * mass * (vx_new * vx_new + vy_new * vy_new + vz_new * vz_new)
+            vx[i] = vx_new
+            vy[i] = vy_new
+            vz[i] = vz_new
+            Ekin[i] = ek
+            b = Int(particle_bath_id[i])
+            if 1 <= b <= length(kinetic_total_per_bath)
+                CUDA.@atomic kinetic_total_per_bath[b] += ek
+            end
+        end
+    end
+    return nothing
+end
+
 """
-    _nhc_apply_half_kick!(st, fx, fy, fz, dt, mass, kinetic_total_per_bath, particle_bath_id)
+    _nhc_apply_half_kick!(st, fx, fy, fz, dt, kinetic_total_per_bath, particle_bath_id)
 
 Apply a deterministic half-force kick `v <- v + (dt / (2m)) f`, refresh
 `st.Ekin`, and reduce per-bath kinetic energies into `kinetic_total_per_bath`.
@@ -259,37 +323,66 @@ function _nhc_apply_half_kick!(st::SimulationState{T},
                                fy::CuArray{T,1},
                                fz::Union{Nothing,CuArray{T,1}},
                                dt::T,
-                               mass::T,
                                kinetic_total_per_bath::CuArray{T,1},
                                particle_bath_id::CuArray{Int32,1}) where {T<:AbstractFloat}
     fill!(kinetic_total_per_bath, zero(T))
     N = length(st.vx)
     N == 0 && return nothing
-    coef = dt / (T(2) * mass)
     threads = min(256, N)
     blocks = cld(N, threads)
-    if _is_3d(st)
-        k = CUDA.@cuda launch=false _nhc_half_kick3_by_bath_kernel!(st.vx, st.vy, st.vz::CuArray{T,1},
-                                                                     fx, fy, fz::CuArray{T,1},
-                                                                     st.Ekin, kinetic_total_per_bath,
-                                                                     particle_bath_id,
-                                                                     coef, mass)
-        k(st.vx, st.vy, st.vz::CuArray{T,1},
-          fx, fy, fz::CuArray{T,1},
-          st.Ekin, kinetic_total_per_bath,
-          particle_bath_id,
-          coef, mass; threads, blocks)
+    if st.inv_mass_particle === nothing
+        mass = st.mass
+        coef = dt / (T(2) * mass)
+        if _is_3d(st)
+            k = CUDA.@cuda launch=false _nhc_half_kick3_by_bath_kernel!(st.vx, st.vy, st.vz::CuArray{T,1},
+                                                                         fx, fy, fz::CuArray{T,1},
+                                                                         st.Ekin, kinetic_total_per_bath,
+                                                                         particle_bath_id,
+                                                                         coef, mass)
+            k(st.vx, st.vy, st.vz::CuArray{T,1},
+              fx, fy, fz::CuArray{T,1},
+              st.Ekin, kinetic_total_per_bath,
+              particle_bath_id,
+              coef, mass; threads, blocks)
+        else
+            k = CUDA.@cuda launch=false _nhc_half_kick2_by_bath_kernel!(st.vx, st.vy,
+                                                                         fx, fy,
+                                                                         st.Ekin, kinetic_total_per_bath,
+                                                                         particle_bath_id,
+                                                                         coef, mass)
+            k(st.vx, st.vy,
+              fx, fy,
+              st.Ekin, kinetic_total_per_bath,
+              particle_bath_id,
+              coef, mass; threads, blocks)
+        end
     else
-        k = CUDA.@cuda launch=false _nhc_half_kick2_by_bath_kernel!(st.vx, st.vy,
-                                                                     fx, fy,
-                                                                     st.Ekin, kinetic_total_per_bath,
-                                                                     particle_bath_id,
-                                                                     coef, mass)
-        k(st.vx, st.vy,
-          fx, fy,
-          st.Ekin, kinetic_total_per_bath,
-          particle_bath_id,
-          coef, mass; threads, blocks)
+        half_dt = dt / T(2)
+        inv_mass_particle = st.inv_mass_particle::CuArray{T,1}
+        mass_particle = st.mass_particle::CuArray{T,1}
+        if _is_3d(st)
+            k = CUDA.@cuda launch=false _nhc_half_kick3_by_bath_kernel!(st.vx, st.vy, st.vz::CuArray{T,1},
+                                                                         fx, fy, fz::CuArray{T,1},
+                                                                         st.Ekin, kinetic_total_per_bath,
+                                                                         particle_bath_id,
+                                                                         half_dt, inv_mass_particle, mass_particle)
+            k(st.vx, st.vy, st.vz::CuArray{T,1},
+              fx, fy, fz::CuArray{T,1},
+              st.Ekin, kinetic_total_per_bath,
+              particle_bath_id,
+              half_dt, inv_mass_particle, mass_particle; threads, blocks)
+        else
+            k = CUDA.@cuda launch=false _nhc_half_kick2_by_bath_kernel!(st.vx, st.vy,
+                                                                         fx, fy,
+                                                                         st.Ekin, kinetic_total_per_bath,
+                                                                         particle_bath_id,
+                                                                         half_dt, inv_mass_particle, mass_particle)
+            k(st.vx, st.vy,
+              fx, fy,
+              st.Ekin, kinetic_total_per_bath,
+              particle_bath_id,
+              half_dt, inv_mass_particle, mass_particle; threads, blocks)
+        end
     end
     return nothing
 end
