@@ -531,13 +531,15 @@ function write_initial_frames!(sim)
 end
 
 function write_scheduled_outputs!(sim, step::Int)
+    wrote_any = false
     interval_consumed = false
     for ctx in _writer_contexts(sim)
         schedule_matches(ctx.schedule, step) || continue
         _write_writer!(sim, ctx, step)
+        wrote_any = true
         interval_consumed |= ctx.needs_interval_reset
     end
-    return interval_consumed
+    return (wrote_any=wrote_any, interval_consumed=interval_consumed)
 end
 
 function active_writer_requires_energy(sim, step::Int)

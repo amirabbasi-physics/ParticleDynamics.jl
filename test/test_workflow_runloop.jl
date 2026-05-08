@@ -86,3 +86,49 @@ end
     @test 1 <= st_reset.step < 10_000
     @test sim_reset.metadata[:workflow_time] > 0
 end
+
+@testset "Workflow run! progress summary includes throughput" begin
+    system = _workflow_runloop_system(N=8, T=Float64)
+    _, _, _, groups = _workflow_runloop_groups()
+    st = build_tiny2d(N=8, T=Float64, nonbonded=:wca, temperature=0.2, dt=1e-3)
+    copyto!(st.typeid, system.typeids)
+    sim = _workflow_runloop_sim(system, groups, st)
+
+    output = mktemp() do path, io
+        redirect_stdout(io) do
+            run!(sim, Stage(:summary, steps=1_000; max_seconds=0.0, progress=true))
+        end
+        flush(io)
+        close(io)
+        read(path, String)
+    end
+    @test occursin("Running stage summary", output)
+    @test occursin("Finished stage summary", output)
+    @test occursin("steps/s", output)
+end
+
+@testset "Workflow run! progress reports at writer intervals" begin
+    mktempdir() do tmp
+        system = _workflow_runloop_system(N=8, T=Float64)
+        _, _, all_particles, groups = _workflow_runloop_groups()
+        st = build_tiny2d(N=8, T=Float64, nonbonded=:wca, temperature=0.2, dt=1e-3)
+        copyto!(st.typeid, system.typeids)
+        thermo = ThermodynamicObservable(all_particles; name=:all_progress)
+        writers = Writer[
+            TableWriter(joinpath(tmp, "interval_obs.csv"); every=2, observables=[thermo => [:potential_energy_accumulated]]),
+        ]
+        sim = _workflow_runloop_sim(system, groups, st; writers=writers, observables=Observable[thermo])
+
+        output = mktemp() do path, io
+            redirect_stdout(io) do
+                run!(sim, Stage(:intervals, steps=4; progress=true))
+            end
+            flush(io)
+            close(io)
+            read(path, String)
+        end
+        @test occursin("Stage intervals: step 2/4", output)
+        @test occursin("Stage intervals: step 4/4", output)
+        @test occursin("steps/s", output)
+    end
+end
