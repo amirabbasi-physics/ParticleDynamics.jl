@@ -45,6 +45,36 @@
         @test isfinite(km.mean_kinetic)
     end
 
+    @testset "Heterogeneous mass support" begin
+        seed_all!(0xE10025)
+        dt = 1f-3
+        masses = Float32[isodd(i) ? 1f0 : 2f0 for i in 1:12]
+
+        st_vv = build_tiny2d(
+            N=12, T=Float32, box=(18f0, 18f0), cutoff=2.5f0, skin=0.3f0, cap=Int32(24),
+            neigh_interval=4, gamma=1f0, temperature=1f0, mass=masses, nonbonded=:wca
+        )
+        @test st_vv.mass_particle isa CuArray{Float32,1}
+        @test st_vv.inv_mass_particle isa CuArray{Float32,1}
+        vv = SimulationCore.velocityverlet(st_vv; gamma=1f0, temperature=1f0, dt=dt)
+        SimulationCore.step!(st_vv, vv, dt; compute_energy=true)
+        @test state_allfinite(st_vv)
+        expected_ekin = 0.5f0 .* masses .* (Array(st_vv.vx).^2 .+ Array(st_vv.vy).^2)
+        @test all(isapprox.(Array(st_vv.Ekin), expected_ekin; atol=1f-5, rtol=1f-5))
+
+        for constructor in (SimulationCore.baoab, SimulationCore.baoa, SimulationCore.gsm)
+            st = build_tiny2d(
+                N=12, T=Float32, box=(18f0, 18f0), cutoff=2.5f0, skin=0.3f0, cap=Int32(24),
+                neigh_interval=4, gamma=1f0, temperature=1f0, mass=masses, nonbonded=:wca
+            )
+            spec = constructor(st; gamma=1f0, temperature=1f0, dt=dt)
+            SimulationCore.step!(st, spec, dt; compute_energy=true)
+            @test state_allfinite(st)
+            expected_ekin = 0.5f0 .* masses .* (Array(st.vx).^2 .+ Array(st.vy).^2)
+            @test all(isapprox.(Array(st.Ekin), expected_ekin; atol=1f-5, rtol=1f-5))
+        end
+    end
+
     @testset "Freeze hold" begin
         seed_all!(0xE1003)
         N = 4

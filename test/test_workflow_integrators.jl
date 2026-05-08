@@ -207,8 +207,35 @@ end
     @test sim.lowlevel_integrator isa SimulationCore.EMSpec{Float64}
 end
 
-@testset "Workflow Langevin Rejects Heterogeneous Masses" begin
+@testset "Workflow Langevin Supports Heterogeneous Masses" begin
     system = _workflow_system_two_types(N=8, T=Float64, masses=Dict(:C => 1.0, :H => 2.0))
+    cold, hot, _, groups = _workflow_groups_for_two_types()
+    sim = Simulation(
+        system;
+        groups=groups,
+        integrator=Integrator(
+            dt=1e-3,
+            scheme=BAOAB(),
+            methods=[
+                Langevin(cold; gamma=2.0, kT=0.5),
+                Langevin(hot; gamma=4.0, kT=1.5),
+            ],
+        ),
+        precision=Float64,
+    )
+    prepare!(sim)
+    @test sim.prepared
+    @test sim.state !== nothing
+    @test sim.lowlevel_integrator isa SimulationCore.BAOABSpec{Float64}
+    @test sim.state.mass_particle isa CuArray{Float64,1}
+    @test sim.state.inv_mass_particle isa CuArray{Float64,1}
+    @test Array(sim.state.mass_particle) == [1.0, 2.0, 1.0, 2.0, 1.0, 2.0, 1.0, 2.0]
+    SimulationCore.step!(sim.state, sim.lowlevel_integrator, 1e-3; compute_energy=false)
+    @test state_allfinite(sim.state)
+end
+
+@testset "Workflow Langevin Rejects Zero Masses" begin
+    system = _workflow_system_two_types(N=8, T=Float64, masses=Dict(:C => 0.0, :H => 1.0))
     cold, hot, _, groups = _workflow_groups_for_two_types()
     sim = Simulation(
         system;

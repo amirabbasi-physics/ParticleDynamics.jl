@@ -394,6 +394,18 @@ function _refresh_kinetic_energy!(st::SimulationState{T}, mass::T) where {T<:Abs
     return T(CUDA.sum(st.Ekin))
 end
 
+function _require_positive_inertial_mass!(st::SimulationState{T},
+                                          integrator::AbstractString) where {T<:AbstractFloat}
+    if st.mass_particle === nothing
+        st.mass > zero(T) ||
+            throw(ArgumentError("$(integrator) integrator requires mass > 0 for all particles."))
+    else
+        minimum(st.mass_particle::CuArray{T,1}) > zero(T) ||
+            throw(ArgumentError("$(integrator) integrator requires mass > 0 for all particles."))
+    end
+    return nothing
+end
+
 function _sum_into_scalar_kernel!(out::CuDeviceVector{T},
                                   src::CuDeviceVector{T}) where {T<:AbstractFloat}
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
@@ -423,8 +435,14 @@ end
 include("simulation/NHCStepper.jl")
 include("simulation/CSVRStepper.jl")
 
+function validate_integrator_inputs!(spec::VVSpec{T}, st::SimulationState{T}, dt) where {T<:AbstractFloat}
+    _require_positive_inertial_mass!(st, string(integrator_name(spec)))
+    return nothing
+end
+
 function validate_integrator_inputs!(spec::Union{BAOABSpec,BAOASpec,GSMSpec}, st, dt)
     _require_positive_gamma!(spec.params.gamma, string(integrator_name(spec)))
+    _require_positive_inertial_mass!(st, string(integrator_name(spec)))
     return nothing
 end
 
@@ -440,7 +458,7 @@ end
 
 function validate_integrator_inputs!(spec::NHCSpec{T}, st, dt) where {T<:AbstractFloat}
     p = spec.params
-    p.mass > zero(T) || throw(ArgumentError("NHC requires mass > 0."))
+    _require_positive_inertial_mass!(st, "NHC")
     p.substeps >= 1 || throw(ArgumentError("NHC requires substeps >= 1."))
     p.chain_length >= 1 || throw(ArgumentError("NHC requires chain_length >= 1."))
     (p.propagator == NHC_PROPAGATOR_LEGACY ||
@@ -469,7 +487,7 @@ end
 
 function validate_integrator_inputs!(spec::CSVRSpec{T}, st, dt) where {T<:AbstractFloat}
     p = spec.params
-    p.mass > zero(T) || throw(ArgumentError("CSVR requires mass > 0."))
+    _require_positive_inertial_mass!(st, "CSVR")
     nbaths = length(p.target_temperature)
     nbaths >= 1 || throw(ArgumentError("CSVR requires at least one bath."))
     length(p.tau) == nbaths ||
@@ -629,41 +647,86 @@ function execute_integrator_stage!(spec::VVSpec{T},
         _prepare_langevin_noise!(params, ws, st, dt)
     elseif stage_tag === :drift
         if _is_3d(st)
-            LangevinIntegrators.vv_positions_soa!(st.rx, st.ry, st.rz,
-                                                  st.vx, st.vy, st.vz,
-                                                  st.f0x, st.f0y, st.f0z,
-                                                  ws.rf_x, ws.rf_y, ws.rf_z,
-                                                  params, dt, st.box3::Definitions.Box3;
-                                                  unwrapped_x=st.rx_unwrap,
-                                                  unwrapped_y=st.ry_unwrap,
-                                                  unwrapped_z=st.rz_unwrap)
+            if st.inv_mass_particle === nothing
+                LangevinIntegrators.vv_positions_soa!(st.rx, st.ry, st.rz,
+                                                      st.vx, st.vy, st.vz,
+                                                      st.f0x, st.f0y, st.f0z,
+                                                      ws.rf_x, ws.rf_y, ws.rf_z,
+                                                      params, dt, st.box3::Definitions.Box3;
+                                                      unwrapped_x=st.rx_unwrap,
+                                                      unwrapped_y=st.ry_unwrap,
+                                                      unwrapped_z=st.rz_unwrap)
+            else
+                LangevinIntegrators.vv_positions_soa!(st.rx, st.ry, st.rz,
+                                                      st.vx, st.vy, st.vz,
+                                                      st.f0x, st.f0y, st.f0z,
+                                                      ws.rf_x, ws.rf_y, ws.rf_z,
+                                                      st.inv_mass_particle::CuArray{T,1},
+                                                      params, dt, st.box3::Definitions.Box3;
+                                                      unwrapped_x=st.rx_unwrap,
+                                                      unwrapped_y=st.ry_unwrap,
+                                                      unwrapped_z=st.rz_unwrap)
+            end
         else
-            LangevinIntegrators.vv_positions_soa!(st.rx, st.ry,
-                                                  st.vx, st.vy,
-                                                  st.f0x, st.f0y,
-                                                  ws.rf_x, ws.rf_y,
-                                                  params, dt, st.box2::Definitions.Box2;
-                                                  unwrapped_x=st.rx_unwrap,
-                                                  unwrapped_y=st.ry_unwrap)
+            if st.inv_mass_particle === nothing
+                LangevinIntegrators.vv_positions_soa!(st.rx, st.ry,
+                                                      st.vx, st.vy,
+                                                      st.f0x, st.f0y,
+                                                      ws.rf_x, ws.rf_y,
+                                                      params, dt, st.box2::Definitions.Box2;
+                                                      unwrapped_x=st.rx_unwrap,
+                                                      unwrapped_y=st.ry_unwrap)
+            else
+                LangevinIntegrators.vv_positions_soa!(st.rx, st.ry,
+                                                      st.vx, st.vy,
+                                                      st.f0x, st.f0y,
+                                                      ws.rf_x, ws.rf_y,
+                                                      st.inv_mass_particle::CuArray{T,1},
+                                                      params, dt, st.box2::Definitions.Box2;
+                                                      unwrapped_x=st.rx_unwrap,
+                                                      unwrapped_y=st.ry_unwrap)
+            end
         end
         apply_post_position_hooks!(st, :after_drift; freeze_hold=freeze_hold)
     elseif stage_tag === :force
         evaluate_forces_into_f!(st, compute_energy; freeze_spring=freeze_spring)
     elseif stage_tag === :kick2
         if _is_3d(st)
-            LangevinIntegrators.vv_velocities_soa!(st.vx, st.vy, st.vz,
-                                                   st.f0x, st.f0y, st.f0z,
-                                                   st.fx, st.fy, st.fz,
-                                                   ws.rf_x, ws.rf_y, ws.rf_z,
-                                                   st.dq, st.dU, st.Ekin,
-                                                   params, dt)
+            if st.mass_particle === nothing
+                LangevinIntegrators.vv_velocities_soa!(st.vx, st.vy, st.vz,
+                                                       st.f0x, st.f0y, st.f0z,
+                                                       st.fx, st.fy, st.fz,
+                                                       ws.rf_x, ws.rf_y, ws.rf_z,
+                                                       st.dq, st.dU, st.Ekin,
+                                                       params, dt)
+            else
+                LangevinIntegrators.vv_velocities_soa!(st.vx, st.vy, st.vz,
+                                                       st.f0x, st.f0y, st.f0z,
+                                                       st.fx, st.fy, st.fz,
+                                                       ws.rf_x, ws.rf_y, ws.rf_z,
+                                                       st.dq, st.dU, st.Ekin,
+                                                       st.mass_particle::CuArray{T,1},
+                                                       st.inv_mass_particle::CuArray{T,1},
+                                                       params, dt)
+            end
         else
-            LangevinIntegrators.vv_velocities_soa!(st.vx, st.vy,
-                                                   st.f0x, st.f0y,
-                                                   st.fx, st.fy,
-                                                   ws.rf_x, ws.rf_y,
-                                                   st.dq, st.dU, st.Ekin,
-                                                   params, dt)
+            if st.mass_particle === nothing
+                LangevinIntegrators.vv_velocities_soa!(st.vx, st.vy,
+                                                       st.f0x, st.f0y,
+                                                       st.fx, st.fy,
+                                                       ws.rf_x, ws.rf_y,
+                                                       st.dq, st.dU, st.Ekin,
+                                                       params, dt)
+            else
+                LangevinIntegrators.vv_velocities_soa!(st.vx, st.vy,
+                                                       st.f0x, st.f0y,
+                                                       st.fx, st.fy,
+                                                       ws.rf_x, ws.rf_y,
+                                                       st.dq, st.dU, st.Ekin,
+                                                       st.mass_particle::CuArray{T,1},
+                                                       st.inv_mass_particle::CuArray{T,1},
+                                                       params, dt)
+            end
         end
     else
         throw(ArgumentError("Unsupported stage $(stage_tag) for $(integrator_name(spec))."))
@@ -682,13 +745,29 @@ function _execute_baoab_family_stage!(params::LangevinIntegrators.BAOABParams{T}
                                       freeze_spring::Bool) where {T<:AbstractFloat}
     if stage_tag === :B1
         if _is_3d(st)
-            LangevinIntegrators.baoab_B_3d!(st.vx, st.vy, st.vz,
-                                            st.f0x, st.f0y, st.f0z,
-                                            params, dt, st.Ekin, st.dU)
+            if st.mass_particle === nothing
+                LangevinIntegrators.baoab_B_3d!(st.vx, st.vy, st.vz,
+                                                st.f0x, st.f0y, st.f0z,
+                                                params, dt, st.Ekin, st.dU)
+            else
+                LangevinIntegrators.baoab_B_3d!(st.vx, st.vy, st.vz,
+                                                st.f0x, st.f0y, st.f0z,
+                                                st.mass_particle::CuArray{T,1},
+                                                st.inv_mass_particle::CuArray{T,1},
+                                                params, dt, st.Ekin, st.dU)
+            end
         else
-            LangevinIntegrators.baoab_B_2d!(st.vx, st.vy,
-                                            st.f0x, st.f0y,
-                                            params, dt, st.Ekin, st.dU)
+            if st.mass_particle === nothing
+                LangevinIntegrators.baoab_B_2d!(st.vx, st.vy,
+                                                st.f0x, st.f0y,
+                                                params, dt, st.Ekin, st.dU)
+            else
+                LangevinIntegrators.baoab_B_2d!(st.vx, st.vy,
+                                                st.f0x, st.f0y,
+                                                st.mass_particle::CuArray{T,1},
+                                                st.inv_mass_particle::CuArray{T,1},
+                                                params, dt, st.Ekin, st.dU)
+            end
         end
     elseif stage_tag === :A1 || stage_tag === :A2
         if _is_3d(st)
@@ -710,25 +789,55 @@ function _execute_baoab_family_stage!(params::LangevinIntegrators.BAOABParams{T}
     elseif stage_tag === :O
         _prepare_langevin_noise!(params, ws, st, dt)
         if _is_3d(st)
-            LangevinIntegrators.baoab_OU_3d!(st.vx, st.vy, st.vz,
-                                             ws.rf_x, ws.rf_y, ws.rf_z,
-                                             params, dt, st.dq)
+            if st.inv_mass_particle === nothing
+                LangevinIntegrators.baoab_OU_3d!(st.vx, st.vy, st.vz,
+                                                 ws.rf_x, ws.rf_y, ws.rf_z,
+                                                 params, dt, st.dq)
+            else
+                LangevinIntegrators.baoab_OU_3d!(st.vx, st.vy, st.vz,
+                                                 ws.rf_x, ws.rf_y, ws.rf_z,
+                                                 st.inv_mass_particle::CuArray{T,1},
+                                                 params, dt, st.dq)
+            end
         else
-            LangevinIntegrators.baoab_OU_2d!(st.vx, st.vy,
-                                             ws.rf_x, ws.rf_y,
-                                             params, dt, st.dq)
+            if st.inv_mass_particle === nothing
+                LangevinIntegrators.baoab_OU_2d!(st.vx, st.vy,
+                                                 ws.rf_x, ws.rf_y,
+                                                 params, dt, st.dq)
+            else
+                LangevinIntegrators.baoab_OU_2d!(st.vx, st.vy,
+                                                 ws.rf_x, ws.rf_y,
+                                                 st.inv_mass_particle::CuArray{T,1},
+                                                 params, dt, st.dq)
+            end
         end
     elseif stage_tag === :force
         evaluate_forces_into_f!(st, compute_energy; freeze_spring=freeze_spring)
     elseif stage_tag === :B2
         if _is_3d(st)
-            LangevinIntegrators.baoab_B_3d!(st.vx, st.vy, st.vz,
-                                            st.fx, st.fy, st.fz,
-                                            params, dt, st.Ekin, st.dU)
+            if st.mass_particle === nothing
+                LangevinIntegrators.baoab_B_3d!(st.vx, st.vy, st.vz,
+                                                st.fx, st.fy, st.fz,
+                                                params, dt, st.Ekin, st.dU)
+            else
+                LangevinIntegrators.baoab_B_3d!(st.vx, st.vy, st.vz,
+                                                st.fx, st.fy, st.fz,
+                                                st.mass_particle::CuArray{T,1},
+                                                st.inv_mass_particle::CuArray{T,1},
+                                                params, dt, st.Ekin, st.dU)
+            end
         else
-            LangevinIntegrators.baoab_B_2d!(st.vx, st.vy,
-                                            st.fx, st.fy,
-                                            params, dt, st.Ekin, st.dU)
+            if st.mass_particle === nothing
+                LangevinIntegrators.baoab_B_2d!(st.vx, st.vy,
+                                                st.fx, st.fy,
+                                                params, dt, st.Ekin, st.dU)
+            else
+                LangevinIntegrators.baoab_B_2d!(st.vx, st.vy,
+                                                st.fx, st.fy,
+                                                st.mass_particle::CuArray{T,1},
+                                                st.inv_mass_particle::CuArray{T,1},
+                                                params, dt, st.Ekin, st.dU)
+            end
         end
     else
         throw(ArgumentError("Unsupported stage $(stage_tag) for BAOAB-family integrator."))
@@ -761,13 +870,29 @@ function execute_integrator_stage!(spec::BAOASpec{T},
 
     if stage_tag === :B1
         if _is_3d(st)
-            LangevinIntegrators.baoab_B_3d!(st.vx, st.vy, st.vz,
-                                            st.f0x, st.f0y, st.f0z,
-                                            params, T(2) * dt, st.Ekin, st.dU)
+            if st.mass_particle === nothing
+                LangevinIntegrators.baoab_B_3d!(st.vx, st.vy, st.vz,
+                                                st.f0x, st.f0y, st.f0z,
+                                                params, T(2) * dt, st.Ekin, st.dU)
+            else
+                LangevinIntegrators.baoab_B_3d!(st.vx, st.vy, st.vz,
+                                                st.f0x, st.f0y, st.f0z,
+                                                st.mass_particle::CuArray{T,1},
+                                                st.inv_mass_particle::CuArray{T,1},
+                                                params, T(2) * dt, st.Ekin, st.dU)
+            end
         else
-            LangevinIntegrators.baoab_B_2d!(st.vx, st.vy,
-                                            st.f0x, st.f0y,
-                                            params, T(2) * dt, st.Ekin, st.dU)
+            if st.mass_particle === nothing
+                LangevinIntegrators.baoab_B_2d!(st.vx, st.vy,
+                                                st.f0x, st.f0y,
+                                                params, T(2) * dt, st.Ekin, st.dU)
+            else
+                LangevinIntegrators.baoab_B_2d!(st.vx, st.vy,
+                                                st.f0x, st.f0y,
+                                                st.mass_particle::CuArray{T,1},
+                                                st.inv_mass_particle::CuArray{T,1},
+                                                params, T(2) * dt, st.Ekin, st.dU)
+            end
         end
     elseif stage_tag === :A1 || stage_tag === :A2
         if _is_3d(st)
@@ -789,13 +914,27 @@ function execute_integrator_stage!(spec::BAOASpec{T},
     elseif stage_tag === :O
         _prepare_langevin_noise!(params, ws, st, dt)
         if _is_3d(st)
-            LangevinIntegrators.baoab_OU_3d!(st.vx, st.vy, st.vz,
-                                             ws.rf_x, ws.rf_y, ws.rf_z,
-                                             params, dt, st.dq)
+            if st.inv_mass_particle === nothing
+                LangevinIntegrators.baoab_OU_3d!(st.vx, st.vy, st.vz,
+                                                 ws.rf_x, ws.rf_y, ws.rf_z,
+                                                 params, dt, st.dq)
+            else
+                LangevinIntegrators.baoab_OU_3d!(st.vx, st.vy, st.vz,
+                                                 ws.rf_x, ws.rf_y, ws.rf_z,
+                                                 st.inv_mass_particle::CuArray{T,1},
+                                                 params, dt, st.dq)
+            end
         else
-            LangevinIntegrators.baoab_OU_2d!(st.vx, st.vy,
-                                             ws.rf_x, ws.rf_y,
-                                             params, dt, st.dq)
+            if st.inv_mass_particle === nothing
+                LangevinIntegrators.baoab_OU_2d!(st.vx, st.vy,
+                                                 ws.rf_x, ws.rf_y,
+                                                 params, dt, st.dq)
+            else
+                LangevinIntegrators.baoab_OU_2d!(st.vx, st.vy,
+                                                 ws.rf_x, ws.rf_y,
+                                                 st.inv_mass_particle::CuArray{T,1},
+                                                 params, dt, st.dq)
+            end
         end
     elseif stage_tag === :force
         evaluate_forces_into_f!(st, compute_energy; freeze_spring=freeze_spring)
@@ -811,13 +950,29 @@ function execute_integrator_stage!(spec::BAOASpec{T},
         end
     elseif stage_tag === :kinetic_refresh
         if _is_3d(st)
-            LangevinIntegrators.baoab_B_3d!(st.vx, st.vy, st.vz,
-                                            st.fx, st.fy, st.fz,
-                                            params, T(0), st.Ekin, st.dU)
+            if st.mass_particle === nothing
+                LangevinIntegrators.baoab_B_3d!(st.vx, st.vy, st.vz,
+                                                st.fx, st.fy, st.fz,
+                                                params, T(0), st.Ekin, st.dU)
+            else
+                LangevinIntegrators.baoab_B_3d!(st.vx, st.vy, st.vz,
+                                                st.fx, st.fy, st.fz,
+                                                st.mass_particle::CuArray{T,1},
+                                                st.inv_mass_particle::CuArray{T,1},
+                                                params, T(0), st.Ekin, st.dU)
+            end
         else
-            LangevinIntegrators.baoab_B_2d!(st.vx, st.vy,
-                                            st.fx, st.fy,
-                                            params, T(0), st.Ekin, st.dU)
+            if st.mass_particle === nothing
+                LangevinIntegrators.baoab_B_2d!(st.vx, st.vy,
+                                                st.fx, st.fy,
+                                                params, T(0), st.Ekin, st.dU)
+            else
+                LangevinIntegrators.baoab_B_2d!(st.vx, st.vy,
+                                                st.fx, st.fy,
+                                                st.mass_particle::CuArray{T,1},
+                                                st.inv_mass_particle::CuArray{T,1},
+                                                params, T(0), st.Ekin, st.dU)
+            end
         end
     else
         throw(ArgumentError("Unsupported stage $(stage_tag) for $(integrator_name(spec))."))

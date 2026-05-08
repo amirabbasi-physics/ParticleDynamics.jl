@@ -109,6 +109,7 @@ function build_tiny2d(;
     temperature::Real=T(1),
     noise_corr_time::Union{Nothing,Real,AbstractVector{<:Real}}=nothing,
     dt::Real=T(1e-3),
+    mass::Union{AbstractVector{<:Real},Real}=T(1),
     nonbonded::Symbol=:lj,
     precision::Symbol=(T == Float64 ? :f64 : :f32),
     unwrapped_positions::Bool=false,
@@ -116,7 +117,7 @@ function build_tiny2d(;
     st = SimulationCore.build_simulation(
         N=N, box=box, cutoff=cutoff, skin=skin, cap=cap, neigh_interval=neigh_interval,
         use_neighborlist=use_neighborlist, epsilon=epsilon, sigma=sigma, gamma=gamma,
-        temperature=temperature, dt=dt,
+        temperature=temperature, dt=dt, mass=mass,
         nonbonded=nonbonded, precision=precision, unwrapped_positions=unwrapped_positions,
     )
     rx, ry = _grid_positions_2d(N, T)
@@ -144,6 +145,7 @@ function build_tiny3d(;
     temperature::Real=T(1),
     noise_corr_time::Union{Nothing,Real,AbstractVector{<:Real}}=nothing,
     dt::Real=T(1e-3),
+    mass::Union{AbstractVector{<:Real},Real}=T(1),
     nonbonded::Symbol=:lj,
     precision::Symbol=(T == Float64 ? :f64 : :f32),
     unwrapped_positions::Bool=false,
@@ -151,7 +153,7 @@ function build_tiny3d(;
     st = SimulationCore.build_simulation(
         N=N, box=box, cutoff=cutoff, skin=skin, cap=cap, neigh_interval=neigh_interval,
         use_neighborlist=use_neighborlist, epsilon=epsilon, sigma=sigma, gamma=gamma,
-        temperature=temperature, dt=dt,
+        temperature=temperature, dt=dt, mass=mass,
         nonbonded=nonbonded, precision=precision, unwrapped_positions=unwrapped_positions,
     )
     rx, ry, rz = _grid_positions_3d(N, T)

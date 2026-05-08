@@ -102,15 +102,10 @@ function _workflow_validate_mass_model!(sim)
     methods = hasproperty(sim.integrator, :methods) ? sim.integrator.methods : Method[]
     isempty(methods) && return nothing
     scheme = _normalize_scheme(sim.integrator.scheme, methods)
-    if all(method -> method isa ConstantVolume, methods)
+    if all(method -> method isa ConstantVolume, methods) || _scheme_family(scheme) == :langevin
         _workflow_has_explicit_nonpositive_masses(sim.system) ||
             return nothing
-        throw(ArgumentError("ConstantVolume molecular dynamics requires strictly positive particle masses. Zero masses are only supported for Brownian dynamics, where masses are ignored."))
-    end
-    if _scheme_family(scheme) == :langevin
-        _workflow_mass(sim.system, Float64) isa AbstractVector ||
-            return nothing
-        throw(ArgumentError("Workflow Langevin and active-OU integrators currently support only uniform particle masses. Heterogeneous masses are supported for ConstantVolume molecular dynamics and ignored in Brownian dynamics."))
+        throw(ArgumentError("Inertial MD and Langevin dynamics require strictly positive particle masses. Zero masses are only supported for Brownian dynamics, where masses are ignored."))
     end
     get(sim.metadata, :workflow_warned_brownian_masses_ignored, false) && return nothing
     all(method -> method isa Union{Brownian,ActiveOrnsteinUhlenbeck}, methods) || return nothing
