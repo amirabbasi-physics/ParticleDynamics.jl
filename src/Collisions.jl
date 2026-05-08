@@ -516,7 +516,7 @@ function enable_collision_counting!(st; ntypes::Union{Nothing,Int}=nothing, bins
     st.coll_counts = CUDA.fill(Int64(0), nbins)
 
     # Allocate contact_prev with current neighbor capacity
-    neighbors_flat = (st.nbh::NeighborLists.NeighborMatrix).neighbors_flat
+    neighbors_flat = _collision_neighbor_matrix(st.nbh).neighbors_flat
     st.coll_prev = CUDA.fill(UInt8(0), length(neighbors_flat))
     st.coll_enabled = true
 
@@ -524,6 +524,12 @@ function enable_collision_counting!(st; ntypes::Union{Nothing,Int}=nothing, bins
     # does not register pre-existing overlaps as entries.
     _collisions_reinit_on_rebuild!(st)
     return st
+end
+
+@inline _collision_neighbor_matrix(nb::NeighborLists.NeighborMatrix) = nb
+@inline _collision_neighbor_matrix(nb::NeighborLists.StencilNeighborMatrix) = nb
+function _collision_neighbor_matrix(nb)
+    throw(ArgumentError("Collision counting requires a neighbor-list-backed simulation state; got $(typeof(nb))."))
 end
 
 """
@@ -590,8 +596,7 @@ Called when the neighbor list is rebuilt. Resizes and reinitializes
 function _collisions_reinit_on_rebuild!(st)
     T = eltype(st.rx)
     if !st.coll_enabled; return; end
-    @assert st.nbh isa NeighborLists.NeighborMatrix "Collision counting currently requires NeighborMatrix"
-    nb = (st.nbh::NeighborLists.NeighborMatrix{T})
+    nb = _collision_neighbor_matrix(st.nbh)
     # Ensure coll_prev matches neighbors_flat length
     if (st.coll_prev === nothing) || (length(st.coll_prev) != length(nb.neighbors_flat))
         st.coll_prev = CUDA.fill(UInt8(0), length(nb.neighbors_flat))
@@ -633,8 +638,7 @@ has been performed. Detects entry events and increments per-bin counters.
 function _collisions_update_after_positions!(st)
     T = eltype(st.rx)
     if !st.coll_enabled; return; end
-    @assert st.nbh isa NeighborLists.NeighborMatrix "Collision counting currently requires NeighborMatrix"
-    nb = (st.nbh::NeighborLists.NeighborMatrix{T})
+    nb = _collision_neighbor_matrix(st.nbh)
     N = length(st.rx)
     threads = min(256, N)
     blocks = cld(N, threads)

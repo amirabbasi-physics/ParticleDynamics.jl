@@ -3,7 +3,7 @@ name: CI (GPU self-hosted)
 on:
   workflow_dispatch:
   push:
-    branches: ["main"]
+    branches: ["master"]
   pull_request:
 
 jobs:
@@ -36,6 +36,4 @@ jobs:
         run: julia --project=docs -e 'using Pkg; Pkg.instantiate(); include("docs/make.jl")'
 
       - name: Run example smoke subset
-        env:
-          NEQSIM_SMOKE_FAST: "1"
         run: julia --project scripts/examples_smoke.jl

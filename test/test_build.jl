@@ -1,6 +1,11 @@
 @testset "Build and State Layout" begin
     seed_all!(0xB1001)
 
+    @test ParticleDynamics.SimulationState === SimulationCore.SimulationState
+    @test ParticleDynamics.build_simulation === SimulationCore.build_simulation
+    @test ParticleDynamics.Backends.normalize_backend(:cuda) isa ParticleDynamics.Backends.CUDABackend
+    @test ParticleDynamics.Backends.storage_backend(CUDA.zeros(Float32, 1)) isa ParticleDynamics.Backends.CUDABackend
+
     st2 = build_tiny2d(N=9, T=Float32, nonbonded=:wca, unwrapped_positions=true)
     @test st2.rz === nothing
     @test st2.vz === nothing
@@ -9,7 +14,7 @@
     @test st2.box3 === nothing
     @test st2.rx_unwrap !== nothing
     @test st2.ry_unwrap !== nothing
-    Simulation.sync_unwrapped!(st2)
+    SimulationCore.sync_unwrapped!(st2)
     @test msd_2d(st2.rx, st2.ry, st2.rx_unwrap, st2.ry_unwrap) <= 1e-12
 
     st3 = build_tiny3d(N=8, T=Float32, nonbonded=:lj, unwrapped_positions=true)
@@ -19,21 +24,43 @@
     @test st3.box2 === nothing
     @test st3.box3 !== nothing
     @test st3.rz_unwrap !== nothing
-    Simulation.sync_unwrapped!(st3)
+    SimulationCore.sync_unwrapped!(st3)
     @test msd_3d(st3.rx, st3.ry, st3.rz, st3.rx_unwrap, st3.ry_unwrap, st3.rz_unwrap) <= 1e-12
 
     st_dense = build_tiny2d(N=8, T=Float32, use_neighborlist=true)
     @test st_dense.nbh isa ParticleDynamics.NeighborLists.NeighborMatrix{Float32}
+    @test SimulationCore.backend(st_dense) isa ParticleDynamics.Backends.CUDABackend
+    @test ParticleDynamics.Backends.storage_backend(st_dense) isa ParticleDynamics.Backends.CUDABackend
+    @test ParticleDynamics.Backends.storage_backend(st_dense.rx) isa ParticleDynamics.Backends.CUDABackend
+    @test ParticleDynamics.Backends.storage_backend(st_dense.Epot) isa ParticleDynamics.Backends.CUDABackend
 
     st_allpairs = build_tiny2d(N=8, T=Float32, use_neighborlist=false)
     @test st_allpairs.nbh isa ParticleDynamics.NeighborLists.AllPairsNeighborMatrix{Float32}
+
+    st_explicit = SimulationCore.build_simulation(
+        N=8, box=(20f0, 20f0), cutoff=2.5f0, skin=0.3f0, cap=Int32(32), neigh_interval=5,
+        epsilon=1f0, sigma=1f0, gamma=1f0, temperature=1f0, backend=:cuda
+    )
+    @test st_explicit.rx isa CuArray{Float32,1}
+    @test SimulationCore.backend(st_explicit) isa ParticleDynamics.Backends.CUDABackend
+
+    st_object = SimulationCore.build_simulation(
+        N=8, box=(20f0, 20f0), cutoff=2.5f0, skin=0.3f0, cap=Int32(32), neigh_interval=5,
+        epsilon=1f0, sigma=1f0, gamma=1f0, temperature=1f0,
+        backend=ParticleDynamics.Backends.CUDABackend()
+    )
+    @test st_object.rx isa CuArray{Float32,1}
+    @test_throws ArgumentError SimulationCore.build_simulation(
+        N=8, box=(20f0, 20f0), cutoff=2.5f0, skin=0.3f0, cap=Int32(32), neigh_interval=5,
+        epsilon=1f0, sigma=1f0, gamma=1f0, temperature=1f0, backend=:cpu
+    )
 end
 
 @testset "WCA cutoff override" begin
     seed_all!(0xB1002)
 
     sigma = 1.3f0
-    st = Simulation.build_simulation(
+    st = SimulationCore.build_simulation(
         N=32, box=(20f0, 20f0), cutoff=2.5f0, skin=0.3f0, cap=Int32(32), neigh_interval=5,
         epsilon=0.5f0, sigma=sigma, gamma=1f0, temperature=1f0, nonbonded=:wca
     )

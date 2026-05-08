@@ -2,7 +2,7 @@ using Test
 using Random
 using CUDA
 using ParticleDynamics
-using ParticleDynamics: Simulation, BrownianIntegrators, LangevinIntegrators, Filters
+using ParticleDynamics: SimulationCore, BrownianIntegrators, LangevinIntegrators, Filters
 
 CUDA.allowscalar(false)
 
@@ -19,8 +19,21 @@ using .ParamsFromExamples
     else
         seed_all!(0xBADC0DE)
         include("test_api.jl")
+        include("test_workflow_system.jl")
+        include("test_workflow_groups.jl")
+        include("test_workflow_forces.jl")
+        include("test_workflow_integrators.jl")
+        include("test_workflow_observables.jl")
+        include("test_workflow_writers.jl")
+        include("test_workflow_runloop.jl")
+        include("test_workflow_api.jl")
+        include("test_workflow_examples_smoke.jl")
         include("test_build.jl")
+        include("test_particle_groups.jl")
+        include("test_thermostats.jl")
         include("test_forces.jl")
+        include("test_gpu_residency.jl")
+        include("test_nonbonded_interface.jl")
         include("test_bonded_exclusions.jl")
         include("test_phase4a_forces.jl")
         include("test_phase4a_pair_pbc.jl")

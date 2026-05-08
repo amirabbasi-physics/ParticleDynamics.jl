@@ -4,34 +4,14 @@ version = "0.4.0"
 authors = ["abbaa90 <abbaa90@fu-berlin.de> and contributors"]
 
 [deps]
-BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
-CSV = "336ed68f-0bac-5ca0-87d4-7b16caf5d00b"
 CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
-DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
-DelimitedFiles = "8bb1440f-4735-579b-a4ab-409b98df4dab"
-Distributed = "8ba89e20-285c-5b6f-9357-94700520ee1b"
-FileIO = "5789e2e9-d7fb-5bc7-8068-2c6fae9b9549"
 GSDFiles = "64a8acd3-9415-46af-9ee4-f25c25bec2f1"
-JLD2 = "033835bb-8acc-5ee8-8aae-3f567f8a3819"
-LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
-LsqFit = "2fda8390-95c7-5789-9bda-21331edee243"
-Plots = "91a5bcdd-55d7-5caf-9e0b-520d859cae80"
 Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
-ProgressMeter = "92933f4c-e287-5a05-a399-4b506db050ca"
-PyPlot = "d330b81b-6aea-500a-939a-2ce795aea3ee"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
-StatsBase = "2913bbd2-ae8a-5f71-8c99-4fb6c76f3a91"
-Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [compat]
 GSDFiles = "0.1, 0.2"
-JLD2 = "0.6.3"
-LsqFit = "0.15.1"
-Plots = "1.41.6"
-ProgressMeter = "1.11.0"
-PyPlot = "2.11.6"
-StatsBase = "0.34.10"
 julia = "1.7"
 
 [extras]

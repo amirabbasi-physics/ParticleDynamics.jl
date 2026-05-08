@@ -6,8 +6,8 @@
             N=8, T=Float32, box=(10f0, 10f0), cutoff=2.5f0, skin=0.3f0, cap=Int32(16),
             neigh_interval=5, gamma=1f0, temperature=1f0, noise_corr_time=0.05f0
         )
-        spec = Simulation.eulerheun(st; gamma=1f0, temperature=1f0, noise_corr_time=0.05f0, dt=dt)
-        Simulation.ensure_integrator_workspace!(spec, st)
+        spec = SimulationCore.eulerheun(st; gamma=1f0, temperature=1f0, noise_corr_time=0.05f0, dt=dt)
+        SimulationCore.ensure_integrator_workspace!(spec, st)
         bp = spec.params
         @test bp.corr_time !== nothing
         spec.params = Filters.set_corr_time!(bp, 0.2f0)
@@ -36,15 +36,15 @@
 
         rx0 = copy(st.rx)
         ry0 = copy(st.ry)
-        eh = Simulation.eulerheun(st; gamma=1f0, temperature=1f0, dt=dt)
-        Simulation.step!(st, eh, dt; compute_energy=true)
+        eh = SimulationCore.eulerheun(st; gamma=1f0, temperature=1f0, dt=dt)
+        SimulationCore.step!(st, eh, dt; compute_energy=true)
         @test state_allfinite(st)
         @test msd_2d(rx0, ry0, st.rx, st.ry) > 0.0
 
         rx1 = copy(st.rx)
         ry1 = copy(st.ry)
-        em = Simulation.eulermaruyama(st; gamma=1f0, temperature=1f0, dt=dt)
-        Simulation.step!(st, em, dt; compute_energy=true)
+        em = SimulationCore.eulermaruyama(st; gamma=1f0, temperature=1f0, dt=dt)
+        SimulationCore.step!(st, em, dt; compute_energy=true)
         @test state_allfinite(st)
         @test msd_2d(rx1, ry1, st.rx, st.ry) > 0.0
     end
@@ -66,8 +66,8 @@
         rx_shift = Float32[-2, 2.25]
         copyto!(st.rx, rx_shift)
 
-        em = Simulation.eulermaruyama(st; gamma=1f0, temperature=0f0, dt=dt)
-        Simulation.step!(st, em, dt; compute_energy=true)
+        em = SimulationCore.eulermaruyama(st; gamma=1f0, temperature=0f0, dt=dt)
+        SimulationCore.step!(st, em, dt; compute_energy=true)
 
         rx_now = Array(st.rx)
         ry_now = Array(st.ry)

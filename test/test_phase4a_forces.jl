@@ -4,6 +4,9 @@
     lj_force_x(dx, r, eps, sig) = 24 * eps * (2 * (sig / r)^12 - (sig / r)^6) * (dx / (r * r))
     wca_rc(sig) = (2.0)^(1.0 / 6.0) * sig
     soft_force_x(dx, r, eps, sig) = (eps / sig) * (1 - r / sig) * (dx / r)
+    lj_energy(r, eps, sig) = 4 * eps * ((sig / r)^12 - (sig / r)^6)
+    wca_energy(r, eps, sig) = (r < wca_rc(sig)) ? (lj_energy(r, eps, sig) + eps) : 0.0
+    soft_energy(r, eps, sig) = (r < sig) ? (0.5 * eps * (1 - r / sig)^2) : 0.0
 
     function compute_pair_fx(;
         nonbonded::Symbol,
@@ -45,6 +48,7 @@
             fx2=Float64(fx_host[2]),
             fy_sum=Float64(CUDA.sum(st.fy)),
             fx_sum=Float64(CUDA.sum(st.fx)),
+            epot=Float64(CUDA.sum(st.Epot)),
             dx=(x1 - x2),
         )
     end
@@ -55,7 +59,9 @@
         for r in (0.95 * sig, 1.5 * sig)
             out = compute_pair_fx(nonbonded=:lj, r=r, eps=eps, sig=sig)
             fref = lj_force_x(out.dx, r, eps, sig)
+            eref = lj_energy(r, eps, sig)
             @test isapprox(out.fx1, fref; rtol=1e-11, atol=1e-11)
+            @test isapprox(out.epot, eref; rtol=1e-11, atol=1e-11)
             @test isapprox(out.fx1, -out.fx2; rtol=1e-12, atol=1e-12)
             @test abs(out.fx_sum) <= 1e-12
             @test abs(out.fy_sum) <= 1e-12
@@ -73,7 +79,9 @@
         r_in = 0.9 * sig
         out_in = compute_pair_fx(nonbonded=:wca, r=r_in, eps=eps, sig=sig)
         fref_in = lj_force_x(out_in.dx, r_in, eps, sig)
+        eref_in = wca_energy(r_in, eps, sig)
         @test isapprox(out_in.fx1, fref_in; rtol=1e-11, atol=1e-11)
+        @test isapprox(out_in.epot, eref_in; rtol=1e-11, atol=1e-11)
         @test out_in.fx1 < 0.0
         @test isapprox(out_in.fx1, -out_in.fx2; rtol=1e-12, atol=1e-12)
         @test abs(out_in.fx_sum) <= 1e-12
@@ -83,6 +91,7 @@
         out_out = compute_pair_fx(nonbonded=:wca, r=r_out, eps=eps, sig=sig)
         @test abs(out_out.fx1) <= 1e-12
         @test abs(out_out.fx2) <= 1e-12
+        @test abs(out_out.epot) <= 1e-12
         @test abs(out_out.fx_sum) <= 1e-12
     end
 
@@ -92,7 +101,9 @@
         r_in = 0.8 * sig
         out_in = compute_pair_fx(nonbonded=:soft_repulsive, r=r_in, eps=eps, sig=sig)
         fref_in = soft_force_x(out_in.dx, r_in, eps, sig)
+        eref_in = soft_energy(r_in, eps, sig)
         @test isapprox(out_in.fx1, fref_in; rtol=1e-11, atol=1e-11)
+        @test isapprox(out_in.epot, eref_in; rtol=1e-11, atol=1e-11)
         @test out_in.fx1 < 0.0
         @test isapprox(out_in.fx1, -out_in.fx2; rtol=1e-12, atol=1e-12)
         @test abs(out_in.fx_sum) <= 1e-12
@@ -102,6 +113,7 @@
         out_out = compute_pair_fx(nonbonded=:soft_repulsive, r=r_out, eps=eps, sig=sig)
         @test abs(out_out.fx1) <= 1e-12
         @test abs(out_out.fx2) <= 1e-12
+        @test abs(out_out.epot) <= 1e-12
         @test abs(out_out.fx_sum) <= 1e-12
     end
 end

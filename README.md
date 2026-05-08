@@ -1,32 +1,32 @@
 # ParticleDynamics.jl
 
-`ParticleDynamics.jl` is a GPU-only Julia package for non-equilibrium particle simulations
-using `CUDA.jl`. It provides Langevin and Brownian dynamics integrators,
-neighbor-list backends, nonbonded/bonded force models, collision counting, and
-XYZ/CSV/GSD writers.
+`ParticleDynamics.jl` is a GPU-first Julia package for non-equilibrium particle
+simulations on `CUDA.jl`. It provides a high-level workflow API for building a
+particle system, attaching forces and methods, sampling observables, writing
+outputs, and running staged simulations without hand-written timestep loops.
 
-The package is designed for production GPU workflows and verification-oriented
-testing. Core simulation behavior is validated with deterministic force checks,
-backend parity checks, and stochastic moment-based physics tests.
+The existing low-level engine remains available for expert workflows and tests.
+That surface is centered on `build_simulation`, `step!`, integrator builders,
+and `ParticleDynamics.SimulationCore`.
 
 ## GPU requirement
 
-This package requires a functional CUDA environment.
+This package currently targets CUDA-backed simulations.
 
 ```julia
 using CUDA
 CUDA.functional() || error("ParticleDynamics requires CUDA.functional() == true")
 ```
 
-No CPU fallback simulation path is provided.
+There is no production CPU simulation backend yet.
 
 ## Installation
 
-### Add from GitHub
+### Add from a git URL
 
 ```julia
 using Pkg
-Pkg.add(url="https://github.com/ORG_OR_USER/ParticleDynamics.jl")
+Pkg.add(url="<git-url-to-ParticleDynamics.jl>")
 ```
 
 ### Develop locally
@@ -37,58 +37,96 @@ Pkg.develop(path="/path/to/ParticleDynamics")
 Pkg.instantiate()
 ```
 
-## Minimal quickstart (GPU)
+## Quickstart
+
+The recommended public workflow is:
+
+- `ParticleSystem` holds positions, types, box, masses, velocities, and topology.
+- `Group` and `Groups` define particle selections.
+- `Force` objects describe interactions.
+- `Integrator` owns `dt`, the scheme, attached forces, and methods.
+- `Observable` objects compute sampled quantities.
+- `Writer` objects own output files and schedules.
+- `Stage` describes a named block of running.
+- `Simulation` owns the assembled workflow and `run!` owns the timestep loop.
 
 ```julia
 using ParticleDynamics
-using CUDA
 
-N = 64
-dt = 2.0f-4
-sigma = 1.0f0
-rcut = Float32(2^(1/6)) * sigma
+N = 128
+cfg = hex_random_2d(N, 1.0f0, 0.25f0; T=Float32)
+typeids = fill(Int32(1), N)
 
-st = build_simulation(
-    N=N,
-    box=(40.0f0, 40.0f0),
-    cutoff=rcut,
-    skin=0.4f0,
-    cap=Int32(32),
-    neigh_interval=10,
-    epsilon=10.0f0,
-    sigma=sigma,
-    gamma=50.0f0,
-    temperature=1.0f0,
-    nonbonded=:wca,
-    precision=:f32,
+system = ParticleSystem(
+    cfg;
+    types=[:A],
+    typeids=typeids,
+    masses=Dict(:A => 1.0f0),
 )
 
-vv = velocityverlet(st; gamma=50.0f0, temperature=1.0f0, dt=dt)
+all = Group(:all, AllSelection())
+groups = Groups(all)
 
-for _ in 1:200
-    step!(st, vv, dt; compute_energy=false)
-end
+force = WCA(
+    epsilon=10.0f0,
+    sigma=1.0f0,
+    cutoff=Float32(2^(1 / 6)),
+    pairs=:all,
+)
 
-@show st.step
+integrator = Integrator(
+    dt=2.0f-4,
+    scheme=VelocityVerlet(),
+    forces=[force],
+    methods=[Langevin(all; gamma=50.0f0, kT=1.0f0)],
+)
+
+thermo = ThermodynamicObservable(all; name=:thermo)
+
+sim = Simulation(
+    system;
+    groups=groups,
+    integrator=integrator,
+    observables=[thermo],
+    writers=[
+        TableWriter(
+            "obs.csv";
+            every=50,
+            observables=[thermo => [:temperature, :kinetic_energy, :potential_energy]],
+            mode=:replace,
+        ),
+        GSDWriter("traj.gsd"; every=200, group=all, write_start=true, mode=:replace),
+    ],
+    precision=Float32,
+    seed=0xC9A319,
+)
+
+run!(sim, Stage(:warmup, steps=200; dt=1.0f-4, neighbor_rebuild_interval=1))
+reset_observables!(sim)
+reset_step!(sim, 0)
+run!(sim, Stage(:production, steps=1_000))
 ```
 
-## Running tests (GPU machine)
+## Low-level / expert API
 
-```bash
-julia --project -e 'using Pkg; Pkg.instantiate(); Pkg.test()'
-```
+The workflow API is the recommended interface for normal scripts and examples.
+The following exports are still supported for expert users who want direct
+control over GPU buffers and stepping:
 
-## Documentation
+- `SimulationState`, `build_simulation`, `step!`, `step_graph!`
+- `velocityverlet`, `baoab`, `baoa`, `gsm`, `eulerheun`, `eulermaruyama`, `nosehooverchain`, `csvr`
+- `collect_step_observables`, `reset_bath_exchange_accumulators!`
+- `gsd_open`, `gsd_close`, `write_gsd_frame!`, `read_gsd_frame!`
+- `Filters`, `ParticleGroups`, and `ParticleDynamics.SimulationCore`
 
-Build docs locally:
+Use that surface when you need custom orchestration, kernel debugging, or very
+fine-grained control that the workflow facade intentionally hides.
 
-```bash
-julia --project=docs -e 'using Pkg; Pkg.instantiate(); include("docs/make.jl")'
-```
+## Examples
 
-Docs site placeholder: `https://ORG_OR_USER.github.io/ParticleDynamics.jl/`
-
-## Example smoke run
+Normal examples in [`examples/`](examples) use the high-level workflow API.
+Helper files beginning with `_` are support code and are not meant to be run
+directly.
 
 ```bash
 julia --project scripts/examples_smoke.jl
@@ -100,20 +138,34 @@ Optional heavier smoke case:
 NEQSIM_SMOKE_HEAVY=1 julia --project scripts/examples_smoke.jl
 ```
 
-For full local GPU CI bundle:
+## Documentation
+
+Build docs locally:
 
 ```bash
-bash scripts/ci_gpu_local.sh
+julia --project=docs -e 'using Pkg; Pkg.instantiate(); include("docs/make.jl")'
 ```
 
-## Known limitations
+The docs now distinguish:
 
-- GPU-only package; simulation requires CUDA.
-- Bitwise-identical trajectories are not guaranteed across GPUs/toolchains.
-- Statistical reproducibility should be evaluated via moments/summary statistics.
-- `gamma > 0` is required for stochastic integrator paths that divide by friction
-  (BAOAB, Brownian midpoint, Euler-Maruyama).
-- Supported simulation dimensions are 2D and 3D.
+- workflow-first onboarding in `docs/src/quickstart.md`
+- low-level expert material under `docs/src/manual/`
+
+## Running tests
+
+```bash
+julia --project -e 'using Pkg; Pkg.instantiate(); Pkg.test()'
+```
+
+## Current limitations
+
+- CUDA is the main supported backend.
+- Angles, dihedrals, impropers, electrostatics, and broader force-field terms
+  are future work unless explicitly implemented in the current low-level engine.
+- `ForceField` is a future-compatible container, but compiled support is still
+  limited to the force families already backed by the existing kernels.
+- Bitwise-identical trajectories are not guaranteed across GPUs or toolchains;
+  reproducibility should be judged at the statistical level.
 
 ## Citation
 

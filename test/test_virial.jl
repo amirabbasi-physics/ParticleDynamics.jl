@@ -1,4 +1,4 @@
-using ParticleDynamics: Simulation, accumulate_virial!, virial_components, virial_tensor, harmonic_bond, fene_bond
+using ParticleDynamics: SimulationCore, accumulate_virial!, virial_components, virial_tensor, harmonic_bond, fene_bond
 
 @testset "Configurational Virial" begin
     seed_all!(0xC0FFEE)
@@ -125,15 +125,15 @@ using ParticleDynamics: Simulation, accumulate_virial!, virial_components, viria
         gamma = one(T)
         temperature = zero(T)
         if mode == :vv
-            Simulation.step!(st, Simulation.velocityverlet(st; gamma=gamma, temperature=temperature, dt=dtT), dtT; compute_energy=true)
+            SimulationCore.step!(st, SimulationCore.velocityverlet(st; gamma=gamma, temperature=temperature, dt=dtT), dtT; compute_energy=true)
         elseif mode == :baoa
-            Simulation.step!(st, Simulation.baoa(st; gamma=gamma, temperature=temperature, dt=dtT), dtT; compute_energy=true)
+            SimulationCore.step!(st, SimulationCore.baoa(st; gamma=gamma, temperature=temperature, dt=dtT), dtT; compute_energy=true)
         elseif mode == :baoab
-            Simulation.step!(st, Simulation.baoab(st; gamma=gamma, temperature=temperature, dt=dtT), dtT; compute_energy=true)
+            SimulationCore.step!(st, SimulationCore.baoab(st; gamma=gamma, temperature=temperature, dt=dtT), dtT; compute_energy=true)
         elseif mode == :eh
-            Simulation.step!(st, Simulation.eulerheun(st; gamma=gamma, temperature=temperature, dt=dtT), dtT; compute_energy=true)
+            SimulationCore.step!(st, SimulationCore.eulerheun(st; gamma=gamma, temperature=temperature, dt=dtT), dtT; compute_energy=true)
         elseif mode == :em
-            Simulation.step!(st, Simulation.eulermaruyama(st; gamma=gamma, temperature=temperature, dt=dtT), dtT; compute_energy=true)
+            SimulationCore.step!(st, SimulationCore.eulermaruyama(st; gamma=gamma, temperature=temperature, dt=dtT), dtT; compute_energy=true)
         else
             error("unknown refresh mode $(mode)")
         end
@@ -184,7 +184,7 @@ using ParticleDynamics: Simulation, accumulate_virial!, virial_components, viria
         T = Float64
         k = T(7)
         r0 = T(1.1)
-        st = Simulation.build_simulation(
+        st = SimulationCore.build_simulation(
             N=2,
             box=(T(12), T(12)),
             cutoff=T(2.5),
@@ -276,7 +276,7 @@ using ParticleDynamics: Simulation, accumulate_virial!, virial_components, viria
         T = Float64
         k = T(9)
         R0 = T(1.8)
-        st = Simulation.build_simulation(
+        st = SimulationCore.build_simulation(
             N=2,
             box=(T(14), T(14), T(14)),
             cutoff=T(2.5),

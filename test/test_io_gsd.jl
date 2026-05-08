@@ -79,7 +79,7 @@ using GSDFiles
             neigh_interval=1, use_neighborlist=true, nonbonded=:wca, gamma=1f0, temperature=0f0
         )
 
-        vv = Simulation.velocityverlet(st; gamma=1f0, temperature=0f0, dt=1f-4)
+        vv = SimulationCore.velocityverlet(st; gamma=1f0, temperature=0f0, dt=1f-4)
         step!(st, vv, 1f-4; compute_energy=true)
         expected_virial = Array(st.virial_tensor)
 

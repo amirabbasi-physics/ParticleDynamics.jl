@@ -1,12 +1,17 @@
-# Getting Started
+# Low-Level / Expert API
 
-This page gives a minimal, test-aligned startup path for running `ParticleDynamics` on a CUDA-capable GPU.
+This page documents the older low-level stepping surface built around
+`SimulationState`, `build_simulation`, and explicit integrator specs.
+
+Use this layer when you need direct control over GPU-resident arrays, manual
+stepping, or debugging of execution details. Normal scripts should prefer the
+workflow API shown in the [Quickstart](../quickstart.md).
 
 ## 1) Install and verify CUDA
 
 ```julia
 using Pkg
-Pkg.add(url="https://github.com/<your-org>/ParticleDynamics.jl")  # or local dev path
+Pkg.add(url="<repository-url>")  # or local dev path
 ```
 
 ```julia
@@ -14,12 +19,14 @@ using CUDA
 CUDA.functional() || error("CUDA is not functional on this machine.")
 ```
 
-`ParticleDynamics` is GPU-only: simulation state arrays are `CuArray`s and integrators/forces are implemented for GPU execution.
+`ParticleDynamics` is GPU-only: simulation buffers stay GPU-resident, and the
+current implementation uses CUDA-backed arrays internally.
 
-## 2) First simulation (2D, tiny and fast)
+## 2) First low-level simulation (2D, tiny and fast)
 
 ```julia
-using ParticleDynamics
+using ParticleDynamics: build_simulation, step!, velocityverlet, baoab, eulerheun, eulermaruyama,
+    write_xyz!, write_observables_csv!, gsd_open, gsd_close, write_gsd_frame!
 using CUDA
 
 N = 64
@@ -63,6 +70,10 @@ step!(st, bao, dt; compute_energy=true)
 # Brownian Euler-Maruyama
 em = eulermaruyama(st; gamma=50.0f0, temperature=1.0f0, dt=dt)
 step!(st, em, dt; compute_energy=false)
+
+# Brownian midpoint (Euler-Heun)
+eh = eulerheun(st; gamma=50.0f0, temperature=1.0f0, dt=dt)
+step!(st, eh, dt; compute_energy=false)
 ```
 
 Explicit specs are the stepping API. Stochastic parameters such as `gamma`,
@@ -96,11 +107,14 @@ CUDA.seed!(UInt64(0xBADC0DE))
 This gives reproducible runs at the statistical/moment level.  
 Bitwise-identical trajectories across different GPUs/toolchains are not guaranteed.
 
+Advanced orchestration helpers that are not part of the default import surface
+remain available under qualified paths such as `ParticleDynamics.SimulationCore`.
+
 ## 6) Where to copy realistic parameter sets
 
 Use repository examples as templates:
 
-- `examples/SingleT_2D_LD_VV.jl`
+- `examples/2D_example.jl`
 - `examples/TwoT_2D_LD_BAOAB.jl`
 - `examples/TwoT_2D_BD_EH.jl`
 - `examples/2D_active_OU_brownian.jl`
