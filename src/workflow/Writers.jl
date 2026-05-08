@@ -10,7 +10,7 @@ Abstract workflow output writer.
 abstract type Writer end
 
 """
-    TableWriter(filename; every=nothing, schedule=nothing, observables=[], mode=:replace, delimiter=",", format=:scientific, append=false)
+    TableWriter(filename; every=nothing, schedule=nothing, observables=[], mode=:replace, delimiter=",", format=:scientific, append=false, style=:auto)
 
 Scheduled text-table writer for workflow observables.
 """
@@ -23,6 +23,7 @@ Scheduled text-table writer for workflow observables.
     delimiter::String = ","
     format::Symbol = :scientific
     append::Bool = false
+    style::Symbol = :auto
 end
 
 function TableWriter(filename::AbstractString;
@@ -32,7 +33,8 @@ function TableWriter(filename::AbstractString;
                      mode::Symbol=:replace,
                      delimiter::AbstractString=",",
                      format::Symbol=:scientific,
-                     append::Bool=false)
+                     append::Bool=false,
+                     style::Symbol=:auto)
     return TableWriter(filename=String(filename),
                        every=every,
                        schedule=schedule,
@@ -40,7 +42,8 @@ function TableWriter(filename::AbstractString;
                        mode=mode,
                        delimiter=String(delimiter),
                        format=format,
-                       append=append)
+                       append=append,
+                       style=style)
 end
 
 """
@@ -149,6 +152,7 @@ _writer_append_mode(writer::Writer) = getfield(writer, :append) || getfield(writ
 function _validate_writer(writer::TableWriter)
     writer.mode in (:replace, :append) || throw(ArgumentError("TableWriter mode must be :replace or :append."))
     writer.format in (:scientific, :plain) || throw(ArgumentError("TableWriter format must be :scientific or :plain."))
+    writer.style in (:auto, :csv, :log) || throw(ArgumentError("TableWriter style must be :auto, :csv, or :log."))
     return writer
 end
 
@@ -274,6 +278,143 @@ function _format_table_value(writer::TableWriter, value)
     end
 end
 
+_table_style(writer::TableWriter) =
+    writer.style == :auto ? (endswith(lowercase(writer.filename), ".log") ? :log : :csv) : writer.style
+
+_titleize_label(label::AbstractString) = replace(uppercasefirst(replace(String(label), "_" => " ")), " Msd" => " MSD", " Vacf" => " VACF")
+
+function _workflow_group_name(obs)
+    hasproperty(obs, :group) || return nothing
+    group = getfield(obs, :group)
+    if group isa Group
+        return group.name
+    elseif group isa Symbol
+        return group
+    end
+    return nothing
+end
+
+function _group_suffix(obs)
+    name = _workflow_group_name(obs)
+    name === nothing && return ""
+    name == :all && return ""
+    return " (" * String(name) * ")"
+end
+
+function _log_field_label(obs::ThermodynamicObservable, field::Symbol)
+    suffix = _group_suffix(obs)
+    if field == :temperature
+        return "Temperature" * suffix
+    elseif field == :kinetic_energy
+        return "E_kin" * suffix
+    elseif field == :potential_energy
+        return "E_pot" * suffix
+    elseif field == :total_energy
+        return "E_tot" * suffix
+    elseif field == :virial
+        return "virial" * suffix
+    elseif field == :kinetic_energy_accumulated
+        return "E_kin accum" * suffix
+    elseif field == :potential_energy_accumulated
+        return "E_pot accum" * suffix
+    elseif field == :virial_accumulated
+        return "virial accum" * suffix
+    end
+    return _titleize_label(field) * suffix
+end
+
+_log_field_label(::BathExchangeObservable, field::Symbol) =
+    field == :heat ? "Bath Energy" :
+    field == :entropy ? "Bath Entropy" :
+    field == :entropy_production_rate ? "Entropy Production Rate" :
+    field == :temperature_error ? "Temperature Error" :
+    field == :extended_hamiltonian ? "Extended Hamiltonian" :
+    field == :thermostat_kinetic ? "Thermostat Kinetic" :
+    field == :thermostat_potential ? "Thermostat Potential" :
+    _titleize_label(field)
+
+function _log_field_label(obs::VirialObservable, field::Symbol)
+    suffix = _group_suffix(obs)
+    if field == :virial
+        return "virial" * suffix
+    elseif field == :virial_accumulated
+        return "virial accum" * suffix
+    end
+    return _titleize_label(field) * suffix
+end
+
+function _log_collision_pair_label(pairkey)
+    text = replace(String(pairkey), "_" => "/")
+    return text * " collision rate"
+end
+
+_log_field_label(::CollisionObservable, field::Symbol) =
+    field in (:counts, :rate) ? "collision rate" :
+    field in (:pair_counts, :pair_rates) ? "pair collision rate" :
+    _titleize_label(field)
+
+function _log_field_label(obs::Union{MSDObservable,VACFObservable}, field::Symbol)
+    suffix = _group_suffix(obs)
+    return (
+        field == :msd ? "MSD" * suffix :
+        field == :vacf ? "VACF" * suffix :
+        field == :elapsed_time ? "elapsed time" * suffix :
+        field == :elapsed_steps ? "elapsed steps" * suffix :
+        _titleize_label(field) * suffix
+    )
+end
+
+function _log_format_value(value)
+    if value isa AbstractFloat
+        return @sprintf("%.5e", value)
+    elseif value isa Integer
+        return @sprintf("%.5e", float(value))
+    elseif value isa Real
+        return @sprintf("%.5e", Float64(value))
+    elseif value isa Symbol
+        return String(value)
+    elseif value === nothing
+        return ""
+    else
+        return string(value)
+    end
+end
+
+function _center_text(text::AbstractString, width::Int)
+    pad = max(0, width - length(text))
+    left = pad ÷ 2
+    right = pad - left
+    return repeat(" ", left) * text * repeat(" ", right)
+end
+
+function _log_widths(headers::Vector{String})
+    return [max(length(header), 13) + 2 for header in headers]
+end
+
+function _log_headers_and_values(sim, ctx::PreparedWriter, step::Int)
+    headers = String["Time"]
+    values = Any[step]
+    for req in ctx.requests
+        data = _observable_data(sim, req.observable)
+        for field in req.fields
+            if req.observable isa CollisionObservable && field in (:counts, :rate)
+                push!(headers, _log_field_label(req.observable, field))
+                push!(values, getproperty(data, :rate))
+            elseif req.observable isa CollisionObservable && field in (:pair_counts, :pair_rates)
+                pair_rates = getproperty(data, :pair_rates)
+                for key in _collision_pair_labels(sim)
+                    push!(headers, _log_collision_pair_label(key))
+                    push!(values, get(pair_rates, key, 0.0))
+                end
+            else
+                push!(headers, _log_field_label(req.observable, field))
+                push!(values, getproperty(data, field))
+            end
+        end
+    end
+    return headers, String[_log_format_value(value) for value in values]
+end
+
 function _flatten_table_value(prefix::String, value)
     if value isa NamedTuple
         headers = String[]
@@ -301,7 +442,7 @@ function _flatten_table_value(prefix::String, value)
     end
 end
 
-function _table_headers_and_values(sim, ctx::PreparedWriter, step::Int)
+function _csv_headers_and_values(sim, ctx::PreparedWriter, step::Int)
     writer = ctx.writer::TableWriter
     headers = String["step"]
     values = Any[step]
@@ -317,16 +458,34 @@ function _table_headers_and_values(sim, ctx::PreparedWriter, step::Int)
     return headers, String[_format_table_value(writer, value) for value in values]
 end
 
+function _table_headers_and_values(sim, ctx::PreparedWriter, step::Int)
+    writer = ctx.writer::TableWriter
+    if _table_style(writer) == :log
+        return _log_headers_and_values(sim, ctx, step)
+    end
+    return _csv_headers_and_values(sim, ctx, step)
+end
+
 function _write_table!(sim, ctx::PreparedWriter, step::Int)
     _open_writer!(ctx)
     writer = ctx.writer::TableWriter
     headers, values = _table_headers_and_values(sim, ctx, step)
     if !ctx.header_written
-        println(ctx.handle, join(headers, writer.delimiter))
+        if _table_style(writer) == :log
+            widths = _log_widths(headers)
+            println(ctx.handle, join((_center_text(header, widths[i]) for (i, header) in pairs(headers)), " | "))
+        else
+            println(ctx.handle, join(headers, writer.delimiter))
+        end
         ctx.header = headers
         ctx.header_written = true
     end
-    println(ctx.handle, join(values, writer.delimiter))
+    if _table_style(writer) == :log
+        widths = _log_widths(headers)
+        println(ctx.handle, join((_center_text(values[i], widths[i]) for i in eachindex(values)), " | "))
+    else
+        println(ctx.handle, join(values, writer.delimiter))
+    end
     flush(ctx.handle)
     return ctx
 end

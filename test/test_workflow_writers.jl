@@ -65,6 +65,48 @@ end
     end
 end
 
+@testset "Workflow TableWriter log formatting" begin
+    mktempdir() do tmp
+        system = _workflow_writer_system(N=8, T=Float64)
+        _, _, all_particles, groups = _workflow_writer_groups()
+        st = build_tiny2d(N=8, T=Float64, nonbonded=:wca, temperature=0.2, dt=1e-3)
+        copyto!(st.typeid, system.typeids)
+        fill!(st.dq, 2.0)
+
+        thermo = ThermodynamicObservable(all_particles; name=:all)
+        bath = BathExchangeObservable(name=:bath)
+        collisions = CollisionObservable(name=:collisions)
+        writer = TableWriter(
+            joinpath(tmp, "workflow_obs.log");
+            every=1,
+            observables=[
+                thermo => [:temperature, :potential_energy, :virial],
+                bath => [:heat, :entropy_production_rate],
+                collisions => [:counts],
+            ],
+        )
+
+        sim = _workflow_writer_sim(system, groups, st; writers=[writer], observables=Observable[thermo, bath, collisions])
+        prepare!(sim)
+        consumed = ParticleDynamics.Workflow.write_scheduled_outputs!(sim, st.step)
+        ParticleDynamics.Workflow.close_writers!(sim)
+
+        @test consumed
+        lines = readlines(joinpath(tmp, "workflow_obs.log"))
+        @test length(lines) == 2
+        @test occursin("Time", lines[1])
+        @test occursin("Temperature", lines[1])
+        @test occursin("E_pot", lines[1])
+        @test occursin("virial", lines[1])
+        @test occursin("Bath Energy", lines[1])
+        @test occursin("Entropy Production Rate", lines[1])
+        @test occursin("collision rate", lines[1])
+        @test occursin("|", lines[1])
+        @test !occursin("bath.heat", lines[1])
+        @test !occursin(",", lines[1])
+    end
+end
+
 @testset "Workflow GSDWriter write_start and append" begin
     mktempdir() do tmp
         diameters = Float64[1.0 + 0.1 * i for i in 1:8]
