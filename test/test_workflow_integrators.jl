@@ -5,10 +5,10 @@ function _workflow_groups_for_two_types()
     return cold, hot, all_particles, Groups(cold, hot, all_particles)
 end
 
-function _workflow_system_two_types(; N=8, T=Float64)
+function _workflow_system_two_types(; N=8, T=Float64, masses=Dict(:C => 1.0, :H => 1.0))
     cfg = hex_random_2d(N, 1.0, 0.30; T=T)
     typeids = Int32[isodd(i) ? 1 : 2 for i in 1:N]
-    return ParticleSystem(cfg; types=[:C, :H], typeids=typeids, masses=Dict(:C => 1.0, :H => 1.0))
+    return ParticleSystem(cfg; types=[:C, :H], typeids=typeids, masses=masses)
 end
 
 function _materialized_group_map(system, groups)
@@ -134,6 +134,113 @@ end
     @test spec_nhc.params.target_temperature == [0.80, 1.20]
     @test spec_nhc.params.tau == [0.15, 0.25]
     @test Array(spec_nhc.workspace.particle_bath_id) == Int32[1, 2, 1, 2, 1, 2, 1, 2]
+end
+
+@testset "Workflow Deterministic Thermostats Support Heterogeneous Masses" begin
+    seed_all!(0xA2105)
+    system = _workflow_system_two_types(N=8, T=Float64, masses=Dict(:C => 1.0, :H => 2.0))
+    cold, hot, _, groups = _workflow_groups_for_two_types()
+
+    sim_csvr = Simulation(
+        system;
+        groups=groups,
+        integrator=Integrator(
+            dt=1e-3,
+            methods=[
+                ConstantVolume(cold; thermostat=CSVR(kT=0.75, tau=0.10)),
+                ConstantVolume(hot; thermostat=CSVR(kT=1.50, tau=0.20)),
+            ],
+        ),
+        precision=Float64,
+    )
+    prepare!(sim_csvr)
+    @test sim_csvr.prepared
+    @test sim_csvr.state !== nothing
+    @test sim_csvr.lowlevel_integrator isa SimulationCore.CSVRSpec{Float64}
+    @test sim_csvr.state.mass_particle isa CuArray{Float64,1}
+    @test sim_csvr.state.inv_mass_particle isa CuArray{Float64,1}
+    @test Array(sim_csvr.state.mass_particle) == [1.0, 2.0, 1.0, 2.0, 1.0, 2.0, 1.0, 2.0]
+    @test Array(sim_csvr.state.inv_mass_particle) == [1.0, 0.5, 1.0, 0.5, 1.0, 0.5, 1.0, 0.5]
+    SimulationCore.step!(sim_csvr.state, sim_csvr.lowlevel_integrator, 1e-3; compute_energy=false)
+    @test state_allfinite(sim_csvr.state)
+
+    sim_nhc = Simulation(
+        system;
+        groups=groups,
+        integrator=Integrator(
+            dt=1e-3,
+            methods=[
+                ConstantVolume(cold; thermostat=NoseHooverChain(kT=0.80, tau=0.15, chain_length=4, substeps=3)),
+                ConstantVolume(hot; thermostat=NoseHooverChain(kT=1.20, tau=0.25, chain_length=4, substeps=3)),
+            ],
+        ),
+        precision=Float64,
+    )
+    prepare!(sim_nhc)
+    @test sim_nhc.prepared
+    @test sim_nhc.state !== nothing
+    @test sim_nhc.lowlevel_integrator isa SimulationCore.NHCSpec{Float64}
+    SimulationCore.step!(sim_nhc.state, sim_nhc.lowlevel_integrator, 1e-3; compute_energy=false)
+    @test state_allfinite(sim_nhc.state)
+end
+
+@testset "Workflow Brownian Mass Warning" begin
+    seed_all!(0xA2106)
+    system = _workflow_system_two_types(N=8, T=Float64, masses=Dict(:C => 1.0, :H => 2.0))
+    cold, hot, _, groups = _workflow_groups_for_two_types()
+
+    sim = Simulation(
+        system;
+        groups=groups,
+        integrator=Integrator(
+            dt=1e-3,
+            methods=[
+                Brownian(cold; gamma=2.0, kT=0.5),
+                Brownian(hot; gamma=4.0, kT=1.5),
+            ],
+        ),
+        precision=Float64,
+    )
+
+    @test_logs (:warn, r"Brownian dynamics ignores particle masses") prepare!(sim)
+    @test sim.prepared
+    @test sim.lowlevel_integrator isa SimulationCore.EMSpec{Float64}
+end
+
+@testset "Workflow Langevin Rejects Heterogeneous Masses" begin
+    system = _workflow_system_two_types(N=8, T=Float64, masses=Dict(:C => 1.0, :H => 2.0))
+    cold, hot, _, groups = _workflow_groups_for_two_types()
+    sim = Simulation(
+        system;
+        groups=groups,
+        integrator=Integrator(
+            dt=1e-3,
+            methods=[
+                Langevin(cold; gamma=2.0, kT=0.5),
+                Langevin(hot; gamma=4.0, kT=1.5),
+            ],
+        ),
+        precision=Float64,
+    )
+    @test_throws ArgumentError prepare!(sim)
+end
+
+@testset "Workflow Deterministic MD Rejects Zero Masses" begin
+    system = _workflow_system_two_types(N=8, T=Float64, masses=Dict(:C => 0.0, :H => 1.0))
+    cold, hot, _, groups = _workflow_groups_for_two_types()
+    sim = Simulation(
+        system;
+        groups=groups,
+        integrator=Integrator(
+            dt=1e-3,
+            methods=[
+                ConstantVolume(cold; thermostat=CSVR(kT=0.75, tau=0.10)),
+                ConstantVolume(hot; thermostat=CSVR(kT=1.50, tau=0.20)),
+            ],
+        ),
+        precision=Float64,
+    )
+    @test_throws ArgumentError prepare!(sim)
 end
 
 @testset "Workflow Integrator prepare!" begin

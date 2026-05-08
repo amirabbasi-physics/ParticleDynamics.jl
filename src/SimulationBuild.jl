@@ -25,8 +25,9 @@ Key behaviors:
   initialize velocities. Stochastic integrator parameters are constructed
   later via explicit specs such as [`velocityverlet`](@ref) and
   [`eulermaruyama`](@ref).
-- Initial velocities are drawn from a Maxwell–Boltzmann distribution at
-  `temperature` and then centered to remove center-of-mass drift.
+- `mass` accepts either a scalar or a length-`N` vector. Initial velocities are
+  drawn from a Maxwell–Boltzmann distribution with width `sqrt(kT / m)` for
+  particles with positive mass, then centered to remove center-of-mass drift.
 - When `unwrapped_positions=true`, additional `rx_unwrap`/`ry_unwrap`/`rz_unwrap`
   buffers track continuous positions across periodic boundaries.
 
@@ -47,6 +48,90 @@ Returns a fully initialized `SimulationState`. Stochastic controls such as
 `noise_corr_time` now belong to the explicit integrator spec rather than the
 core simulation state.
 """
+function _normalize_build_masses(backend::Backends.AbstractBackend,
+                                 ::Type{T},
+                                 N::Int,
+                                 mass) where {T<:AbstractFloat}
+    if mass isa Real
+        massT = T(mass)
+        massT >= zero(T) || throw(ArgumentError("mass must be >= 0."))
+        return massT, nothing, nothing
+    elseif mass isa AbstractVector
+        host = T.(collect(mass))
+        length(host) == N || throw(ArgumentError("Mass vectors must have length $(N)."))
+        all(mi -> mi >= zero(T), host) ||
+            throw(ArgumentError("Mass vectors must contain only nonnegative entries."))
+        isempty(host) && return one(T), nothing, nothing
+        if all(mi -> isapprox(mi, host[1]; atol=zero(T), rtol=zero(T)), host)
+            return host[1], nothing, nothing
+        end
+        inv_host = similar(host)
+        @inbounds for i in eachindex(host)
+            inv_host[i] = host[i] > zero(T) ? inv(host[i]) : zero(T)
+        end
+        return host[1], Backends.from_host(backend, host), Backends.from_host(backend, inv_host)
+    end
+    throw(ArgumentError("mass must be a real scalar or a length-N vector."))
+end
+
+function _remove_com_drift!(backend::Backends.AbstractBackend,
+                            vx::CuArray{T,1},
+                            vy::CuArray{T,1},
+                            mass::T) where {T<:AbstractFloat}
+    N = length(vx)
+    (N == 0 || !(mass > zero(T))) && return nothing
+    Vx = Backends.sum_elements(backend, vx) / T(N)
+    Vy = Backends.sum_elements(backend, vy) / T(N)
+    @. vx = vx - Vx
+    @. vy = vy - Vy
+    return nothing
+end
+
+function _remove_com_drift!(backend::Backends.AbstractBackend,
+                            vx::CuArray{T,1},
+                            vy::CuArray{T,1},
+                            vz::CuArray{T,1},
+                            mass::T) where {T<:AbstractFloat}
+    N = length(vx)
+    (N == 0 || !(mass > zero(T))) && return nothing
+    Vx = Backends.sum_elements(backend, vx) / T(N)
+    Vy = Backends.sum_elements(backend, vy) / T(N)
+    Vz = Backends.sum_elements(backend, vz) / T(N)
+    @. vx = vx - Vx
+    @. vy = vy - Vy
+    @. vz = vz - Vz
+    return nothing
+end
+
+function _remove_com_drift!(::Backends.AbstractBackend,
+                            vx::CuArray{T,1},
+                            vy::CuArray{T,1},
+                            mass_particle::CuArray{T,1}) where {T<:AbstractFloat}
+    Mtot = T(CUDA.sum(mass_particle))
+    Mtot > zero(T) || return nothing
+    Vx = T(CUDA.sum(vx .* mass_particle) / Mtot)
+    Vy = T(CUDA.sum(vy .* mass_particle) / Mtot)
+    @. vx = vx - Vx
+    @. vy = vy - Vy
+    return nothing
+end
+
+function _remove_com_drift!(::Backends.AbstractBackend,
+                            vx::CuArray{T,1},
+                            vy::CuArray{T,1},
+                            vz::CuArray{T,1},
+                            mass_particle::CuArray{T,1}) where {T<:AbstractFloat}
+    Mtot = T(CUDA.sum(mass_particle))
+    Mtot > zero(T) || return nothing
+    Vx = T(CUDA.sum(vx .* mass_particle) / Mtot)
+    Vy = T(CUDA.sum(vy .* mass_particle) / Mtot)
+    Vz = T(CUDA.sum(vz .* mass_particle) / Mtot)
+    @. vx = vx - Vx
+    @. vy = vy - Vy
+    @. vz = vz - Vz
+    return nothing
+end
+
 function build_simulation(;N::Int,
                            box,
                            cutoff::Real=1.0,
@@ -60,7 +145,7 @@ function build_simulation(;N::Int,
                            temperature::Union{AbstractVector{<:Real},Real}=1,
                            noise_corr_time::Union{AbstractVector{<:Real},Real,Nothing}=nothing,
                            dt::Real=0.001,
-                           mass::Real=1,
+                           mass::Union{AbstractVector{<:Real},Real}=1,
                            bonds::Union{Nothing,Vector{Tuple{Int32,Int32}}}=nothing,
                            bonding::Union{Nothing,Definitions.BondPotential}=nothing,
                            nonbonded::Symbol = :lj,
@@ -122,22 +207,25 @@ function build_simulation(;N::Int,
     fill!(fx, zero(T)); fill!(fy, zero(T)); fz === nothing || fill!(fz, zero(T))
     fill!(f0x, zero(T)); fill!(f0y, zero(T)); f0z === nothing || fill!(f0z, zero(T))
 
+    mass_scalar, mass_particle, inv_mass_particle =
+        _normalize_build_masses(backend_impl, T, N, mass)
     temperature_vec = _device_particle_buffer(backend_impl, T, N, temperature, "temperature")
 
     if D == 2
-        _init_vel2!(vx, vy, temperature_vec)
+        if inv_mass_particle === nothing
+            _init_vel2!(vx, vy, temperature_vec, mass_scalar)
+            _remove_com_drift!(backend_impl, vx, vy, mass_scalar)
+        else
+            _init_vel2!(vx, vy, temperature_vec, inv_mass_particle)
+            _remove_com_drift!(backend_impl, vx, vy, mass_particle::CuArray{T,1})
+        end
     else
-        _init_vel3!(vx, vy, vz, temperature_vec)
-    end
-
-    if N > 0
-        Vx = Backends.sum_elements(backend_impl, vx) / T(N)
-        Vy = Backends.sum_elements(backend_impl, vy) / T(N)
-        @. vx = vx - Vx
-        @. vy = vy - Vy
-        if D == 3
-            Vz = Backends.sum_elements(backend_impl, vz) / T(N)
-            @. vz = vz - Vz
+        if inv_mass_particle === nothing
+            _init_vel3!(vx, vy, vz::CuArray{T,1}, temperature_vec, mass_scalar)
+            _remove_com_drift!(backend_impl, vx, vy, vz::CuArray{T,1}, mass_scalar)
+        else
+            _init_vel3!(vx, vy, vz::CuArray{T,1}, temperature_vec, inv_mass_particle)
+            _remove_com_drift!(backend_impl, vx, vy, vz::CuArray{T,1}, mass_particle::CuArray{T,1})
         end
     end
 
@@ -221,7 +309,7 @@ function build_simulation(;N::Int,
                          nothing, rcut_factor,
                          nothing, nothing, nothing,
                          bondlist, bond_spec,
-                         T(mass), T(dt),
+                         mass_scalar, mass_particle, inv_mass_particle, T(dt),
                          Epot, dq, dU, Ekin, virial, virial_nonbonded, virial_bonded, virial_tensor,
                          Epot_accum, Ekin_accum, virial_accum, virial_tensor_accum,
                          0, UInt8(0), nb_tag, srp,

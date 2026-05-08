@@ -52,21 +52,72 @@ end
 function _workflow_mass(system::ParticleSystem, ::Type{T}) where {T<:AbstractFloat}
     masses = system.masses
     masses === nothing && return one(T)
-    masses isa Real && return T(masses)
+    if masses isa Real
+        massT = T(masses)
+        massT >= zero(T) || throw(ArgumentError("ParticleSystem masses must be >= 0."))
+        return massT
+    end
     if masses isa AbstractDict
-        used = unique(system.types[Int(id)] for id in system.typeids)
-        values = T[masses[sym] for sym in used]
-        all(v -> isapprox(v, values[1]; atol=zero(T), rtol=zero(T)), values) ||
-            throw(ArgumentError("The low-level engine currently supports only a uniform particle mass. The supplied ParticleSystem masses vary by type."))
-        return values[1]
+        host = T[masses[system.types[Int(id)]] for id in system.typeids]
     elseif masses isa AbstractVector
         host = T.(collect(masses))
-        isempty(host) && return one(T)
-        all(v -> isapprox(v, host[1]; atol=zero(T), rtol=zero(T)), host) ||
-            throw(ArgumentError("The low-level engine currently supports only a uniform particle mass. The supplied ParticleSystem masses vary per particle."))
-        return host[1]
+        length(host) == length(system) ||
+            throw(ArgumentError("ParticleSystem mass vectors must have length $(length(system))."))
+    else
+        throw(ArgumentError("Unsupported ParticleSystem mass container $(typeof(masses))."))
     end
-    throw(ArgumentError("Unsupported ParticleSystem mass container $(typeof(masses))."))
+    isempty(host) && return one(T)
+    all(mi -> mi >= zero(T), host) || throw(ArgumentError("ParticleSystem masses must be >= 0."))
+    return all(mi -> isapprox(mi, host[1]; atol=zero(T), rtol=zero(T)), host) ? host[1] : host
+end
+
+function _workflow_has_explicit_nonzero_masses(system::ParticleSystem)
+    masses = system.masses
+    masses === nothing && return false
+    if masses isa Real
+        return !iszero(masses)
+    elseif masses isa AbstractDict
+        return any(v -> !iszero(v), values(masses))
+    elseif masses isa AbstractVector
+        return any(v -> !iszero(v), masses)
+    end
+    return true
+end
+
+function _workflow_has_explicit_nonpositive_masses(system::ParticleSystem)
+    masses = system.masses
+    masses === nothing && return false
+    if masses isa Real
+        return !(masses > 0)
+    elseif masses isa AbstractDict
+        return any(v -> !(v > 0), values(masses))
+    elseif masses isa AbstractVector
+        return any(v -> !(v > 0), masses)
+    end
+    return true
+end
+
+function _workflow_validate_mass_model!(sim)
+    sim.integrator === nothing && return nothing
+    methods = hasproperty(sim.integrator, :methods) ? sim.integrator.methods : Method[]
+    isempty(methods) && return nothing
+    scheme = _normalize_scheme(sim.integrator.scheme, methods)
+    if all(method -> method isa ConstantVolume, methods)
+        _workflow_has_explicit_nonpositive_masses(sim.system) ||
+            return nothing
+        throw(ArgumentError("ConstantVolume molecular dynamics requires strictly positive particle masses. Zero masses are only supported for Brownian dynamics, where masses are ignored."))
+    end
+    if _scheme_family(scheme) == :langevin
+        _workflow_mass(sim.system, Float64) isa AbstractVector ||
+            return nothing
+        throw(ArgumentError("Workflow Langevin and active-OU integrators currently support only uniform particle masses. Heterogeneous masses are supported for ConstantVolume molecular dynamics and ignored in Brownian dynamics."))
+    end
+    get(sim.metadata, :workflow_warned_brownian_masses_ignored, false) && return nothing
+    all(method -> method isa Union{Brownian,ActiveOrnsteinUhlenbeck}, methods) || return nothing
+    _workflow_has_explicit_nonzero_masses(sim.system) || return nothing
+    @warn "Brownian dynamics ignores particle masses; nonzero `ParticleSystem.masses` will not affect the simulation. Set masses to zero if you want that metadata to reflect the overdamped model."
+    sim.metadata[:workflow_warned_brownian_masses_ignored] = true
+    return nothing
 end
 
 function _workflow_seed_temperature(sim, ::Type{T}) where {T<:AbstractFloat}
@@ -196,6 +247,7 @@ and preparing observable and writer contexts.
 """
 function prepare!(sim)
     _apply_workflow_seed!(sim.seed)
+    _workflow_validate_mass_model!(sim)
     built_state = false
 
     compiled_forces = nothing
