@@ -244,6 +244,32 @@ function _vv_pos2!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
     return
 end
 
+function _vv_pos2!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
+                   vx::CuDeviceVector{T}, vy::CuDeviceVector{T},
+                   fx::CuDeviceVector{T}, fy::CuDeviceVector{T},
+                   beta_x::CuDeviceVector{T}, beta_y::CuDeviceVector{T},
+                   gamma::CuDeviceVector{T}, inv_mass_particle::CuDeviceVector{T}, dt::T,
+                   Lx::T, Ly::T) where {T<:AbstractFloat}
+    half = T(0.5); two = T(2)
+    i = (blockIdx().x-1)*blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    g = gamma[i]
+    inv_mass = inv_mass_particle[i]
+    q = g * dt * inv_mass / two
+    b = one(T) / (one(T) + q)
+    coef = b * dt * inv_mass / two
+    @inbounds begin
+        dpx = b*dt*vx[i] + coef*(dt*fx[i] + beta_x[i])
+        dpy = b*dt*vy[i] + coef*(dt*fy[i] + beta_y[i])
+        x = rx[i] + dpx
+        y = ry[i] + dpy
+        x = (x + Lx*half); x -= floor(x/Lx)*Lx; x -= Lx*half
+        y = (y + Ly*half); y -= floor(y/Ly)*Ly; y -= Ly*half
+        rx[i] = x; ry[i] = y
+    end
+    return
+end
+
 function _vv_pos2_unwrap!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
                           rxu::CuDeviceVector{T}, ryu::CuDeviceVector{T},
                           vx::CuDeviceVector{T}, vy::CuDeviceVector{T},
@@ -258,6 +284,35 @@ function _vv_pos2_unwrap!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
     q = g * dt / (two * mass)
     b = one(T) / (one(T) + q)
     coef = b * dt / (two * mass)
+    @inbounds begin
+        dpx = b*dt*vx[i] + coef*(dt*fx[i] + beta_x[i])
+        dpy = b*dt*vy[i] + coef*(dt*fy[i] + beta_y[i])
+        rxu[i] += dpx
+        ryu[i] += dpy
+        x = rx[i] + dpx
+        y = ry[i] + dpy
+        x = (x + Lx*half); x -= floor(x/Lx)*Lx; x -= Lx*half
+        y = (y + Ly*half); y -= floor(y/Ly)*Ly; y -= Ly*half
+        rx[i] = x; ry[i] = y
+    end
+    return
+end
+
+function _vv_pos2_unwrap!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
+                          rxu::CuDeviceVector{T}, ryu::CuDeviceVector{T},
+                          vx::CuDeviceVector{T}, vy::CuDeviceVector{T},
+                          fx::CuDeviceVector{T}, fy::CuDeviceVector{T},
+                          beta_x::CuDeviceVector{T}, beta_y::CuDeviceVector{T},
+                          gamma::CuDeviceVector{T}, inv_mass_particle::CuDeviceVector{T}, dt::T,
+                          Lx::T, Ly::T) where {T<:AbstractFloat}
+    half = T(0.5); two = T(2)
+    i = (blockIdx().x-1)*blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    g = gamma[i]
+    inv_mass = inv_mass_particle[i]
+    q = g * dt * inv_mass / two
+    b = one(T) / (one(T) + q)
+    coef = b * dt * inv_mass / two
     @inbounds begin
         dpx = b*dt*vx[i] + coef*(dt*fx[i] + beta_x[i])
         dpy = b*dt*vy[i] + coef*(dt*fy[i] + beta_y[i])
@@ -300,6 +355,35 @@ function _vv_pos3!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVec
     return
 end
 
+function _vv_pos3!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
+                   vx::CuDeviceVector{T}, vy::CuDeviceVector{T}, vz::CuDeviceVector{T},
+                   fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, fz::CuDeviceVector{T},
+                   beta_x::CuDeviceVector{T}, beta_y::CuDeviceVector{T}, beta_z::CuDeviceVector{T},
+                   gamma::CuDeviceVector{T}, inv_mass_particle::CuDeviceVector{T}, dt::T,
+                   Lx::T, Ly::T, Lz::T) where {T<:AbstractFloat}
+    half = T(0.5); two = T(2)
+    i = (blockIdx().x-1)*blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    g = gamma[i]
+    inv_mass = inv_mass_particle[i]
+    q = g * dt * inv_mass / two
+    b = one(T) / (one(T) + q)
+    coef = b * dt * inv_mass / two
+    @inbounds begin
+        dpx = b*dt*vx[i] + coef*(dt*fx[i] + beta_x[i])
+        dpy = b*dt*vy[i] + coef*(dt*fy[i] + beta_y[i])
+        dpz = b*dt*vz[i] + coef*(dt*fz[i] + beta_z[i])
+        x = rx[i] + dpx
+        y = ry[i] + dpy
+        z = rz[i] + dpz
+        x = (x + Lx*half); x -= floor(x/Lx)*Lx; x -= Lx*half
+        y = (y + Ly*half); y -= floor(y/Ly)*Ly; y -= Ly*half
+        z = (z + Lz*half); z -= floor(z/Lz)*Lz; z -= Lz*half
+        rx[i] = x; ry[i] = y; rz[i] = z
+    end
+    return
+end
+
 function _vv_pos3_unwrap!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
                           rxu::CuDeviceVector{T}, ryu::CuDeviceVector{T}, rzu::CuDeviceVector{T},
                           vx::CuDeviceVector{T}, vy::CuDeviceVector{T}, vz::CuDeviceVector{T},
@@ -314,6 +398,39 @@ function _vv_pos3_unwrap!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDe
     q = g * dt / (two * mass)
     b = one(T) / (one(T) + q)
     coef = b * dt / (two * mass)
+    @inbounds begin
+        dpx = b*dt*vx[i] + coef*(dt*fx[i] + beta_x[i])
+        dpy = b*dt*vy[i] + coef*(dt*fy[i] + beta_y[i])
+        dpz = b*dt*vz[i] + coef*(dt*fz[i] + beta_z[i])
+        rxu[i] += dpx
+        ryu[i] += dpy
+        rzu[i] += dpz
+        x = rx[i] + dpx
+        y = ry[i] + dpy
+        z = rz[i] + dpz
+        x = (x + Lx*half); x -= floor(x/Lx)*Lx; x -= Lx*half
+        y = (y + Ly*half); y -= floor(y/Ly)*Ly; y -= Ly*half
+        z = (z + Lz*half); z -= floor(z/Lz)*Lz; z -= Lz*half
+        rx[i] = x; ry[i] = y; rz[i] = z
+    end
+    return
+end
+
+function _vv_pos3_unwrap!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
+                          rxu::CuDeviceVector{T}, ryu::CuDeviceVector{T}, rzu::CuDeviceVector{T},
+                          vx::CuDeviceVector{T}, vy::CuDeviceVector{T}, vz::CuDeviceVector{T},
+                          fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, fz::CuDeviceVector{T},
+                          beta_x::CuDeviceVector{T}, beta_y::CuDeviceVector{T}, beta_z::CuDeviceVector{T},
+                          gamma::CuDeviceVector{T}, inv_mass_particle::CuDeviceVector{T}, dt::T,
+                          Lx::T, Ly::T, Lz::T) where {T<:AbstractFloat}
+    half = T(0.5); two = T(2)
+    i = (blockIdx().x-1)*blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    g = gamma[i]
+    inv_mass = inv_mass_particle[i]
+    q = g * dt * inv_mass / two
+    b = one(T) / (one(T) + q)
+    coef = b * dt * inv_mass / two
     @inbounds begin
         dpx = b*dt*vx[i] + coef*(dt*fx[i] + beta_x[i])
         dpy = b*dt*vy[i] + coef*(dt*fy[i] + beta_y[i])
@@ -365,6 +482,33 @@ function vv_positions_soa!(rx::CuArray{T,1}, ry::CuArray{T,1},
     return nothing
 end
 
+function vv_positions_soa!(rx::CuArray{T,1}, ry::CuArray{T,1},
+                           vx::CuArray{T,1}, vy::CuArray{T,1},
+                           fx::CuArray{T,1}, fy::CuArray{T,1},
+                           beta_x::CuArray{T,1}, beta_y::CuArray{T,1},
+                           inv_mass_particle::CuArray{T,1},
+                           params::VVParams{T}, dt::T, box::Definitions.Box2{T};
+                           unwrapped_x::Union{Nothing,CuArray{T,1}}=nothing,
+                           unwrapped_y::Union{Nothing,CuArray{T,1}}=nothing) where {T<:AbstractFloat}
+    N = length(rx); threads = min(256, N); blocks = cld(N, threads)
+    if unwrapped_x === nothing || unwrapped_y === nothing
+        k = CUDA.@cuda launch=false _vv_pos2!(rx, ry, vx, vy, fx, fy, beta_x, beta_y,
+                                              params.gamma, inv_mass_particle, dt,
+                                              box[1], box[2])
+        k(rx, ry, vx, vy, fx, fy, beta_x, beta_y,
+          params.gamma, inv_mass_particle, dt, box[1], box[2]; threads, blocks)
+    else
+        k = CUDA.@cuda launch=false _vv_pos2_unwrap!(rx, ry, unwrapped_x, unwrapped_y,
+                                                     vx, vy, fx, fy, beta_x, beta_y,
+                                                     params.gamma, inv_mass_particle, dt,
+                                                     box[1], box[2])
+        k(rx, ry, unwrapped_x, unwrapped_y,
+          vx, vy, fx, fy, beta_x, beta_y,
+          params.gamma, inv_mass_particle, dt, box[1], box[2]; threads, blocks)
+    end
+    return nothing
+end
+
 function vv_positions_soa!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
                            vx::CuArray{T,1}, vy::CuArray{T,1}, vz::CuArray{T,1},
                            fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1},
@@ -393,6 +537,40 @@ function vv_positions_soa!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
           vx, vy, vz, fx, fy, fz,
           beta_x, beta_y, beta_z,
           params.gamma, params.mass, dt,
+          box[1], box[2], box[3]; threads, blocks)
+    end
+    return nothing
+end
+
+function vv_positions_soa!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
+                           vx::CuArray{T,1}, vy::CuArray{T,1}, vz::CuArray{T,1},
+                           fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1},
+                           beta_x::CuArray{T,1}, beta_y::CuArray{T,1}, beta_z::CuArray{T,1},
+                           inv_mass_particle::CuArray{T,1},
+                           params::VVParams{T}, dt::T, box::Definitions.Box3{T};
+                           unwrapped_x::Union{Nothing,CuArray{T,1}}=nothing,
+                           unwrapped_y::Union{Nothing,CuArray{T,1}}=nothing,
+                           unwrapped_z::Union{Nothing,CuArray{T,1}}=nothing) where {T<:AbstractFloat}
+    N = length(rx); threads = min(256, N); blocks = cld(N, threads)
+    if unwrapped_x === nothing || unwrapped_y === nothing || unwrapped_z === nothing
+        k = CUDA.@cuda launch=false _vv_pos3!(rx, ry, rz, vx, vy, vz, fx, fy, fz,
+                                              beta_x, beta_y, beta_z,
+                                              params.gamma, inv_mass_particle, dt,
+                                              box[1], box[2], box[3])
+        k(rx, ry, rz, vx, vy, vz, fx, fy, fz,
+          beta_x, beta_y, beta_z,
+          params.gamma, inv_mass_particle, dt,
+          box[1], box[2], box[3]; threads, blocks)
+    else
+        k = CUDA.@cuda launch=false _vv_pos3_unwrap!(rx, ry, rz, unwrapped_x, unwrapped_y, unwrapped_z,
+                                                     vx, vy, vz, fx, fy, fz,
+                                                     beta_x, beta_y, beta_z,
+                                                     params.gamma, inv_mass_particle, dt,
+                                                     box[1], box[2], box[3])
+        k(rx, ry, rz, unwrapped_x, unwrapped_y, unwrapped_z,
+          vx, vy, vz, fx, fy, fz,
+          beta_x, beta_y, beta_z,
+          params.gamma, inv_mass_particle, dt,
           box[1], box[2], box[3]; threads, blocks)
     end
     return nothing
@@ -433,6 +611,52 @@ function _vv_vel2!(vx::CuDeviceVector{T}, vy::CuDeviceVector{T},
         vbarx = 0.5*(vpx + vnx); vbary = 0.5*(vpy + vny)
 
         # Power terms (dq is power)
+        P_diss = - gA * v2
+        P_sto  = (vbarx*(bx/bA) + vbary*(by/bA)) / dtA
+        P_cons = vnx*fx_i + vny*fy_i
+
+        Ekin[i] = T(0.5) * mass * T(v2)
+        dq[i]   = dq[i] - T(P_diss + P_sto)
+        dU[i]   = dU[i] + T(P_cons)
+        vx[i] = T(vnx); vy[i] = T(vny)
+    end
+    return
+end
+
+function _vv_vel2!(vx::CuDeviceVector{T}, vy::CuDeviceVector{T},
+                   f0x::CuDeviceVector{T}, f0y::CuDeviceVector{T},
+                   fx::CuDeviceVector{T}, fy::CuDeviceVector{T},
+                   beta_x::CuDeviceVector{T}, beta_y::CuDeviceVector{T},
+                   dq::CuDeviceVector{T}, dU::CuDeviceVector{T}, Ekin::CuDeviceVector{T},
+                   noise_scale::CuDeviceVector{T},
+                   gamma::CuDeviceVector{T},
+                   mass_particle::CuDeviceVector{T},
+                   inv_mass_particle::CuDeviceVector{T},
+                   dt::T) where {T<:AbstractFloat}
+    i = (blockIdx().x-1)*blockDim().x + threadIdx().x
+    N = length(vx); if i > N; return; end
+    @inbounds begin
+        g = gamma[i]
+        mass = mass_particle[i]
+        inv_mass = inv_mass_particle[i]
+        q = g * dt * inv_mass / T(2)
+        a = (one(T) - q) / (one(T) + q)
+        b = one(T) / (one(T) + q)
+
+        vpx = Float64(vx[i]); vpy = Float64(vy[i])
+        f0x_i = Float64(f0x[i]); f0y_i = Float64(f0y[i])
+        fx_i  = Float64(fx[i]);  fy_i  = Float64(fy[i])
+        bx    = Float64(beta_x[i]); by = Float64(beta_y[i])
+        aA = Float64(a); bA = Float64(b)
+        dtA = Float64(dt); gA = Float64(g)
+        mA = Float64(mass); inv_mA = Float64(inv_mass)
+
+        vnx = aA*vpx + (dtA*inv_mA/2.0)*(aA*f0x_i + fx_i) + (bA*inv_mA)*bx
+        vny = aA*vpy + (dtA*inv_mA/2.0)*(aA*f0y_i + fy_i) + (bA*inv_mA)*by
+
+        v2 = vnx*vnx + vny*vny
+        vbarx = 0.5*(vpx + vnx); vbary = 0.5*(vpy + vny)
+
         P_diss = - gA * v2
         P_sto  = (vbarx*(bx/bA) + vbary*(by/bA)) / dtA
         P_cons = vnx*fx_i + vny*fy_i
@@ -486,6 +710,53 @@ function _vv_vel3!(vx::CuDeviceVector{T}, vy::CuDeviceVector{T}, vz::CuDeviceVec
     return
 end
 
+function _vv_vel3!(vx::CuDeviceVector{T}, vy::CuDeviceVector{T}, vz::CuDeviceVector{T},
+                   f0x::CuDeviceVector{T}, f0y::CuDeviceVector{T}, f0z::CuDeviceVector{T},
+                   fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, fz::CuDeviceVector{T},
+                   beta_x::CuDeviceVector{T}, beta_y::CuDeviceVector{T}, beta_z::CuDeviceVector{T},
+                   dq::CuDeviceVector{T}, dU::CuDeviceVector{T}, Ekin::CuDeviceVector{T},
+                   noise_scale::CuDeviceVector{T},
+                   gamma::CuDeviceVector{T},
+                   mass_particle::CuDeviceVector{T},
+                   inv_mass_particle::CuDeviceVector{T},
+                   dt::T) where {T<:AbstractFloat}
+    i = (blockIdx().x-1)*blockDim().x + threadIdx().x
+    N = length(vx); if i > N; return; end
+    @inbounds begin
+        g = gamma[i]
+        mass = mass_particle[i]
+        inv_mass = inv_mass_particle[i]
+        q = g * dt * inv_mass / T(2)
+        a = (one(T) - q) / (one(T) + q)
+        b = one(T) / (one(T) + q)
+
+        vpx = Float64(vx[i]); vpy = Float64(vy[i]); vpz = Float64(vz[i])
+        f0x_i = Float64(f0x[i]); f0y_i = Float64(f0y[i]); f0z_i = Float64(f0z[i])
+        fx_i  = Float64(fx[i]);  fy_i  = Float64(fy[i]);  fz_i  = Float64(fz[i])
+        bx    = Float64(beta_x[i]); by = Float64(beta_y[i]); bz = Float64(beta_z[i])
+        aA = Float64(a); bA = Float64(b)
+        dtA = Float64(dt); gA = Float64(g)
+        mA = Float64(mass); inv_mA = Float64(inv_mass)
+
+        vnx = aA*vpx + (dtA*inv_mA/2.0)*(aA*f0x_i + fx_i) + (bA*inv_mA)*bx
+        vny = aA*vpy + (dtA*inv_mA/2.0)*(aA*f0y_i + fy_i) + (bA*inv_mA)*by
+        vnz = aA*vpz + (dtA*inv_mA/2.0)*(aA*f0z_i + fz_i) + (bA*inv_mA)*bz
+
+        v2 = vnx*vnx + vny*vny + vnz*vnz
+        vbarx = 0.5*(vpx + vnx); vbary = 0.5*(vpy + vny); vbarz = 0.5*(vpz + vnz)
+
+        P_diss = - gA * v2
+        P_sto  = (vbarx*(bx/bA) + vbary*(by/bA) + vbarz*(bz/bA)) / dtA
+        P_cons = vnx*fx_i + vny*fy_i + vnz*fz_i
+
+        Ekin[i] = T(0.5) * mass * T(v2)
+        dq[i]   = dq[i] - T(P_diss + P_sto)
+        dU[i]   = dU[i] + T(P_cons)
+        vx[i] = T(vnx); vy[i] = T(vny); vz[i] = T(vnz)
+    end
+    return
+end
+
 """
     vv_velocities_soa!(vx, vy[, vz], f0x, f0y[, f0z], fx, fy[, fz], βx, βy[, βz], dq, dU, Ekin, params, dt)
 
@@ -511,6 +782,25 @@ function vv_velocities_soa!(vx::CuArray{T,1}, vy::CuArray{T,1},
     return nothing
 end
 
+function vv_velocities_soa!(vx::CuArray{T,1}, vy::CuArray{T,1},
+                            f0x::CuArray{T,1}, f0y::CuArray{T,1},
+                            fx::CuArray{T,1}, fy::CuArray{T,1},
+                            beta_x::CuArray{T,1}, beta_y::CuArray{T,1},
+                            dq::CuArray{T,1}, dU::CuArray{T,1}, Ekin::CuArray{T,1},
+                            mass_particle::CuArray{T,1}, inv_mass_particle::CuArray{T,1},
+                            params::VVParams{T}, dt::T) where {T<:AbstractFloat}
+    N = length(vx); threads = min(256, N); blocks = cld(N, threads)
+    k = CUDA.@cuda launch=false _vv_vel2!(vx, vy, f0x, f0y, fx, fy,
+                                          beta_x, beta_y, dq, dU, Ekin,
+                                          params.noise_scale, params.gamma,
+                                          mass_particle, inv_mass_particle, dt)
+    k(vx, vy, f0x, f0y, fx, fy,
+      beta_x, beta_y, dq, dU, Ekin,
+      params.noise_scale, params.gamma,
+      mass_particle, inv_mass_particle, dt; threads, blocks)
+    return nothing
+end
+
 function vv_velocities_soa!(vx::CuArray{T,1}, vy::CuArray{T,1}, vz::CuArray{T,1},
                             f0x::CuArray{T,1}, f0y::CuArray{T,1}, f0z::CuArray{T,1},
                             fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1},
@@ -528,6 +818,27 @@ function vv_velocities_soa!(vx::CuArray{T,1}, vy::CuArray{T,1}, vz::CuArray{T,1}
       beta_x, beta_y, beta_z,
       dq, dU, Ekin, params.noise_scale,
       params.gamma, params.mass, dt; threads, blocks)
+    return nothing
+end
+
+function vv_velocities_soa!(vx::CuArray{T,1}, vy::CuArray{T,1}, vz::CuArray{T,1},
+                            f0x::CuArray{T,1}, f0y::CuArray{T,1}, f0z::CuArray{T,1},
+                            fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1},
+                            beta_x::CuArray{T,1}, beta_y::CuArray{T,1}, beta_z::CuArray{T,1},
+                            dq::CuArray{T,1}, dU::CuArray{T,1}, Ekin::CuArray{T,1},
+                            mass_particle::CuArray{T,1}, inv_mass_particle::CuArray{T,1},
+                            params::VVParams{T}, dt::T) where {T<:AbstractFloat}
+    N = length(vx); threads = min(256, N); blocks = cld(N, threads)
+    k = CUDA.@cuda launch=false _vv_vel3!(vx, vy, vz, f0x, f0y, f0z,
+                                          fx, fy, fz,
+                                          beta_x, beta_y, beta_z,
+                                          dq, dU, Ekin, params.noise_scale,
+                                          params.gamma, mass_particle, inv_mass_particle, dt)
+    k(vx, vy, vz, f0x, f0y, f0z,
+      fx, fy, fz,
+      beta_x, beta_y, beta_z,
+      dq, dU, Ekin, params.noise_scale,
+      params.gamma, mass_particle, inv_mass_particle, dt; threads, blocks)
     return nothing
 end
 
@@ -556,6 +867,28 @@ function _baoab_BA2!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
     return
 end
 
+function _baoab_BA2!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
+                     vx::CuDeviceVector{T}, vy::CuDeviceVector{T},
+                     f0x::CuDeviceVector{T}, f0y::CuDeviceVector{T},
+                     inv_mass_particle::CuDeviceVector{T}, dt::T,
+                     Lx::T, Ly::T) where {T<:AbstractFloat}
+    half = T(0.5)
+    i = (blockIdx().x-1)*blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    @inbounds begin
+        inv_mass = inv_mass_particle[i]
+        vxi = vx[i] + (dt * inv_mass / T(2)) * f0x[i]
+        vyi = vy[i] + (dt * inv_mass / T(2)) * f0y[i]
+        xi = rx[i] + half*dt*vxi
+        yi = ry[i] + half*dt*vyi
+        xi = (xi + Lx*half); xi -= floor(xi/Lx)*Lx; xi -= Lx*half
+        yi = (yi + Ly*half); yi -= floor(yi/Ly)*Ly; yi -= Ly*half
+        vx[i] = vxi; vy[i] = vyi
+        rx[i] = xi;  ry[i] = yi
+    end
+    return
+end
+
 function _baoab_BA2_unwrap!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
                             rxu::CuDeviceVector{T}, ryu::CuDeviceVector{T},
                             vx::CuDeviceVector{T}, vy::CuDeviceVector{T},
@@ -568,6 +901,33 @@ function _baoab_BA2_unwrap!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
     @inbounds begin
         vxi = vx[i] + (dt/(T(2)*mass)) * f0x[i]
         vyi = vy[i] + (dt/(T(2)*mass)) * f0y[i]
+        dpx = half*dt*vxi
+        dpy = half*dt*vyi
+        rxu[i] += dpx
+        ryu[i] += dpy
+        xi = rx[i] + dpx
+        yi = ry[i] + dpy
+        xi = (xi + Lx*half); xi -= floor(xi/Lx)*Lx; xi -= Lx*half
+        yi = (yi + Ly*half); yi -= floor(yi/Ly)*Ly; yi -= Ly*half
+        vx[i] = vxi; vy[i] = vyi
+        rx[i] = xi;  ry[i] = yi
+    end
+    return
+end
+
+function _baoab_BA2_unwrap!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
+                            rxu::CuDeviceVector{T}, ryu::CuDeviceVector{T},
+                            vx::CuDeviceVector{T}, vy::CuDeviceVector{T},
+                            f0x::CuDeviceVector{T}, f0y::CuDeviceVector{T},
+                            inv_mass_particle::CuDeviceVector{T}, dt::T,
+                            Lx::T, Ly::T) where {T<:AbstractFloat}
+    half = T(0.5)
+    i = (blockIdx().x-1)*blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    @inbounds begin
+        inv_mass = inv_mass_particle[i]
+        vxi = vx[i] + (dt * inv_mass / T(2)) * f0x[i]
+        vyi = vy[i] + (dt * inv_mass / T(2)) * f0y[i]
         dpx = half*dt*vxi
         dpy = half*dt*vyi
         rxu[i] += dpx
@@ -606,6 +966,31 @@ function _baoab_BA3!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceV
     return
 end
 
+function _baoab_BA3!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
+                     vx::CuDeviceVector{T}, vy::CuDeviceVector{T}, vz::CuDeviceVector{T},
+                     f0x::CuDeviceVector{T}, f0y::CuDeviceVector{T}, f0z::CuDeviceVector{T},
+                     inv_mass_particle::CuDeviceVector{T}, dt::T,
+                     Lx::T, Ly::T, Lz::T) where {T<:AbstractFloat}
+    half = T(0.5)
+    i = (blockIdx().x-1)*blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    @inbounds begin
+        inv_mass = inv_mass_particle[i]
+        vxi = vx[i] + (dt * inv_mass / T(2)) * f0x[i]
+        vyi = vy[i] + (dt * inv_mass / T(2)) * f0y[i]
+        vzi = vz[i] + (dt * inv_mass / T(2)) * f0z[i]
+        xi = rx[i] + half*dt*vxi
+        yi = ry[i] + half*dt*vyi
+        zi = rz[i] + half*dt*vzi
+        xi = (xi + Lx*half); xi -= floor(xi/Lx)*Lx; xi -= Lx*half
+        yi = (yi + Ly*half); yi -= floor(yi/Ly)*Ly; yi -= Ly*half
+        zi = (zi + Lz*half); zi -= floor(zi/Lz)*Lz; zi -= Lz*half
+        vx[i] = vxi; vy[i] = vyi; vz[i] = vzi
+        rx[i] = xi;  ry[i] = yi; rz[i] = zi
+    end
+    return
+end
+
 function _baoab_BA3_unwrap!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
                             rxu::CuDeviceVector{T}, ryu::CuDeviceVector{T}, rzu::CuDeviceVector{T},
                             vx::CuDeviceVector{T}, vy::CuDeviceVector{T}, vz::CuDeviceVector{T},
@@ -619,6 +1004,38 @@ function _baoab_BA3_unwrap!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::Cu
         vxi = vx[i] + (dt/(T(2)*mass)) * f0x[i]
         vyi = vy[i] + (dt/(T(2)*mass)) * f0y[i]
         vzi = vz[i] + (dt/(T(2)*mass)) * f0z[i]
+        dpx = half*dt*vxi
+        dpy = half*dt*vyi
+        dpz = half*dt*vzi
+        rxu[i] += dpx
+        ryu[i] += dpy
+        rzu[i] += dpz
+        xi = rx[i] + dpx
+        yi = ry[i] + dpy
+        zi = rz[i] + dpz
+        xi = (xi + Lx*half); xi -= floor(xi/Lx)*Lx; xi -= Lx*half
+        yi = (yi + Ly*half); yi -= floor(yi/Ly)*Ly; yi -= Ly*half
+        zi = (zi + Lz*half); zi -= floor(zi/Lz)*Lz; zi -= Lz*half
+        vx[i] = vxi; vy[i] = vyi; vz[i] = vzi
+        rx[i] = xi;  ry[i] = yi; rz[i] = zi
+    end
+    return
+end
+
+function _baoab_BA3_unwrap!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
+                            rxu::CuDeviceVector{T}, ryu::CuDeviceVector{T}, rzu::CuDeviceVector{T},
+                            vx::CuDeviceVector{T}, vy::CuDeviceVector{T}, vz::CuDeviceVector{T},
+                            f0x::CuDeviceVector{T}, f0y::CuDeviceVector{T}, f0z::CuDeviceVector{T},
+                            inv_mass_particle::CuDeviceVector{T}, dt::T,
+                            Lx::T, Ly::T, Lz::T) where {T<:AbstractFloat}
+    half = T(0.5)
+    i = (blockIdx().x-1)*blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    @inbounds begin
+        inv_mass = inv_mass_particle[i]
+        vxi = vx[i] + (dt * inv_mass / T(2)) * f0x[i]
+        vyi = vy[i] + (dt * inv_mass / T(2)) * f0y[i]
+        vzi = vz[i] + (dt * inv_mass / T(2)) * f0z[i]
         dpx = half*dt*vxi
         dpy = half*dt*vyi
         dpz = half*dt*vzi
@@ -665,6 +1082,32 @@ function _baoab_OU2!(vx::CuDeviceVector{T}, vy::CuDeviceVector{T},
     return
 end
 
+function _baoab_OU2!(vx::CuDeviceVector{T}, vy::CuDeviceVector{T},
+                     beta_x::CuDeviceVector{T}, beta_y::CuDeviceVector{T},
+                     noise_scale::CuDeviceVector{T},
+                     gamma::CuDeviceVector{T}, inv_mass_particle::CuDeviceVector{T}, dt::T,
+                     dq::CuDeviceVector{T}) where {T<:AbstractFloat}
+    i = (blockIdx().x-1)*blockDim().x + threadIdx().x
+    N = length(vx); if i > N; return; end
+    @inbounds begin
+        gA = Float64(gamma[i])
+        dtA = Float64(dt)
+        inv_mA = Float64(inv_mass_particle[i])
+        c = exp(-gA * dtA * inv_mA)
+        r = sqrt((1.0 - c*c) * inv_mA / (2.0 * gA * dtA))
+        vpx = Float64(vx[i]); vpy = Float64(vy[i])
+        bx  = Float64(beta_x[i]); by = Float64(beta_y[i])
+        vnx = c*vpx + r*bx
+        vny = c*vpy + r*by
+        vbarx = 0.5*(vpx + vnx); vbary = 0.5*(vpy + vny)
+        P_diss = - gA * (vbarx*vbarx + vbary*vbary)
+        P_sto  = (vbarx*bx + vbary*by) / dtA
+        dq[i] = dq[i] + T(P_diss + P_sto)
+        vx[i] = T(vnx); vy[i] = T(vny)
+    end
+    return
+end
+
 function _baoab_OU3!(vx::CuDeviceVector{T}, vy::CuDeviceVector{T}, vz::CuDeviceVector{T},
                      beta_x::CuDeviceVector{T}, beta_y::CuDeviceVector{T}, beta_z::CuDeviceVector{T},
                      noise_scale::CuDeviceVector{T},
@@ -687,6 +1130,34 @@ function _baoab_OU3!(vx::CuDeviceVector{T}, vy::CuDeviceVector{T}, vz::CuDeviceV
         vbarx = 0.5*(vpx + vnx); vbary = 0.5*(vpy + vny); vbarz = 0.5*(vpz + vnz)
         P_diss = - gA * (vbarx*vbarx + vbary*vbary + vbarz*vbarz)
         P_sto  = (vbarx*(bx) + vbary*(by) + vbarz*(bz)) / dtA
+        dq[i] = dq[i] + T(P_diss + P_sto)
+        vx[i] = T(vnx); vy[i] = T(vny); vz[i] = T(vnz)
+    end
+    return
+end
+
+function _baoab_OU3!(vx::CuDeviceVector{T}, vy::CuDeviceVector{T}, vz::CuDeviceVector{T},
+                     beta_x::CuDeviceVector{T}, beta_y::CuDeviceVector{T}, beta_z::CuDeviceVector{T},
+                     noise_scale::CuDeviceVector{T},
+                     gamma::CuDeviceVector{T}, inv_mass_particle::CuDeviceVector{T}, dt::T,
+                     dq::CuDeviceVector{T}) where {T<:AbstractFloat}
+    i = (blockIdx().x-1)*blockDim().x + threadIdx().x
+    N = length(vx); if i > N; return; end
+    @inbounds begin
+        gA = Float64(gamma[i])
+        dtA = Float64(dt)
+        inv_mA = Float64(inv_mass_particle[i])
+        c = exp(-gA * dtA * inv_mA)
+        r = sqrt((1.0 - c*c) * inv_mA / (2.0 * gA * dtA))
+
+        vpx = Float64(vx[i]); vpy = Float64(vy[i]); vpz = Float64(vz[i])
+        bx  = Float64(beta_x[i]); by = Float64(beta_y[i]); bz = Float64(beta_z[i])
+        vnx = c*vpx + r*bx
+        vny = c*vpy + r*by
+        vnz = c*vpz + r*bz
+        vbarx = 0.5*(vpx + vnx); vbary = 0.5*(vpy + vny); vbarz = 0.5*(vpz + vnz)
+        P_diss = - gA * (vbarx*vbarx + vbary*vbary + vbarz*vbarz)
+        P_sto  = (vbarx*bx + vbary*by + vbarz*bz) / dtA
         dq[i] = dq[i] + T(P_diss + P_sto)
         vx[i] = T(vnx); vy[i] = T(vny); vz[i] = T(vnz)
     end
@@ -799,6 +1270,33 @@ function _baoab_B2!(vx::CuDeviceVector{T}, vy::CuDeviceVector{T},
     return
 end
 
+function _baoab_B2!(vx::CuDeviceVector{T}, vy::CuDeviceVector{T},
+                    fx::CuDeviceVector{T}, fy::CuDeviceVector{T},
+                    mass_particle::CuDeviceVector{T}, inv_mass_particle::CuDeviceVector{T}, dt::T,
+                    Ekin::CuDeviceVector{T}, dU::CuDeviceVector{T}) where {T<:AbstractFloat}
+    i = (blockIdx().x-1)*blockDim().x + threadIdx().x
+    N = length(vx); if i > N; return; end
+    @inbounds begin
+        dtA = Float64(dt)
+        mass = mass_particle[i]
+        inv_mass = inv_mass_particle[i]
+        mA = Float64(mass)
+        inv_mA = Float64(inv_mass)
+        vpx = Float64(vx[i]); vpy = Float64(vy[i])
+        fx_i = Float64(fx[i]); fy_i = Float64(fy[i])
+        vxi = vpx + (dtA * inv_mA / 2.0) * fx_i
+        vyi = vpy + (dtA * inv_mA / 2.0) * fy_i
+        if dtA != 0.0
+            P_cons = vxi*fx_i + vyi*fy_i
+            dU[i] += T(P_cons)
+        end
+        vx[i] = T(vxi); vy[i] = T(vyi)
+        v2 = vxi*vxi + vyi*vyi
+        Ekin[i] = T(0.5) * mass * T(v2)
+    end
+    return
+end
+
 function _baoab_B3!(vx::CuDeviceVector{T}, vy::CuDeviceVector{T}, vz::CuDeviceVector{T},
                     fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, fz::CuDeviceVector{T},
                     mass::T, dt::T,
@@ -812,6 +1310,33 @@ function _baoab_B3!(vx::CuDeviceVector{T}, vy::CuDeviceVector{T}, vz::CuDeviceVe
         vxi = vpx + (dtA/(2*mA)) * fx_i
         vyi = vpy + (dtA/(2*mA)) * fy_i
         vzi = vpz + (dtA/(2*mA)) * fz_i
+        if dtA != 0.0
+            P_cons = vxi*fx_i + vyi*fy_i + vzi*fz_i
+            dU[i] += T(P_cons)
+        end
+        vx[i] = T(vxi); vy[i] = T(vyi); vz[i] = T(vzi)
+        v2 = vxi*vxi + vyi*vyi + vzi*vzi
+        Ekin[i] = T(0.5) * mass * T(v2)
+    end
+    return
+end
+
+function _baoab_B3!(vx::CuDeviceVector{T}, vy::CuDeviceVector{T}, vz::CuDeviceVector{T},
+                    fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, fz::CuDeviceVector{T},
+                    mass_particle::CuDeviceVector{T}, inv_mass_particle::CuDeviceVector{T}, dt::T,
+                    Ekin::CuDeviceVector{T}, dU::CuDeviceVector{T}) where {T<:AbstractFloat}
+    i = (blockIdx().x-1)*blockDim().x + threadIdx().x
+    N = length(vx); if i > N; return; end
+    @inbounds begin
+        dtA = Float64(dt)
+        mass = mass_particle[i]
+        inv_mass = inv_mass_particle[i]
+        vpx = Float64(vx[i]); vpy = Float64(vy[i]); vpz = Float64(vz[i])
+        fx_i = Float64(fx[i]); fy_i = Float64(fy[i]); fz_i = Float64(fz[i])
+        inv_mA = Float64(inv_mass)
+        vxi = vpx + (dtA * inv_mA / 2.0) * fx_i
+        vyi = vpy + (dtA * inv_mA / 2.0) * fy_i
+        vzi = vpz + (dtA * inv_mA / 2.0) * fz_i
         if dtA != 0.0
             P_cons = vxi*fx_i + vyi*fy_i + vzi*fz_i
             dU[i] += T(P_cons)
@@ -846,6 +1371,24 @@ function baoab_BA_2d!(rx, ry, vx, vy, f0x, f0y, params::BAOABParams{T}, dt::T, b
                                                       vx, vy, f0x, f0y, params.mass, dt, box[1], box[2])
         k(rx, ry, unwrapped_x, unwrapped_y,
           vx, vy, f0x, f0y, params.mass, dt, box[1], box[2]; threads, blocks)
+    end
+    return nothing
+end
+
+function baoab_BA_2d!(rx, ry, vx, vy, f0x, f0y,
+                      inv_mass_particle::CuArray{T,1},
+                      params::BAOABParams{T}, dt::T, box::Definitions.Box2{T};
+                      unwrapped_x::Union{Nothing,CuArray{T,1}}=nothing,
+                      unwrapped_y::Union{Nothing,CuArray{T,1}}=nothing) where {T<:AbstractFloat}
+    N = length(rx); threads = min(256, N); blocks = cld(N, threads)
+    if unwrapped_x === nothing || unwrapped_y === nothing
+        k = CUDA.@cuda launch=false _baoab_BA2!(rx, ry, vx, vy, f0x, f0y, inv_mass_particle, dt, box[1], box[2])
+        k(rx, ry, vx, vy, f0x, f0y, inv_mass_particle, dt, box[1], box[2]; threads, blocks)
+    else
+        k = CUDA.@cuda launch=false _baoab_BA2_unwrap!(rx, ry, unwrapped_x, unwrapped_y,
+                                                       vx, vy, f0x, f0y, inv_mass_particle, dt, box[1], box[2])
+        k(rx, ry, unwrapped_x, unwrapped_y,
+          vx, vy, f0x, f0y, inv_mass_particle, dt, box[1], box[2]; threads, blocks)
     end
     return nothing
 end
@@ -907,6 +1450,25 @@ function baoab_BA_3d!(rx, ry, rz, vx, vy, vz, f0x, f0y, f0z, params::BAOABParams
     return nothing
 end
 
+function baoab_BA_3d!(rx, ry, rz, vx, vy, vz, f0x, f0y, f0z,
+                      inv_mass_particle::CuArray{T,1},
+                      params::BAOABParams{T}, dt::T, box::Definitions.Box3{T};
+                      unwrapped_x::Union{Nothing,CuArray{T,1}}=nothing,
+                      unwrapped_y::Union{Nothing,CuArray{T,1}}=nothing,
+                      unwrapped_z::Union{Nothing,CuArray{T,1}}=nothing) where {T<:AbstractFloat}
+    N = length(rx); threads = min(256, N); blocks = cld(N, threads)
+    if unwrapped_x === nothing || unwrapped_y === nothing || unwrapped_z === nothing
+        k = CUDA.@cuda launch=false _baoab_BA3!(rx, ry, rz, vx, vy, vz, f0x, f0y, f0z, inv_mass_particle, dt, box[1], box[2], box[3])
+        k(rx, ry, rz, vx, vy, vz, f0x, f0y, f0z, inv_mass_particle, dt, box[1], box[2], box[3]; threads, blocks)
+    else
+        k = CUDA.@cuda launch=false _baoab_BA3_unwrap!(rx, ry, rz, unwrapped_x, unwrapped_y, unwrapped_z,
+                                                       vx, vy, vz, f0x, f0y, f0z, inv_mass_particle, dt, box[1], box[2], box[3])
+        k(rx, ry, rz, unwrapped_x, unwrapped_y, unwrapped_z,
+          vx, vy, vz, f0x, f0y, f0z, inv_mass_particle, dt, box[1], box[2], box[3]; threads, blocks)
+    end
+    return nothing
+end
+
 """
     baoab_OU_2d!(vx, vy, βx, βy, params, dt, dq)
 
@@ -920,6 +1482,15 @@ function baoab_OU_2d!(vx, vy, beta_x, beta_y, params::BAOABParams{T}, dt::T, dq)
     return nothing
 end
 
+function baoab_OU_2d!(vx, vy, beta_x, beta_y,
+                      inv_mass_particle::CuArray{T,1},
+                      params::BAOABParams{T}, dt::T, dq) where {T<:AbstractFloat}
+    N = length(vx); threads = min(256, N); blocks = cld(N, threads)
+    k = CUDA.@cuda launch=false _baoab_OU2!(vx, vy, beta_x, beta_y, params.noise_scale, params.gamma, inv_mass_particle, dt, dq)
+    k(vx, vy, beta_x, beta_y, params.noise_scale, params.gamma, inv_mass_particle, dt, dq; threads, blocks)
+    return nothing
+end
+
 """
 3D OU step for BAOAB (see [`baoab_OU_2d!`](@ref)).
 """
@@ -927,6 +1498,15 @@ function baoab_OU_3d!(vx, vy, vz, beta_x, beta_y, beta_z, params::BAOABParams{T}
     N = length(vx); threads = min(256, N); blocks = cld(N, threads)
     k = CUDA.@cuda launch=false _baoab_OU3!(vx, vy, vz, beta_x, beta_y, beta_z, params.noise_scale, params.gamma, params.mass, dt, dq)
     k(vx, vy, vz, beta_x, beta_y, beta_z, params.noise_scale, params.gamma, params.mass, dt, dq; threads, blocks)
+    return nothing
+end
+
+function baoab_OU_3d!(vx, vy, vz, beta_x, beta_y, beta_z,
+                      inv_mass_particle::CuArray{T,1},
+                      params::BAOABParams{T}, dt::T, dq) where {T<:AbstractFloat}
+    N = length(vx); threads = min(256, N); blocks = cld(N, threads)
+    k = CUDA.@cuda launch=false _baoab_OU3!(vx, vy, vz, beta_x, beta_y, beta_z, params.noise_scale, params.gamma, inv_mass_particle, dt, dq)
+    k(vx, vy, vz, beta_x, beta_y, beta_z, params.noise_scale, params.gamma, inv_mass_particle, dt, dq; threads, blocks)
     return nothing
 end
 
@@ -983,6 +1563,15 @@ function baoab_B_2d!(vx, vy, fx, fy, params::BAOABParams{T}, dt::T, Ekin, dU) wh
     return nothing
 end
 
+function baoab_B_2d!(vx, vy, fx, fy,
+                     mass_particle::CuArray{T,1}, inv_mass_particle::CuArray{T,1},
+                     params::BAOABParams{T}, dt::T, Ekin, dU) where {T<:AbstractFloat}
+    N = length(vx); threads = min(256, N); blocks = cld(N, threads)
+    k = CUDA.@cuda launch=false _baoab_B2!(vx, vy, fx, fy, mass_particle, inv_mass_particle, dt, Ekin, dU)
+    k(vx, vy, fx, fy, mass_particle, inv_mass_particle, dt, Ekin, dU; threads, blocks)
+    return nothing
+end
+
 """
 3D version of [`baoab_B_2d!`](@ref).
 """
@@ -990,6 +1579,15 @@ function baoab_B_3d!(vx, vy, vz, fx, fy, fz, params::BAOABParams{T}, dt::T, Ekin
     N = length(vx); threads = min(256, N); blocks = cld(N, threads)
     k = CUDA.@cuda launch=false _baoab_B3!(vx, vy, vz, fx, fy, fz, params.mass, dt, Ekin, dU)
     k(vx, vy, vz, fx, fy, fz, params.mass, dt, Ekin, dU; threads, blocks)
+    return nothing
+end
+
+function baoab_B_3d!(vx, vy, vz, fx, fy, fz,
+                     mass_particle::CuArray{T,1}, inv_mass_particle::CuArray{T,1},
+                     params::BAOABParams{T}, dt::T, Ekin, dU) where {T<:AbstractFloat}
+    N = length(vx); threads = min(256, N); blocks = cld(N, threads)
+    k = CUDA.@cuda launch=false _baoab_B3!(vx, vy, vz, fx, fy, fz, mass_particle, inv_mass_particle, dt, Ekin, dU)
+    k(vx, vy, vz, fx, fy, fz, mass_particle, inv_mass_particle, dt, Ekin, dU; threads, blocks)
     return nothing
 end
 
