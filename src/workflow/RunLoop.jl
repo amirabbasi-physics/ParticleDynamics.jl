@@ -1,5 +1,6 @@
 using Random
 using CUDA
+using Printf: @sprintf
 using ..Backends
 using ..NeighborLists
 using ..SimulationCore
@@ -297,10 +298,18 @@ function _maybe_print_stage_banner(stage::Stage, dt::Float64)
     end
 end
 
-function _maybe_print_stage_end(stage::Stage, executed::Int)
+function _maybe_print_stage_end(stage::Stage, executed::Int, elapsed_s::Float64)
     if stage.progress && stage.steps >= 1000
-        println("Finished stage $(stage.name) after $(executed) step(s).")
+        steps_per_second = elapsed_s > 0 ? executed / elapsed_s : Inf
+        println("Finished stage $(stage.name) after $(executed) step(s) in $(@sprintf("%.3f", elapsed_s)) s ($(@sprintf("%.2f", steps_per_second)) steps/s).")
     end
+end
+
+function _maybe_print_stage_interval(stage::Stage, current_step::Int, total_steps::Int, interval_steps::Int, interval_elapsed_s::Float64)
+    stage.progress || return nothing
+    steps_per_second = interval_elapsed_s > 0 ? interval_steps / interval_elapsed_s : Inf
+    println("Stage $(stage.name): step $(current_step)/$(total_steps) ($(@sprintf("%.2f", 100 * current_step / max(total_steps, 1)))%) at $(@sprintf("%.2f", steps_per_second)) steps/s.")
+    return nothing
 end
 
 """
@@ -343,7 +352,9 @@ function run!(sim, stage::Stage)
     _maybe_print_stage_banner(stage, local_dt)
     write_initial_frames!(sim)
 
-    t0 = time()
+    t0_ns = time_ns()
+    last_report_ns = t0_ns
+    last_report_step = st.step
     try
         for _ in 1:stage.steps
             next_step = st.step + 1
@@ -352,10 +363,17 @@ function run!(sim, stage::Stage)
             sim.metadata[:workflow_time] = _workflow_time(sim) + local_dt
             executed += 1
 
-            interval_consumed = write_scheduled_outputs!(sim, st.step)
-            interval_consumed && _reset_interval_buffers!(sim)
+            output_status = write_scheduled_outputs!(sim, st.step)
+            output_status.interval_consumed && _reset_interval_buffers!(sim)
+            if output_status.wrote_any
+                interval_elapsed_s = (time_ns() - last_report_ns) / 1.0e9
+                interval_steps = st.step - last_report_step
+                _maybe_print_stage_interval(stage, executed, stage.steps, interval_steps, interval_elapsed_s)
+                last_report_ns = time_ns()
+                last_report_step = st.step
+            end
 
-            if time() - t0 >= stage.max_seconds
+            if (time_ns() - t0_ns) / 1.0e9 >= stage.max_seconds
                 break
             end
         end
@@ -365,6 +383,7 @@ function run!(sim, stage::Stage)
         close_writers!(sim)
     end
 
-    _maybe_print_stage_end(stage, executed)
+    elapsed_s = (time_ns() - t0_ns) / 1.0e9
+    _maybe_print_stage_end(stage, executed, elapsed_s)
     return sim
 end

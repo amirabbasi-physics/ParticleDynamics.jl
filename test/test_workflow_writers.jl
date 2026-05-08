@@ -55,7 +55,8 @@ end
         consumed = ParticleDynamics.Workflow.write_scheduled_outputs!(sim, st.step)
         ParticleDynamics.Workflow.close_writers!(sim)
 
-        @test consumed
+        @test consumed.wrote_any
+        @test consumed.interval_consumed
         lines = readlines(joinpath(tmp, "workflow_obs.csv"))
         @test length(lines) == 2
         @test occursin("step", lines[1])
@@ -91,7 +92,8 @@ end
         consumed = ParticleDynamics.Workflow.write_scheduled_outputs!(sim, st.step)
         ParticleDynamics.Workflow.close_writers!(sim)
 
-        @test consumed
+        @test consumed.wrote_any
+        @test consumed.interval_consumed
         lines = readlines(joinpath(tmp, "workflow_obs.log"))
         @test length(lines) == 2
         @test occursin("Time", lines[1])

@@ -84,7 +84,7 @@ function main(phi::Float64, temperature::Float64)
     ]
 
     prepare_production!(sim)
-    run!(sim, Stage(:production, steps=nsteps; progress=false, max_seconds=maybe_override_runtime()))
+    run!(sim, Stage(:production, steps=nsteps; progress=true, max_seconds=maybe_override_runtime()))
 
     println("Wrote trajectory to $(gsd_path)")
     println("Wrote log to $(log_path)")
