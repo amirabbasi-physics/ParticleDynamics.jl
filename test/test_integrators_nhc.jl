@@ -6,21 +6,21 @@
             N=24, T=Float32, box=(20f0, 20f0, 20f0), cutoff=2.5f0, skin=0.3f0, cap=Int32(32),
             neigh_interval=4, gamma=nothing, temperature=1f0, nonbonded=:wca
         )
-        @test_throws UndefKeywordError Simulation.velocityverlet(st)
-        vv = Simulation.velocityverlet(st; gamma=1f0, temperature=1f0, dt=dt)
+        @test_throws UndefKeywordError SimulationCore.velocityverlet(st)
+        vv = SimulationCore.velocityverlet(st; gamma=1f0, temperature=1f0, dt=dt)
         @test ParticleDynamics.IntegratorInterfaces.integrator_name(vv) == :velocity_verlet
-        spec = Simulation.nosehooverchain(st; temperature=1.0f0, tau=0.5f0, chain_length=5, substeps=4)
+        spec = SimulationCore.nosehooverchain(st; temperature=1.0f0, tau=0.5f0, chain_length=5, substeps=4)
 
         @test ParticleDynamics.IntegratorInterfaces.integrator_name(spec) == :nose_hoover_chain
         @test ParticleDynamics.IntegratorInterfaces.integrator_id(spec) == UInt8(3)
         @test ParticleDynamics.IntegratorInterfaces.stage_sequence(spec) ==
               (:thermostat_pre, :kick1, :drift, :force, :kick2, :thermostat_post)
 
-        Simulation.step!(st, spec, dt; compute_energy=true)
+        SimulationCore.step!(st, spec, dt; compute_energy=true)
         @test state_allfinite(st)
         @test st.last_integrator == UInt8(3)
 
-        obs = Simulation.collect_step_observables(st, spec)
+        obs = SimulationCore.collect_step_observables(st, spec)
         @test hasproperty(obs, :extended_hamiltonian)
         @test hasproperty(obs, :thermostat_kinetic)
         @test hasproperty(obs, :thermostat_potential)
@@ -45,9 +45,9 @@
         vz0 = randn(Float32, N) .* 3f0
         set_velocities_3d!(st, vx0, vy0, vz0)
 
-        spec = Simulation.nosehooverchain(st; temperature=1.0f0, tau=0.2f0, chain_length=5, substeps=6)
+        spec = SimulationCore.nosehooverchain(st; temperature=1.0f0, tau=0.2f0, chain_length=5, substeps=6)
         for _ in 1:800
-            Simulation.step!(st, spec, dt; compute_energy=false)
+            SimulationCore.step!(st, spec, dt; compute_energy=false)
         end
 
         dof = 3 * N
@@ -77,11 +77,11 @@
         cold = Filters.TypeIDs(1)
         hot = Filters.TypeIDs(2)
 
-        spec = Simulation.nosehooverchain(st; temperature=1.0f0, tau=0.2f0, chain_length=5, substeps=6)
+        spec = SimulationCore.nosehooverchain(st; temperature=1.0f0, tau=0.2f0, chain_length=5, substeps=6)
         Filters.set_temperature!(spec, st, dt, cold => 0.8f0, hot => 1.4f0)
 
         for _ in 1:1200
-            Simulation.step!(st, spec, dt; compute_energy=false)
+            SimulationCore.step!(st, spec, dt; compute_energy=false)
         end
 
         Nc = Filters.count(st, cold)
@@ -110,20 +110,20 @@
         vz0 = randn(Float64, N) .* 3.0
         set_velocities_3d!(st, vx0, vy0, vz0)
 
-        spec = Simulation.nosehooverchain(
+        spec = SimulationCore.nosehooverchain(
             st; temperature=1.0, tau=0.2, chain_length=5, substeps=5, propagator=:gromacs
         )
-        Simulation.step!(st, spec, dt; compute_energy=true)
+        SimulationCore.step!(st, spec, dt; compute_energy=true)
         @test state_allfinite(st)
 
-        obs = Simulation.collect_step_observables(st, spec)
+        obs = SimulationCore.collect_step_observables(st, spec)
         @test obs.nhc_propagator == :gromacs
         @test isfinite(obs.extended_hamiltonian)
         @test isfinite(obs.thermostat_kinetic)
         @test isfinite(obs.thermostat_potential)
 
         for _ in 1:800
-            Simulation.step!(st, spec, dt; compute_energy=false)
+            SimulationCore.step!(st, spec, dt; compute_energy=false)
         end
 
         dof = 3 * N
@@ -146,20 +146,20 @@
         vz0 = randn(Float64, N) .* 3.0
         set_velocities_3d!(st, vx0, vy0, vz0)
 
-        spec = Simulation.nosehooverchain(
+        spec = SimulationCore.nosehooverchain(
             st; temperature=1.0, tau=0.2, chain_length=5, substeps=2, propagator=:lammps
         )
-        Simulation.step!(st, spec, dt; compute_energy=true)
+        SimulationCore.step!(st, spec, dt; compute_energy=true)
         @test state_allfinite(st)
 
-        obs = Simulation.collect_step_observables(st, spec)
+        obs = SimulationCore.collect_step_observables(st, spec)
         @test obs.nhc_propagator == :lammps
         @test isfinite(obs.extended_hamiltonian)
         @test isfinite(obs.thermostat_kinetic)
         @test isfinite(obs.thermostat_potential)
 
         for _ in 1:800
-            Simulation.step!(st, spec, dt; compute_energy=false)
+            SimulationCore.step!(st, spec, dt; compute_energy=false)
         end
 
         dof = 3 * N

@@ -1,61 +1,69 @@
 """
 GPU-accelerated non-equilibrium particle simulations with Langevin/Brownian/Molecular dynamics.
 
-`ParticleDynamics` orchestrates SoA GPU buffers, neighbor lists, nonbonded and
-bonded force kernels, integrators, collision counters, and writers so that
-research scripts can copy validated parameter sets from `examples/` and run
-production simulations without touching CUDA code. The top-level module
-re-exports the most common types (`SimulationState`, `LJParams`, filters,
-integrator specs, writers, …) so a user usually only needs `using ParticleDynamics`.
+`ParticleDynamics` provides a high-level workflow API centered on
+[`Simulation`](@ref), [`ParticleSystem`](@ref), workflow forces, methods,
+observables, writers, and staged `run!` execution on CUDA-backed state. The
+older low-level API (`build_simulation`, `step!`, explicit integrator specs,
+and `SimulationCore`) remains available for expert use.
 
 # Example
-The snippet below mirrors `examples/2D_allpairs_quicktest.jl`, which checks the
-all-pairs WCA path with `N = 256` particles and a WCA cutoff of `2^(1/6)σ`.
+The snippet below mirrors the recommended workflow style used by the modern
+examples.
 
 ```julia
 using ParticleDynamics
 
 N = 256
-box = (80.0f0, 80.0f0)
-dt = 2.0f-4
-rcut = Float32(2^(1/6))
+sigma = 1.0
+cfg = hex_random_2d(N, sigma, 0.25; T=Float64)
 
-st = build_simulation(N=N, box=box, dt=dt,
-                      cutoff=rcut, skin=0.4f0, cap=Int32(64),
-                      neigh_interval=10, use_neighborlist=false,
-                      epsilon=10f0, sigma=1f0,
-                      gamma=50f0, temperature=1f0,
-                      nonbonded=:wca, precision=:f32)
+system = ParticleSystem(cfg; types=[:A], typeids=fill(Int32(1), N), masses=Dict(:A => 1.0))
+all_particles = Group(:all, AllSelection())
+thermo = ThermodynamicObservable(all_particles; name=:all)
 
-vv = velocityverlet(st; gamma=50f0, temperature=1f0, dt=dt)
-for _ in 1:50
-    step!(st, vv, dt; compute_energy=true)
-end
+sim = Simulation(
+    system;
+    groups=Groups(all_particles),
+    integrator=Integrator(
+        dt=2.0e-4,
+        scheme=VelocityVerlet(),
+        forces=[WCA(epsilon=10.0, sigma=sigma, pairs=:all)],
+        methods=[Langevin(all_particles; gamma=50.0, kT=1.0)],
+    ),
+    observables=[thermo],
+    writers=[TableWriter("obs.csv"; every=50, observables=[thermo => [:temperature, :potential_energy]])],
+)
+
+run!(sim, Stage(:production, steps=200; progress=false))
 ```
 
-See the README and the scripts under `examples/` for richer setups (two-temperature
-filters, bonded polymers, Brownian dynamics, collision histograms, etc.).
+Use the README and `examples/` for richer setups such as two-temperature baths,
+bonded polymers, Brownian dynamics, active noise, collision histograms, and
+restart workflows.
 """
 module ParticleDynamics
 
 using CUDA
-using StaticArrays
-using Printf
-using DelimitedFiles
 
 include("Definitions.jl")
 include("Initialize.jl")
+include("Backends.jl")
 include("NeighborLists.jl")
 include("BondedForces.jl")
 include("NonBondedForces.jl")
+include("NonBondedInteractions.jl")
 include("LangevinIntegrators.jl")
 include("BrownianIntegrators.jl")
 include("IntegratorInterfaces.jl")
 include("Collisions.jl")
-include("Simulation.jl")
+include("ParticleGroups.jl")
+include("Thermostats.jl")
+include("SimulationCore.jl")
 include("Filters.jl")
 include("Writers.jl")
 include("InitGenerators.jl")
+include("Workflow.jl")
  
 # Re-export commonly used APIs to simplify user code
 using .Definitions: LJParams, SoftRepulsiveParams,
@@ -65,10 +73,17 @@ using .Definitions: LJParams, SoftRepulsiveParams,
     harmonic_bond, fene_bond
 using .IntegratorInterfaces: AbstractIntegratorSpec
 
-using .Simulation: SimulationState, build_simulation, step!, step_graph!, zero_forces!, sync_unwrapped!, accumulate_energies!, accumulate_virial!, virial_components, virial_tensor
-using .Simulation: run_integrator_step!, collect_step_observables, thermostatted_dof, thermostatted_particle_mask, reset_bath_exchange_accumulators!
-using .Simulation: IntegratorSpec, VVSpec, BAOABSpec, BAOASpec, GSMSpec, BrownianSpec, EMSpec, NHCParams, NHCSpec, CSVRParams, CSVRSpec
-using .Simulation: velocityverlet, baoab, baoa, gsm, eulerheun, eulermaruyama, nosehooverchain, csvr
+using .ParticleGroups: ParticleSelection, ParticleGroup, All, TypeIDs, Indices,
+    materialize, apply_scalar!, apply_values!, gather, sum_values
+using .Thermostats: AbstractThermostat, ThermostatState,
+    NoseHooverChainThermostat, CSVRThermostat,
+    n_baths, target_temperature, response_time,
+    set_target_temperature!, set_response_time!, cumulative_energy_exchange
+
+using .SimulationCore: SimulationState, build_simulation, step!, step_graph!, sync_unwrapped!, accumulate_virial!, virial_components, virial_tensor
+using .SimulationCore: collect_step_observables, reset_bath_exchange_accumulators!
+using .SimulationCore: IntegratorSpec, VVSpec, BAOABSpec, BAOASpec, GSMSpec, BrownianSpec, EMSpec, NHCParams, NHCSpec, CSVRParams, CSVRSpec
+using .SimulationCore: velocityverlet, baoab, baoa, gsm, eulerheun, eulermaruyama, nosehooverchain, csvr
 using .Writers: InMemoryLogger, CSVWriter, XYZWriter,
     write_xyz!, write_observables_csv!, gsd_open, gsd_close, write_gsd_frame!, read_gsd_frame!
 using .BondedForces: BondList, build_bondlist
@@ -77,23 +92,41 @@ using .InitGenerators: box_from_phi_2d, box_from_phi_3d,
     hex_slab_coexistence_2d, fcc_sites_in_box_3d, fcc_random_3d, fcc_slab_coexistence_3d
 using .Collisions: enable_collision_counting!, disable_collision_counting!,
     collisions_reset_counts!, collisions_read_counts!, set_collision_pair_cutoffs!
+using .Workflow: Simulation, ParticleSystem, Particles, Topology, PeriodicBox,
+    Group, Groups, AllSelection, TypeSelection, IndexSelection,
+    Force, ForceField, PairTable, CellList, LennardJones, WCA, SoftRepulsive, HarmonicBondForce, FENEBondForce,
+    Integrator, Method, VelocityVerlet, BAOAB, BAOA, GSM, EulerHeun, EulerMaruyama, OUSpectrum,
+    ConstantVolume, Langevin, Brownian, ActiveOrnsteinUhlenbeck,
+    Thermostat, CSVR, NoseHooverChain,
+    Observable, ThermodynamicObservable, BathExchangeObservable, VirialObservable, CollisionObservable, MSDObservable, VACFObservable,
+    Writer, TableWriter, GSDWriter,
+    Every, AtSteps, Between,
+    Stage, prepare!, run!, reset_step!, reset_observables!, state
 
-export Filters, BondedForces,
+export Filters, BondedForces, ParticleGroups, Thermostats, SimulationCore,
        # Definitions / parameters
        LJParams, SoftRepulsiveParams,
        HarmonicBondParams, FENEParams,
        BondPotential, HarmonicBond, FENEBond,
        harmonic_bond, fene_bond,
        StokesFrictionCoefficient, SphereMass, InertialTime, DiffusiveTime,
+       # Particle groups and selection
+       ParticleSelection, ParticleGroup, All, TypeIDs, Indices,
+       materialize, apply_scalar!, apply_values!, gather, sum_values,
+       # Thermostats
+       AbstractThermostat, ThermostatState,
+       NoseHooverChainThermostat, CSVRThermostat,
+       n_baths, target_temperature, response_time,
+       set_target_temperature!, set_response_time!, cumulative_energy_exchange,
        # Simulation helpers
-       SimulationState, build_simulation, step!, step_graph!, zero_forces!, sync_unwrapped!, accumulate_energies!, accumulate_virial!, virial_components, virial_tensor,
-       run_integrator_step!, collect_step_observables, thermostatted_dof, thermostatted_particle_mask, reset_bath_exchange_accumulators!,
+       SimulationState, build_simulation, step!, step_graph!, sync_unwrapped!, accumulate_virial!, virial_components, virial_tensor,
+       collect_step_observables, reset_bath_exchange_accumulators!,
        AbstractIntegratorSpec,
        IntegratorSpec, VVSpec, BAOABSpec, BAOASpec, GSMSpec, BrownianSpec, EMSpec, NHCParams, NHCSpec, CSVRParams, CSVRSpec,
-       velocityverlet, baoab, baoa, gsm, eulermaruyama, nosehooverchain, csvr,
+       velocityverlet, baoab, baoa, gsm, eulerheun, eulermaruyama, nosehooverchain, csvr,
        # Writers
        InMemoryLogger, CSVWriter, XYZWriter,
-       write_xyz!, write_observables_csv!, gsd_open, gsd_close, write_gsd_frame!,
+       write_xyz!, write_observables_csv!, gsd_open, gsd_close, write_gsd_frame!, read_gsd_frame!,
        # Bond list helper
        BondList, build_bondlist,
        # Initial configuration generators (2D)
@@ -102,56 +135,28 @@ export Filters, BondedForces,
        hex_slab_coexistence_2d, fcc_sites_in_box_3d, fcc_random_3d, fcc_slab_coexistence_3d,
        # Collisions API
        enable_collision_counting!, disable_collision_counting!,
-       collisions_reset_counts!, collisions_read_counts!, set_collision_pair_cutoffs!
+       collisions_reset_counts!, collisions_read_counts!, set_collision_pair_cutoffs!,
+       # High-level workflow facade
+       Simulation, ParticleSystem, Particles, Topology, PeriodicBox,
+       Group, Groups, AllSelection, TypeSelection, IndexSelection,
+       Force, ForceField, PairTable, CellList, LennardJones, WCA, SoftRepulsive, HarmonicBondForce, FENEBondForce,
+       Integrator, Method, VelocityVerlet, BAOAB, BAOA, GSM, EulerHeun, EulerMaruyama, OUSpectrum,
+       ConstantVolume, Langevin, Brownian, ActiveOrnsteinUhlenbeck,
+       Thermostat, CSVR, NoseHooverChain,
+       Observable, ThermodynamicObservable, BathExchangeObservable, VirialObservable, CollisionObservable, MSDObservable, VACFObservable,
+       Writer, TableWriter, GSDWriter,
+       Every, AtSteps, Between,
+       Stage,
+       prepare!, run!, reset_step!, reset_observables!, state
 
-println("##########################################################")
-println("                  ParticleDynamics Loaded                ")
-println("##########################################################")
-
-function __init__()
-    _maybe_set_cuda_compat!()
+if get(ENV, "PARTICLEDYNAMICS_VERBOSE_LOAD", "0") == "1"
+    println("##########################################################")
+    println("                  ParticleDynamics Loaded                ")
+    println("##########################################################")
 end
 
-# Allow legacy GPUs (e.g. Pascal cc 6.x) to run by pinning to a CUDA runtime
-# below the 13.x cutoff on drivers that default to newer runtimes.
-function _maybe_set_cuda_compat!()
-    mode = get(ENV, "NEQSIMGPU_CUDA_COMPAT", "auto")
-    mode == "off" && return
-
-    target = try
-        VersionNumber(get(ENV, "NEQSIMGPU_CUDA_LEGACY_VERSION", "12.4.1"))
-    catch
-        v"12.4.1"
-    end
-
-    force = mode == "force"
-
-    try
-        dev = CUDA.device()
-        cap = CUDA.capability(dev)
-        runtime = CUDA.runtime_version()
-        needs_downgrade = cap < v"7.5" && runtime >= v"13.0.0"
-        if (needs_downgrade || force) && runtime > target
-            if !isdefined(CUDA, :set_runtime_version!)
-                @warn "CUDA.set_runtime_version! not available; cannot adjust runtime automatically" device=CUDA.name(dev) capability=cap runtime=runtime
-                return
-            end
-            @warn "Legacy GPU detected; attempting to pin CUDA runtime" device=CUDA.name(dev) capability=cap runtime=runtime target mode
-            try
-                CUDA.set_runtime_version!(target)
-                new_runtime = CUDA.runtime_version()
-                if new_runtime >= v"13.0.0"
-                    @warn "CUDA runtime pin did not take effect; you may still see capability errors (driver may not ship compat libs)" device=CUDA.name(dev) capability=cap runtime=new_runtime target
-                else
-                    @info "CUDA runtime pinned for legacy GPU" device=CUDA.name(dev) capability=cap runtime=new_runtime target
-                end
-            catch err
-                @warn "Failed to pin CUDA runtime for legacy GPU; driver may be too new or missing compatibility libraries" device=CUDA.name(dev) capability=cap runtime=runtime target error=err
-            end
-        end
-    catch err
-        @warn "Legacy CUDA compatibility probe failed; leaving defaults" error=err
-    end
+function __init__()
+    Backends.initialize_backend_runtime!()
 end
 
 end # module ParticleDynamics

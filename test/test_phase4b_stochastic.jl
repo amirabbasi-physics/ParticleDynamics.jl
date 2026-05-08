@@ -52,7 +52,7 @@
         steps = 3200
         sample_stride = 40
 
-        st = Simulation.build_simulation(
+        st = SimulationCore.build_simulation(
             N=N, box=(boxL, boxL),
             cutoff=1.0, skin=0.2, cap=Int32(8), neigh_interval=20,
             use_neighborlist=false, epsilon=0.0, sigma=1.0,
@@ -73,18 +73,18 @@
         copyto!(st.ry, ry)
         copyto!(st.vx, zeros(Float64, N))
         copyto!(st.vy, zeros(Float64, N))
-        Simulation.sync_unwrapped!(st)
+        SimulationCore.sync_unwrapped!(st)
 
         spec = integrator == :eulermaruyama ?
-               Simulation.eulermaruyama(st; gamma=gamma, temperature=temperature, dt=dt) :
-               Simulation.eulerheun(st; gamma=gamma, temperature=temperature, dt=dt)
+               SimulationCore.eulermaruyama(st; gamma=gamma, temperature=temperature, dt=dt) :
+               SimulationCore.eulerheun(st; gamma=gamma, temperature=temperature, dt=dt)
         rx0 = copy(st.rx_unwrap)
         ry0 = copy(st.ry_unwrap)
 
         ts = Float64[]
         msd = Float64[]
         for s in 1:steps
-            Simulation.step!(st, spec, dt; compute_energy=false)
+            SimulationCore.step!(st, spec, dt; compute_energy=false)
             if s % sample_stride == 0
                 push!(ts, s * dt)
                 v = CUDA.sum((st.rx_unwrap .- rx0).^2 .+ (st.ry_unwrap .- ry0).^2) / Float64(N)
@@ -133,7 +133,7 @@
 
         function run_and_measure(spec_symbol::Symbol)
             seed_all!(0x4B0200 + hash(spec_symbol) % Int(100))
-            st = Simulation.build_simulation(
+            st = SimulationCore.build_simulation(
                 N=N, box=(boxL, boxL),
                 cutoff=1.0, skin=0.2, cap=Int32(8), neigh_interval=40,
                 use_neighborlist=false, epsilon=0.0, sigma=1.0,
@@ -156,17 +156,17 @@
             copyto!(st.vy, zeros(Float64, N))
 
             spec = spec_symbol == :vv ?
-                   Simulation.velocityverlet(st; gamma=gamma, temperature=temperature, dt=dt) :
-                   Simulation.baoab(st; gamma=gamma, temperature=temperature, dt=dt)
+                   SimulationCore.velocityverlet(st; gamma=gamma, temperature=temperature, dt=dt) :
+                   SimulationCore.baoab(st; gamma=gamma, temperature=temperature, dt=dt)
 
             for _ in 1:burn_steps
-                Simulation.step!(st, spec, dt; compute_energy=false)
+                SimulationCore.step!(st, spec, dt; compute_energy=false)
             end
 
             acc = 0.0
             nsamp = 0
             for s in 1:sample_steps
-                Simulation.step!(st, spec, dt; compute_energy=false)
+                SimulationCore.step!(st, spec, dt; compute_energy=false)
                 if s % sample_stride == 0
                     acc += Float64(CUDA.sum(st.vx.^2 .+ st.vy.^2)) / N
                     nsamp += 1
@@ -203,7 +203,7 @@
         lag_max = 300
 
         seed_all!(0x4B0303)
-        st = Simulation.build_simulation(
+        st = SimulationCore.build_simulation(
             N=N, box=(boxL, boxL),
             cutoff=1.0, skin=0.2, cap=Int32(8), neigh_interval=20,
             use_neighborlist=false, epsilon=0.0, sigma=1.0,
@@ -225,9 +225,9 @@
         copyto!(st.vx, zeros(Float64, N))
         copyto!(st.vy, zeros(Float64, N))
 
-        spec = Simulation.velocityverlet(st; gamma=gamma, temperature=temperature, noise_corr_time=tau, dt=dt)
+        spec = SimulationCore.velocityverlet(st; gamma=gamma, temperature=temperature, noise_corr_time=tau, dt=dt)
         for _ in 1:burn_steps
-            Simulation.step!(st, spec, dt; compute_energy=false)
+            SimulationCore.step!(st, spec, dt; compute_energy=false)
         end
 
         v0x = copy(st.vx)
@@ -241,7 +241,7 @@
         c_vel = Float64[]
         c_ou = Float64[]
         for lag in 1:lag_max
-            Simulation.step!(st, spec, dt; compute_energy=false)
+            SimulationCore.step!(st, spec, dt; compute_energy=false)
             cv = Float64(CUDA.sum(v0x .* st.vx .+ v0y .* st.vy)) / N
             co = Float64(CUDA.sum(ou0 .* vec(spec.workspace.ou_y))) / N
             push!(t_lags, lag * dt)
@@ -284,7 +284,7 @@
 
         function msd_to_anchor(dt::Float64)
             steps = Int(round(total_time / dt))
-            st = Simulation.build_simulation(
+            st = SimulationCore.build_simulation(
                 N=N, box=(boxL, boxL),
                 cutoff=1.0, skin=0.2, cap=Int32(8), neigh_interval=20,
                 use_neighborlist=false, epsilon=0.0, sigma=1.0,
@@ -309,9 +309,9 @@
             Filters.freeze_particles!(st; filter=Filters.All(), mode=:spring, k=kspring, steps=typemax(Int), include_energy=true)
             st.rx .+= delta
 
-            spec = Simulation.eulerheun(st; gamma=gamma, temperature=0.0, dt=dt)
+            spec = SimulationCore.eulerheun(st; gamma=gamma, temperature=0.0, dt=dt)
             for _ in 1:steps
-                Simulation.step!(st, spec, dt; compute_energy=false)
+                SimulationCore.step!(st, spec, dt; compute_energy=false)
             end
             return Float64(CUDA.sum((st.rx .- st.freeze_rx).^2 .+ (st.ry .- st.freeze_ry).^2)) / N
         end
@@ -348,7 +348,7 @@
         boxL = 2048.0
         D = report_D(noise_scale, tau, dt)
 
-        st = Simulation.build_simulation(
+        st = SimulationCore.build_simulation(
             N = N, box = (boxL, boxL),
             cutoff = 1.0, skin = 0.5, cap = Int32(256), neigh_interval = 50,
             use_neighborlist = true, epsilon = 0.0, sigma = 1.0,
@@ -370,12 +370,12 @@
         copyto!(st.vx, zeros(Float64, N))
         copyto!(st.vy, zeros(Float64, N))
         ParticleDynamics.NeighborLists.update_neighbors_inplace!(st.nbh, st.rx, st.ry; box = st.box2, step = st.step)
-        Simulation.sync_unwrapped!(st)
-        spec = Simulation.velocityverlet(st; gamma=gamma, temperature=temperature, noise_corr_time=tau, dt=dt)
+        SimulationCore.sync_unwrapped!(st)
+        spec = SimulationCore.velocityverlet(st; gamma=gamma, temperature=temperature, noise_corr_time=tau, dt=dt)
         Filters.set_noise_scale!(spec, noise_scale)
 
         for _ in 1:burn_steps
-            Simulation.step!(st, spec, dt; compute_energy = false)
+            SimulationCore.step!(st, spec, dt; compute_energy = false)
         end
 
         rx0 = copy(st.rx_unwrap)
@@ -388,7 +388,7 @@
         vacf_num = Float64[]
         vacf_ref = Float64[]
         for step in 1:steps
-            Simulation.step!(st, spec, dt; compute_energy = false)
+            SimulationCore.step!(st, spec, dt; compute_energy = false)
             if step % sample_stride == 0
                 t = step * dt
                 push!(msd_num, Float64(CUDA.sum((st.rx_unwrap .- rx0).^2 .+ (st.ry_unwrap .- ry0).^2) / N))

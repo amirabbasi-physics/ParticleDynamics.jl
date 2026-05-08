@@ -28,5 +28,8 @@ cuda-memcheck.log
 /docs/build/
 /docs/Manifest.toml
 
+# macOS Finder metadata
+.DS_Store
+
 # Local scratch/output trees
 /Documents/*

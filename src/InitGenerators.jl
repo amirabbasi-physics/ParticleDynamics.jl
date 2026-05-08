@@ -105,7 +105,7 @@ end
 
 Enumerate hexagonal lattice sites inside a periodic rectangular box of side lengths
 `box`. `a = σ` fixes the nearest-neighbor spacing, which matches the setups
-used in `examples/SingleT_2D_LD_VV.jl` and friends. Rows are centered in the
+used in `examples/2D_example.jl` and related workflow examples. Rows are centered in the
 box, and if an odd row count would place periodic images closer than `a`,
 the last row is dropped to avoid overlaps while minimizing empty space.
 """

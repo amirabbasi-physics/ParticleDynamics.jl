@@ -6,9 +6,9 @@
             N=24, T=Float32, box=(20f0, 20f0, 20f0), cutoff=2.5f0, skin=0.3f0, cap=Int32(32),
             neigh_interval=4, gamma=nothing, temperature=1f0, nonbonded=:wca
         )
-        vv = Simulation.velocityverlet(st; gamma=1f0, temperature=1f0, dt=dt)
+        vv = SimulationCore.velocityverlet(st; gamma=1f0, temperature=1f0, dt=dt)
         @test ParticleDynamics.IntegratorInterfaces.integrator_name(vv) == :velocity_verlet
-        spec = Simulation.csvr(st; temperature=1.0f0, tau=0.5f0)
+        spec = SimulationCore.csvr(st; temperature=1.0f0, tau=0.5f0)
 
         @test ParticleDynamics.IntegratorInterfaces.integrator_name(spec) == :csvr
         @test ParticleDynamics.IntegratorInterfaces.integrator_id(spec) == UInt8(4)
@@ -20,11 +20,11 @@
         vz0 = randn(Float32, length(st.rx))
         set_velocities_3d!(st, vx0, vy0, vz0)
 
-        Simulation.step!(st, spec, dt; compute_energy=true)
+        SimulationCore.step!(st, spec, dt; compute_energy=true)
         @test state_allfinite(st)
         @test st.last_integrator == UInt8(4)
 
-        obs = Simulation.collect_step_observables(st, spec)
+        obs = SimulationCore.collect_step_observables(st, spec)
         @test hasproperty(obs, :extended_hamiltonian)
         @test hasproperty(obs, :thermostat_energy)
         @test hasproperty(obs, :thermostat_temperature_error)
@@ -47,9 +47,9 @@
         vz0 = randn(Float32, N) .* 3f0
         set_velocities_3d!(st, vx0, vy0, vz0)
 
-        spec = Simulation.csvr(st; temperature=1.0f0, tau=0.2f0)
+        spec = SimulationCore.csvr(st; temperature=1.0f0, tau=0.2f0)
         for _ in 1:800
-            Simulation.step!(st, spec, dt; compute_energy=false)
+            SimulationCore.step!(st, spec, dt; compute_energy=false)
         end
 
         dof = 3 * N
@@ -79,11 +79,11 @@
         cold = Filters.TypeIDs(1)
         hot = Filters.TypeIDs(2)
 
-        spec = Simulation.csvr(st; temperature=1.0f0, tau=0.2f0)
+        spec = SimulationCore.csvr(st; temperature=1.0f0, tau=0.2f0)
         Filters.set_temperature!(spec, st, dt, cold => 0.8f0, hot => 1.4f0)
 
         for _ in 1:1200
-            Simulation.step!(st, spec, dt; compute_energy=false)
+            SimulationCore.step!(st, spec, dt; compute_energy=false)
         end
 
         Nc = Filters.count(st, cold)
@@ -112,12 +112,12 @@
         vz0 = randn(Float64, N) .* 2.0
         set_velocities_3d!(st, vx0, vy0, vz0)
 
-        spec = Simulation.csvr(st; temperature=1.0, tau=0.1)
+        spec = SimulationCore.csvr(st; temperature=1.0, tau=0.1)
         hvals = Float64[]
         for step in 1:400
-            Simulation.step!(st, spec, dt; compute_energy=true)
+            SimulationCore.step!(st, spec, dt; compute_energy=true)
             if step % 10 == 0
-                obs = Simulation.collect_step_observables(st, spec)
+                obs = SimulationCore.collect_step_observables(st, spec)
                 push!(hvals, obs.extended_hamiltonian)
             end
         end

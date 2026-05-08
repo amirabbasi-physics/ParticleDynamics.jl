@@ -1,21 +1,136 @@
 @testset "API and Filters" begin
     seed_all!(0xA1001)
 
-    @test isdefined(ParticleDynamics, :SimulationState)
-    @test isdefined(ParticleDynamics, :build_simulation)
-    @test isdefined(ParticleDynamics, :step!)
-    @test isdefined(ParticleDynamics, :step_graph!)
-    @test isdefined(ParticleDynamics, :velocityverlet)
-    @test isdefined(ParticleDynamics, :reset_bath_exchange_accumulators!)
-    @test isdefined(ParticleDynamics, :baoab)
-    @test isdefined(ParticleDynamics, :baoa)
-    @test isdefined(ParticleDynamics, :gsm)
-    @test isdefined(ParticleDynamics, :eulermaruyama)
-    @test isdefined(ParticleDynamics, :eulerheun)
-    @test isdefined(ParticleDynamics, :nosehooverchain)
-    @test isdefined(ParticleDynamics, :NHCSpec)
-    @test isdefined(ParticleDynamics, :csvr)
-    @test isdefined(ParticleDynamics, :CSVRSpec)
+    @testset "Release-facing API guard" begin
+        entrypoint = read(joinpath(dirname(@__DIR__), "src", "ParticleDynamics.jl"), String)
+        guard_pos = findfirst("if get(ENV, \"PARTICLEDYNAMICS_VERBOSE_LOAD\", \"0\") == \"1\"", entrypoint)
+        banner_pos = findfirst("ParticleDynamics Loaded", entrypoint)
+        @test guard_pos !== nothing
+        @test banner_pos !== nothing
+        @test first(guard_pos) < first(banner_pos)
+
+        module_symbols = (
+            :Filters,
+            :BondedForces,
+            :ParticleGroups,
+            :Thermostats,
+        )
+        simulation_symbols = (
+            :SimulationState,
+            :build_simulation,
+            :step!,
+            :step_graph!,
+            :sync_unwrapped!,
+            :collect_step_observables,
+            :reset_bath_exchange_accumulators!,
+            :accumulate_virial!,
+            :virial_components,
+            :virial_tensor,
+        )
+        integrator_symbols = (
+            :velocityverlet,
+            :baoab,
+            :baoa,
+            :gsm,
+            :eulerheun,
+            :eulermaruyama,
+            :nosehooverchain,
+            :csvr,
+            :NHCSpec,
+            :CSVRSpec,
+        )
+        writer_symbols = (
+            :InMemoryLogger,
+            :CSVWriter,
+            :XYZWriter,
+            :write_xyz!,
+            :write_observables_csv!,
+            :gsd_open,
+            :gsd_close,
+            :write_gsd_frame!,
+            :read_gsd_frame!,
+        )
+        group_symbols = (
+            :ParticleSelection,
+            :ParticleGroup,
+            :All,
+            :TypeIDs,
+            :Indices,
+            :materialize,
+            :apply_scalar!,
+            :apply_values!,
+            :gather,
+            :sum_values,
+        )
+        thermostat_symbols = (
+            :AbstractThermostat,
+            :ThermostatState,
+            :NoseHooverChainThermostat,
+            :CSVRThermostat,
+            :n_baths,
+            :target_temperature,
+            :response_time,
+            :set_target_temperature!,
+            :set_response_time!,
+            :cumulative_energy_exchange,
+        )
+        collision_symbols = (
+            :enable_collision_counting!,
+            :disable_collision_counting!,
+            :collisions_reset_counts!,
+            :collisions_read_counts!,
+            :set_collision_pair_cutoffs!,
+        )
+
+        for sym in (
+            module_symbols...,
+            simulation_symbols...,
+            integrator_symbols...,
+            writer_symbols...,
+            group_symbols...,
+            thermostat_symbols...,
+            collision_symbols...,
+        )
+            @test Base.isexported(ParticleDynamics, sym)
+            @test isdefined(ParticleDynamics, sym)
+        end
+
+        for sym in (
+            :zero_forces!,
+            :accumulate_energies!,
+            :run_integrator_step!,
+            :thermostatted_dof,
+            :thermostatted_particle_mask,
+        )
+            @test !Base.isexported(ParticleDynamics, sym)
+        end
+
+        for sym in (
+            :zero_forces!,
+            :accumulate_energies!,
+            :run_integrator_step!,
+            :thermostatted_dof,
+            :thermostatted_particle_mask,
+            :evaluate_forces_into_f!,
+            :evaluate_forces_into_f0!,
+            :evaluate_midpoint_forces_into_f0!,
+        )
+            @test isdefined(ParticleDynamics.SimulationCore, sym)
+            @test !Base.isexported(ParticleDynamics.SimulationCore, sym)
+        end
+
+        err = try
+            ParticleDynamics.build_simulation(
+                N=8, box=(20f0, 20f0), cutoff=2.5f0, skin=0.3f0, cap=Int32(32), neigh_interval=5,
+                epsilon=1f0, sigma=1f0, gamma=1f0, temperature=1f0, backend=:cpu
+            )
+            nothing
+        catch caught
+            caught
+        end
+        @test err isa ArgumentError
+        @test occursin("CPU backend support is not implemented", sprint(showerror, err))
+    end
 
     N = 16
     dt = 0.002f0
@@ -29,7 +144,7 @@
 
     cold_sel = Filters.selection(st, cold_filter)
     hot_sel = Filters.selection(st, hot_filter)
-    vv = Simulation.velocityverlet(st; gamma=1f0, temperature=1f0, dt=dt)
+    vv = SimulationCore.velocityverlet(st; gamma=1f0, temperature=1f0, dt=dt)
 
     @test Filters.count(st, cold_filter) == N ÷ 2
     @test Filters.count(st, hot_filter) == N - N ÷ 2
@@ -94,7 +209,7 @@
     @test all(dq_host[idx_sel.host] .== 5.0f0)
 
     @testset "Integrator-spec controls and observables" begin
-        spec = Simulation.velocityverlet(st; gamma=1f0, temperature=1f0, dt=dt)
+        spec = SimulationCore.velocityverlet(st; gamma=1f0, temperature=1f0, dt=dt)
         @test ParticleDynamics.IntegratorInterfaces.stage_sequence(spec) == (:kick1, :drift, :force, :kick2)
 
         Filters.set_friction!(spec, st, 1.5f0; filter=cold_filter)
@@ -122,8 +237,8 @@
         @test size(spec.params.ou.coeff_a, 1) == 2
         @test spec.params.corr_time === nothing
 
-        Simulation.step!(st, spec, dt; compute_energy=true)
-        obs = Simulation.collect_step_observables(st, spec)
+        SimulationCore.step!(st, spec, dt; compute_energy=true)
+        obs = SimulationCore.collect_step_observables(st, spec)
         @test obs.integrator == :velocity_verlet
         @test obs.step == st.step
         @test isfinite(obs.Etot)
@@ -132,10 +247,10 @@
     end
 
     @testset "NHC controls" begin
-        nhc = Simulation.nosehooverchain(st; temperature=1.0f0, tau=0.5f0, chain_length=4, substeps=3)
+        nhc = SimulationCore.nosehooverchain(st; temperature=1.0f0, tau=0.5f0, chain_length=4, substeps=3)
         @test ParticleDynamics.IntegratorInterfaces.stage_sequence(nhc) ==
               (:thermostat_pre, :kick1, :drift, :force, :kick2, :thermostat_post)
-        @test nhc.params.propagator == Simulation.NHC_PROPAGATOR_GROMACS
+        @test nhc.params.propagator == SimulationCore.NHC_PROPAGATOR_GROMACS
 
         old_q = copy(nhc.params.chain_masses)
         Filters.set_thermostat_temperature!(nhc, 1.25f0)
@@ -157,21 +272,21 @@
         @test_throws ArgumentError Filters.set_noise_scale!(nhc, 1.0f0)
         @test_throws ArgumentError Filters.set_corr_time!(nhc, 0.1f0)
 
-        nhc_legacy = Simulation.nosehooverchain(
+        nhc_legacy = SimulationCore.nosehooverchain(
             st; temperature=1.0f0, tau=0.5f0, chain_length=4, substeps=5, propagator=:legacy
         )
         @test nhc_legacy.params.propagator != nhc.params.propagator
-        nhc_lammps = Simulation.nosehooverchain(
+        nhc_lammps = SimulationCore.nosehooverchain(
             st; temperature=1.0f0, tau=0.5f0, chain_length=4, substeps=1, propagator=:lammps
         )
-        @test nhc_lammps.params.propagator == Simulation.NHC_PROPAGATOR_LAMMPS
-        @test_throws ArgumentError Simulation.nosehooverchain(
+        @test nhc_lammps.params.propagator == SimulationCore.NHC_PROPAGATOR_LAMMPS
+        @test_throws ArgumentError SimulationCore.nosehooverchain(
             st; temperature=1.0f0, tau=0.5f0, chain_length=4, substeps=5, propagator=:invalid
         )
     end
 
     @testset "CSVR controls" begin
-        csvr_spec = Simulation.csvr(st; temperature=1.0f0, tau=0.5f0)
+        csvr_spec = SimulationCore.csvr(st; temperature=1.0f0, tau=0.5f0)
         @test ParticleDynamics.IntegratorInterfaces.stage_sequence(csvr_spec) ==
               (:kick1, :drift, :force, :kick2, :thermostat)
 
@@ -192,6 +307,6 @@
         @test_throws ArgumentError Filters.set_friction!(csvr_spec, 1.0f0)
         @test_throws ArgumentError Filters.set_noise_scale!(csvr_spec, 1.0f0)
         @test_throws ArgumentError Filters.set_corr_time!(csvr_spec, 0.1f0)
-        @test_throws ArgumentError Simulation.csvr(st; temperature=1.0f0, tau=0.0f0)
+        @test_throws ArgumentError SimulationCore.csvr(st; temperature=1.0f0, tau=0.0f0)
     end
 end
