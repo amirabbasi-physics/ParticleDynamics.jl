@@ -212,6 +212,17 @@ function _pair_table_for_system(table::PairTable, types::Vector{Symbol}, ::Type{
     return sigma, epsilon, cutoff
 end
 
+function _effective_pair_cutoff(cutoff_pair::AbstractMatrix{T},
+                                epsilon_pair::AbstractMatrix{T}) where {T<:AbstractFloat}
+    size(cutoff_pair) == size(epsilon_pair) ||
+        throw(ArgumentError("Pair cutoff and epsilon matrices must have the same shape."))
+    effective = Matrix{T}(cutoff_pair)
+    @inbounds for j in axes(effective, 2), i in axes(effective, 1)
+        epsilon_pair[i, j] > zero(T) || (effective[i, j] = zero(T))
+    end
+    return effective
+end
+
 function _neighbor_kwargs(force)
     kwargs = Dict{Symbol,Any}()
     if force.pairs === :all
@@ -270,11 +281,12 @@ function _pair_table_kwargs(system::ParticleSystem, force, nonbonded::Symbol, ::
     table = force.pair_table
     table isa PairTable || throw(ArgumentError("Type-dependent $(typeof(force)) requires `pair_table=PairTable(...)`."))
     sigma_pair, epsilon_pair, cutoff_pair = _pair_table_for_system(table, system.types, T)
+    effective_cutoff_pair = _effective_pair_cutoff(cutoff_pair, epsilon_pair)
     kwargs, use_typed_neighbors = _neighbor_kwargs(force)
     kwargs[:nonbonded] = nonbonded
     kwargs[:epsilon] = maximum(epsilon_pair)
     kwargs[:sigma] = maximum(sigma_pair)
-    kwargs[:cutoff] = maximum(cutoff_pair)
+    kwargs[:cutoff] = maximum(effective_cutoff_pair)
 
     if use_typed_neighbors
         kwargs[:use_neighborlist] = true
@@ -289,20 +301,20 @@ function _pair_table_kwargs(system::ParticleSystem, force, nonbonded::Symbol, ::
         copyto!(st.typeid, system_typeids)
         st.sigma_pair = CuArray(T.(sigma_pair))
         st.epsilon_pair = CuArray(T.(epsilon_pair))
-        st.rcut_pair = CuArray(T.(cutoff_pair))
+        st.rcut_pair = CuArray(T.(effective_cutoff_pair))
         if use_typed_neighbors
             if length(box_tuple) == 2
                 st.nbh = NeighborLists.build_neighbors_stencil_by_types!(st.rx, st.ry;
                                                                          box=st.box2,
                                                                          typeid=st.typeid,
-                                                                         rcut_pair=cutoff_pair,
+                                                                         rcut_pair=effective_cutoff_pair,
                                                                          cap=cap,
                                                                          skin=skin)
             else
                 st.nbh = NeighborLists.build_neighbors_stencil_by_types!(st.rx, st.ry, st.rz;
                                                                          box=st.box3,
                                                                          typeid=st.typeid,
-                                                                         rcut_pair=cutoff_pair,
+                                                                         rcut_pair=effective_cutoff_pair,
                                                                          cap=cap,
                                                                          skin=skin)
             end
@@ -314,7 +326,7 @@ function _pair_table_kwargs(system::ParticleSystem, force, nonbonded::Symbol, ::
         :pair_style => :pair_table,
         :sigma_pair => sigma_pair,
         :epsilon_pair => epsilon_pair,
-        :cutoff_pair => cutoff_pair,
+        :cutoff_pair => effective_cutoff_pair,
     )
 end
 

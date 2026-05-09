@@ -407,6 +407,64 @@ function write_gsd_frame!(h, st; diameter=1.0, types_names=["A"], step::Int=0,
         GSDFiles.write_chunk!(h.user, "particles/position_unwrapped"; dtype, N=N, M=3, data)
     end
 
+    if st.rx_unwrap !== nothing && st.ry_unwrap !== nothing
+        imageM = Matrix{Int32}(undef, N, 3)
+        rx_host = Array(st.rx)
+        ry_host = Array(st.ry)
+        rxu_host = Array(st.rx_unwrap)
+        ryu_host = Array(st.ry_unwrap)
+        write_images = true
+        max_image_abs = 0.0
+        if st.box3 === nothing
+            st.box2 === nothing && error("SimulationState is missing box metadata.")
+            Lx, Ly = st.box2
+            @inbounds for i in 1:N
+                imgx = round(Int64, Float64((rxu_host[i] - rx_host[i]) / Lx))
+                imgy = round(Int64, Float64((ryu_host[i] - ry_host[i]) / Ly))
+                max_image_abs = max(max_image_abs, abs(Float64(imgx)), abs(Float64(imgy)))
+                if imgx < typemin(Int32) || imgx > typemax(Int32) ||
+                   imgy < typemin(Int32) || imgy > typemax(Int32)
+                    write_images = false
+                    break
+                end
+                imageM[i, 1] = Int32(imgx)
+                imageM[i, 2] = Int32(imgy)
+                imageM[i, 3] = Int32(0)
+            end
+        else
+            st.rz !== nothing || error("3D SimulationState is missing z coordinates.")
+            st.rz_unwrap !== nothing || error("3D SimulationState is missing z unwrapped coordinates.")
+            rz_host = Array(st.rz)
+            rzu_host = Array(st.rz_unwrap)
+            Lx, Ly, Lz = st.box3
+            @inbounds for i in 1:N
+                imgx = round(Int64, Float64((rxu_host[i] - rx_host[i]) / Lx))
+                imgy = round(Int64, Float64((ryu_host[i] - ry_host[i]) / Ly))
+                imgz = round(Int64, Float64((rzu_host[i] - rz_host[i]) / Lz))
+                max_image_abs = max(max_image_abs,
+                                    abs(Float64(imgx)),
+                                    abs(Float64(imgy)),
+                                    abs(Float64(imgz)))
+                if imgx < typemin(Int32) || imgx > typemax(Int32) ||
+                   imgy < typemin(Int32) || imgy > typemax(Int32) ||
+                   imgz < typemin(Int32) || imgz > typemax(Int32)
+                    write_images = false
+                    break
+                end
+                imageM[i, 1] = Int32(imgx)
+                imageM[i, 2] = Int32(imgy)
+                imageM[i, 3] = Int32(imgz)
+            end
+        end
+        if write_images
+            GSDFiles.write_chunk_raw!(h.user, "particles/image";
+                                      type_code=UInt8(GSDFiles.GSD_TYPE_INT32 + 0x01),
+                                      N=N, M=3, data=GSDFiles.rowmajor(imageM))
+        else
+            @warn "Skipping particles/image for this GSD frame because the image count exceeded Int32 range. This usually indicates unstable dynamics or an unequilibrated initial state." step=step max_abs_image=max_image_abs
+        end
+    end
+
     if hasproperty(st, :bonds) && (st.bonds !== nothing)
         idx    = Vector{Int32}(undef, length(st.bonds.index));    copyto!(idx, st.bonds.index)
         counts = Vector{Int32}(undef, length(st.bonds.counts));   copyto!(counts, st.bonds.counts)

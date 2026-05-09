@@ -155,3 +155,105 @@ function sync_unwrapped!(st::SimulationState{T}) where {T<:AbstractFloat}
     end
     return st
 end
+
+@inline function _host_mic(dx::T, L::T) where {T<:AbstractFloat}
+    return dx - L * round(dx / L)
+end
+
+"""
+    initialize_unwrapped_from_bonds!(st, bonds)
+
+Seed `st.rx_unwrap`/`st.ry_unwrap`/`st.rz_unwrap` from the wrapped coordinates
+and bond topology by traversing each connected component with minimum-image
+bond displacements. This is useful for bonded systems that already straddle the
+periodic box at initialization, where a plain `sync_unwrapped!` copy would make
+chains appear artificially stretched in unwrapped output.
+"""
+function initialize_unwrapped_from_bonds!(st::SimulationState{T},
+                                          bonds::AbstractVector{<:Tuple{<:Integer,<:Integer}}) where {T<:AbstractFloat}
+    st.rx_unwrap === nothing && return st
+    isempty(bonds) && return sync_unwrapped!(st)
+
+    N = length(st.rx)
+    adjacency = [Int32[] for _ in 1:N]
+    for (i_raw, j_raw) in bonds
+        i = Int(i_raw)
+        j = Int(j_raw)
+        1 <= i <= N || throw(ArgumentError("Bond index $(i) is out of bounds for N=$(N)."))
+        1 <= j <= N || throw(ArgumentError("Bond index $(j) is out of bounds for N=$(N)."))
+        push!(adjacency[i], Int32(j))
+        push!(adjacency[j], Int32(i))
+    end
+
+    rx = Array(st.rx)
+    ry = Array(st.ry)
+    rz = st.rz === nothing ? nothing : Array(st.rz)
+    rxu = copy(rx)
+    ryu = copy(ry)
+    rzu = rz === nothing ? nothing : copy(rz)
+
+    if st.box3 === nothing
+        st.box2 === nothing && throw(ArgumentError("SimulationState is missing box metadata."))
+        Lx, Ly = st.box2
+        visited = falses(N)
+        stack = Int32[]
+        sizehint!(stack, N)
+        for root in 1:N
+            visited[root] && continue
+            visited[root] = true
+            push!(stack, Int32(root))
+            while !isempty(stack)
+                i = Int(pop!(stack))
+                xi = rxu[i]
+                yi = ryu[i]
+                xwi = rx[i]
+                ywi = ry[i]
+                for j32 in adjacency[i]
+                    j = Int(j32)
+                    visited[j] && continue
+                    rxu[j] = xi + _host_mic(rx[j] - xwi, Lx)
+                    ryu[j] = yi + _host_mic(ry[j] - ywi, Ly)
+                    visited[j] = true
+                    push!(stack, j32)
+                end
+            end
+        end
+    else
+        rz === nothing && throw(ArgumentError("3D SimulationState is missing z coordinates."))
+        rzu === nothing && throw(ArgumentError("3D SimulationState is missing z unwrapped coordinates."))
+        Lx, Ly, Lz = st.box3
+        visited = falses(N)
+        stack = Int32[]
+        sizehint!(stack, N)
+        for root in 1:N
+            visited[root] && continue
+            visited[root] = true
+            push!(stack, Int32(root))
+            while !isempty(stack)
+                i = Int(pop!(stack))
+                xi = rxu[i]
+                yi = ryu[i]
+                zi = rzu[i]
+                xwi = rx[i]
+                ywi = ry[i]
+                zwi = rz[i]
+                for j32 in adjacency[i]
+                    j = Int(j32)
+                    visited[j] && continue
+                    rxu[j] = xi + _host_mic(rx[j] - xwi, Lx)
+                    ryu[j] = yi + _host_mic(ry[j] - ywi, Ly)
+                    rzu[j] = zi + _host_mic(rz[j] - zwi, Lz)
+                    visited[j] = true
+                    push!(stack, j32)
+                end
+            end
+        end
+    end
+
+    copyto!(st.rx_unwrap, rxu)
+    copyto!(st.ry_unwrap, ryu)
+    if rzu !== nothing && st.rz_unwrap !== nothing
+        copyto!(st.rz_unwrap, rzu)
+    end
+    return st
+end
