@@ -186,6 +186,21 @@ function _refresh_neighbor_state!(st::SimulationState)
     return st
 end
 
+function _warn_if_neighbor_capacity_saturated!(sim)
+    get(sim.metadata, :workflow_neighbor_capacity_warned, false) && return nothing
+    st = sim.state
+    st === nothing && return nothing
+    nbh = st.nbh
+    nbh isa NeighborLists.AllPairsNeighborMatrix && return nothing
+    max_count = Int(maximum(nbh.counts))
+    cap = Int(nbh.cap)
+    max_count < cap && return nothing
+    style = nbh isa NeighborLists.StencilNeighborMatrix ? "typed stencil" : "cell-list"
+    @warn "Neighbor list reached the configured per-particle capacity during the initial build. This can truncate neighbors and yield incorrect forces; increase `CellList.capacity`." style cap max_count
+    sim.metadata[:workflow_neighbor_capacity_warned] = true
+    return nothing
+end
+
 function _validate_writer_state_requirements(sim)
     st = sim.state
     st === nothing && return sim
@@ -224,12 +239,20 @@ function _build_workflow_state!(sim, compiled_forces::Union{Nothing,CompiledForc
     st = SimulationCore.build_simulation(; kwargs...)
     _copy_system_into_state!(st, sim.system)
     compiled_forces === nothing || post_build!(compiled_forces, st)
-    st.rx_unwrap === nothing || SimulationCore.sync_unwrapped!(st)
+    if st.rx_unwrap !== nothing
+        bonds = sim.system.topology.bonds
+        if isempty(bonds)
+            SimulationCore.sync_unwrapped!(st)
+        else
+            SimulationCore.initialize_unwrapped_from_bonds!(st, bonds)
+        end
+    end
     _refresh_neighbor_state!(st)
     sim.state = st
     sim.metadata[:workflow_backend] = backend
     sim.metadata[:workflow_precision] = _workflow_precision_symbol(sim.precision)
     sim.metadata[:workflow_time] = Float64(st.step) * Float64(st.dt)
+    _warn_if_neighbor_capacity_saturated!(sim)
     return st
 end
 
@@ -274,6 +297,7 @@ function prepare!(sim)
     if sim.state !== nothing
         if haskey(sim.metadata, :compiled_forces) && !built_state
             post_build!(sim.metadata[:compiled_forces], sim.state)
+            _warn_if_neighbor_capacity_saturated!(sim)
         end
         if haskey(sim.metadata, :compiled_integrator)
             sim.lowlevel_integrator = build_lowlevel_integrator(sim.metadata[:compiled_integrator],

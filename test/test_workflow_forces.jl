@@ -131,6 +131,66 @@ end
     @test st_fene.bonding isa ParticleDynamics.FENEBond{Float64}
 end
 
+@testset "Workflow PairTable ignores zero-strength cutoff branches" begin
+    cfg = hex_random_2d(4, 1.0, 0.20; T=Float64)
+    system = ParticleSystem(cfg; types=[:A, :B], typeids=Int32[1, 1, 2, 2])
+
+    pair_table = PairTable(
+        sigma=[1.0 5.0; 5.0 2.0],
+        epsilon=[1.0 0.0; 0.0 2.0],
+        cutoff=[1.2 30.0; 30.0 2.4],
+        type_names=[:A, :B],
+    )
+    compiled = ParticleDynamics.Workflow.compile_forces(
+        system,
+        [WCA(pair_table=pair_table, pairs=:neighborlist, neighborlist=CellList(buffer=0.2, capacity=16, rebuild_interval=4))];
+        precision=:f64,
+    )
+
+    cutoff_eff = compiled.metadata[:cutoff_pair]
+    @test cutoff_eff == [1.2 0.0; 0.0 2.4]
+    @test compiled.build_kwargs[:cutoff] == 2.4
+
+    kwargs = merge(
+        Dict{Symbol,Any}(
+            :N => length(system),
+            :box => Tuple(system.box),
+            :gamma => 1.0,
+            :temperature => 0.0,
+            :dt => 1e-3,
+            :precision => :f64,
+        ),
+        compiled.build_kwargs,
+    )
+    st = SimulationCore.build_simulation(; kwargs...)
+    copyto!(st.rx, Float64[p[1] for p in system.positions])
+    copyto!(st.ry, Float64[p[2] for p in system.positions])
+    ParticleDynamics.Workflow.post_build!(compiled, st)
+    @test Array(st.rcut_pair) == cutoff_eff
+end
+
+@testset "Workflow warns on saturated initial neighbor capacity" begin
+    system = ParticleSystem(
+        [
+            [-0.20, 0.0],
+            [0.20, 0.0],
+            [0.0, 0.20],
+            [0.0, -0.20],
+        ];
+        box=PeriodicBox((4.0, 4.0)),
+    )
+    sim = Simulation(
+        system;
+        integrator=Integrator(
+            dt=1e-3,
+            forces=[WCA(epsilon=1.0, sigma=1.0, pairs=:neighborlist,
+                        neighborlist=CellList(buffer=0.2, capacity=1, rebuild_interval=4))],
+        ),
+        precision=Float64,
+    )
+    @test_logs (:warn, r"Neighbor list reached the configured per-particle capacity") prepare!(sim)
+end
+
 @testset "Workflow Force Compilation in prepare!" begin
     cfg = hex_random_2d(6, 1.0, 0.30; T=Float64)
     system = ParticleSystem(cfg; typeids=fill(Int32(1), 6))

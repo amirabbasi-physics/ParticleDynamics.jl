@@ -164,3 +164,38 @@ end
         @test size(frame.particle_properties[:virial], 1) == length(system)
     end
 end
+
+@testset "Workflow GSDWriter emits particle images for bonded PBC systems" begin
+    mktempdir() do tmp
+        system = ParticleSystem(
+            Float64[-4.8 0.0 0.0; 4.8 0.0 0.0];
+            box=PeriodicBox((10.0, 10.0, 10.0)),
+            topology=Topology(bonds=[(1, 2)]),
+            masses=Dict(:A => 0.0),
+        )
+        all_particles = Group(:all, AllSelection())
+        writer = GSDWriter(joinpath(tmp, "bonded_images.gsd"); every=1, write_start=true, write_unwrapped=true)
+        sim = Simulation(
+            system;
+            groups=Groups(all_particles),
+            writers=[writer],
+            integrator=Integrator(
+                dt=1e-3,
+                methods=[Brownian(all_particles; gamma=1.0, kT=0.0)],
+            ),
+            precision=Float64,
+        )
+
+        prepare!(sim)
+        ParticleDynamics.Workflow.write_initial_frames!(sim)
+        ParticleDynamics.Workflow.close_writers!(sim)
+
+        frame = ParticleDynamics.read_gsd_frame!(joinpath(tmp, "bonded_images.gsd"))
+        @test haskey(frame.particle_properties, :image)
+        image = frame.particle_properties[:image]
+        @test size(image) == (2, 3)
+        @test image[1, 2] == 0 && image[1, 3] == 0
+        @test image[2, 2] == 0 && image[2, 3] == 0
+        @test abs(image[2, 1] - image[1, 1]) == 1
+    end
+end

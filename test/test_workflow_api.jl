@@ -113,3 +113,29 @@ end
     @test st_free.rx_unwrap !== nothing
     @test free_sim.lowlevel_integrator isa SimulationCore.EMSpec{Float64}
 end
+
+@testset "Workflow bonded unwrapped initialization respects periodic bonds" begin
+    system = ParticleSystem(
+        Float64[-4.8 0.0 0.0; 4.8 0.0 0.0];
+        box=PeriodicBox((10.0, 10.0, 10.0)),
+        topology=Topology(bonds=[(1, 2)]),
+        masses=Dict(:A => 0.0),
+    )
+    all_particles = Group(:all, AllSelection())
+    sim = Simulation(
+        system;
+        groups=Groups(all_particles),
+        integrator=Integrator(
+            dt=1e-3,
+            methods=[Brownian(all_particles; gamma=1.0, kT=0.0)],
+        ),
+        writers=Writer[GSDWriter(joinpath(mktempdir(), "traj.gsd"); write_start=false, write_unwrapped=true)],
+        precision=Float64,
+    )
+
+    prepare!(sim)
+    st = state(sim)
+    rxu = Array(st.rx_unwrap)
+    dx = rxu[2] - rxu[1]
+    @test isapprox(abs(dx), 0.4; atol=1e-12, rtol=1e-12)
+end
