@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="Particle_Dynamics.png" alt="ParticleDynamics.jl logo" width="360">
+</p>
+
 # ParticleDynamics.jl
 
 `ParticleDynamics.jl` is a GPU-first Julia package for non-equilibrium particle
