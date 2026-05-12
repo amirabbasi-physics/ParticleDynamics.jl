@@ -3,10 +3,10 @@ title: "ParticleDynamics.jl"
 message: "If you use this software, please cite it using the metadata from this file."
 type: software
 authors:
-  - family-names: "abbaa90"
-    email: "abbaa90@fu-berlin.de"
-repository-code: "https://git.imp.fu-berlin.de/abbaa90/NonEqSimGPU.jl.git"
-url: "https://git.imp.fu-berlin.de/abbaa90/NonEqSimGPU.jl.git"
+  - family-names: "Amir Abbasi"
+    email: "amir.abbasi.9069@gmail.com"
+repository-code: "https://github.com/amirabbasi-physics/ParticleDynamics.jl"
+url: "https://github.com/amirabbasi-physics/ParticleDynamics.jl"
 abstract: >
   GPU-only particle simulation toolkit for non-equilibrium Langevin and Brownian
   dynamics in Julia using CUDA.jl.
