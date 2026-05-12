@@ -8,8 +8,7 @@ authors:
 repository-code: "https://github.com/amirabbasi-physics/ParticleDynamics.jl"
 url: "https://github.com/amirabbasi-physics/ParticleDynamics.jl"
 abstract: >
-  GPU-only particle simulation toolkit for non-equilibrium Langevin and Brownian
-  dynamics in Julia using CUDA.jl.
+  GPU-accelerated simulation toolkit for particle dynamics in Julia using CUDA.jl.
 version: "0.4.0"
 license: "MIT"
 keywords:
