@@ -2,14 +2,6 @@
 # Core kernels
 # ============================================================================
 
-# Initialize the CSR row start pointer for each particle: row i starts at i*cap.
-function _kernel_set_rowstarts!(neighbors_index::CuDeviceVector{Int32}, cap::Int32)
-    i = (blockIdx().x-1)*blockDim().x + threadIdx().x
-    N = length(neighbors_index); if i > N; return; end
-    @inbounds neighbors_index[i] = (i-1) * cap
-    return
-end
-
 # Pack `(cell_id, particle_id)` pairs so particles can be sorted by cell id.
 function _kernel_compute_packed2!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
                                   Lx::T, Ly::T, inv_cs::T,
@@ -114,7 +106,7 @@ function _kernel_neighbors2!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
         c0 = cell_of_particle[i1]
         cx = c0 % nx
         cy = c0 ÷ nx
-        base  = neighbors_index[i1]
+        base  = _csr_base(i1, cap)
         found = Int32(0)
         for oy in Int32(-1):Int32(1)
             cy2 = cy + oy; cy2 -= (cy2 >= ny)*ny; cy2 += (cy2 < 0)*ny
@@ -162,7 +154,7 @@ function _kernel_neighbors3!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::C
         tmp = c0 ÷ nx
         cy = tmp % ny
         cz = tmp ÷ ny
-        base  = neighbors_index[i1]
+        base  = _csr_base(i1, cap)
         found = Int32(0)
         for oz in Int32(-1):Int32(1)
             cz2 = cz + oz; cz2 -= (cz2 >= nz)*nz; cz2 += (cz2 < 0)*nz

@@ -36,7 +36,7 @@ function _kernel_neighbors_stencil2!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T
         inv_cs = one(T) / cell_size
         cx = Int32(floor(x * inv_cs)); cx = cx >= nx ? (nx-1) : cx
         cy = Int32(floor(y * inv_cs)); cy = cy >= ny ? (ny-1) : cy
-        base  = neighbors_index[i1]
+        base  = _csr_base(i1, cap)
         found = Int32(0)
         rl    = rlist[i1]
         rl2   = rlist2[i1]
@@ -93,7 +93,7 @@ function _kernel_neighbors_stencil3!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T
         cx = Int32(floor(x * inv_cs)); cx = cx >= nx ? (nx-1) : cx
         cy = Int32(floor(y * inv_cs)); cy = cy >= ny ? (ny-1) : cy
         cz = Int32(floor(z * inv_cs)); cz = cz >= nz ? (nz-1) : cz
-        base  = neighbors_index[i1]
+        base  = _csr_base(i1, cap)
         found = Int32(0)
         rl    = rlist[i1]
         rl2   = rlist2[i1]

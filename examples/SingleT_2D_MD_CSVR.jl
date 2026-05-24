@@ -4,7 +4,7 @@ using Printf
 include(joinpath(@__DIR__, "_example_utils.jl"))
 
 function main(phi::Float64, temperature::Float64)
-    n = maybe_override_int(10_000, "SIM_NPARTICLES")
+    n = maybe_override_int(10_000_000, "SIM_NPARTICLES")
     sigma = 1.0
 
     cfg = hex_random_2d(n, sigma, phi; T=Float64)
@@ -12,10 +12,10 @@ function main(phi::Float64, temperature::Float64)
     rcut = sigma
 
     dt = 1e-5
-    nsteps = maybe_override_int(20_000, "SIM_MAX_STEPS")
-    log_interval = maybe_override_interval(5_000, nsteps)
+    nsteps = maybe_override_int(500_000, "SIM_MAX_STEPS")
+    log_interval = maybe_override_interval(100_000, nsteps)
 
-    warmup_steps = maybe_override_int(10_000, "SIM_WARMUP_STEPS"; lower=0)
+    warmup_steps = maybe_override_int(1_000, "SIM_WARMUP_STEPS"; lower=0)
     warmup_dt = dt * 0.1
     warmup_neigh_interval = 5
     tau_csvr = 10 * dt
@@ -34,7 +34,7 @@ function main(phi::Float64, temperature::Float64)
         integrator=Integrator(
             dt=dt,
             forces=[SoftRepulsive(epsilon=epsilon, sigma=sigma, cutoff=rcut, pairs=:neighborlist,
-                                  neighborlist=CellList(buffer=0.55, capacity=250, rebuild_interval=20))],
+                                  neighborlist=CellList(buffer=0.55, capacity=150, rebuild_interval=20))],
             methods=[ConstantVolume(all_particles; thermostat=CSVR(kT=temperature, tau=tau_csvr))],
         ),
         precision=Float64,

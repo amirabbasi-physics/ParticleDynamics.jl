@@ -2,7 +2,7 @@
 function _lj2_csr_kernel_pairs!(
     rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
     fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, Epot::CuDeviceVector{T},
-    neighbors_index::CuDeviceVector{Int32}, neighbors_flat::CuDeviceVector{Int32}, counts::CuDeviceVector{Int32},
+    neighbors_index::CuDeviceVector{Int32}, neighbors_flat::CuDeviceVector{Int32}, counts::CuDeviceVector{Int32}, cap::Int32,
     Lx::T, Ly::T, halfLx::T, halfLy::T,
     typeid::CuDeviceVector{Int32},
     sigma_pair::CuDeviceMatrix{T}, epsilon_pair::CuDeviceMatrix{T}, rcut_pair::CuDeviceMatrix{T}
@@ -11,7 +11,7 @@ function _lj2_csr_kernel_pairs!(
     N = length(rx); if i > N; return; end
     xi = rx[i]; yi = ry[i]
     accx = zero(T); accy = zero(T); eacc = zero(T)
-    base  = neighbors_index[i]
+    base  = _csr_base(i, cap)
     nlist = counts[i]
     ti = typeid[i]
     @inbounds for t in 0:Int(nlist-1)
@@ -41,7 +41,7 @@ end
 function _lj2_csr_kernel_pairs_virial!(
     rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
     fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, Epot::CuDeviceVector{T}, V::CuDeviceMatrix{T},
-    neighbors_index::CuDeviceVector{Int32}, neighbors_flat::CuDeviceVector{Int32}, counts::CuDeviceVector{Int32},
+    neighbors_index::CuDeviceVector{Int32}, neighbors_flat::CuDeviceVector{Int32}, counts::CuDeviceVector{Int32}, cap::Int32,
     Lx::T, Ly::T, halfLx::T, halfLy::T,
     typeid::CuDeviceVector{Int32},
     sigma_pair::CuDeviceMatrix{T}, epsilon_pair::CuDeviceMatrix{T}, rcut_pair::CuDeviceMatrix{T}
@@ -51,7 +51,7 @@ function _lj2_csr_kernel_pairs_virial!(
     xi = rx[i]; yi = ry[i]
     accx = zero(T); accy = zero(T); eacc = zero(T)
     vxx = zero(T); vyy = zero(T); vxy = zero(T)
-    base  = neighbors_index[i]
+    base  = _csr_base(i, cap)
     nlist = counts[i]
     ti = typeid[i]
     @inbounds for t in 0:Int(nlist-1)
@@ -86,7 +86,7 @@ end
 function _lj3_csr_kernel_pairs!(
     rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
     fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, fz::CuDeviceVector{T}, Epot::CuDeviceVector{T},
-    neighbors_index::CuDeviceVector{Int32}, neighbors_flat::CuDeviceVector{Int32}, counts::CuDeviceVector{Int32},
+    neighbors_index::CuDeviceVector{Int32}, neighbors_flat::CuDeviceVector{Int32}, counts::CuDeviceVector{Int32}, cap::Int32,
     Lx::T, Ly::T, Lz::T, halfLx::T, halfLy::T, halfLz::T,
     typeid::CuDeviceVector{Int32},
     sigma_pair::CuDeviceMatrix{T}, epsilon_pair::CuDeviceMatrix{T}, rcut_pair::CuDeviceMatrix{T}
@@ -95,7 +95,7 @@ function _lj3_csr_kernel_pairs!(
     N = length(rx); if i > N; return; end
     xi = rx[i]; yi = ry[i]; zi = rz[i]
     accx = zero(T); accy = zero(T); accz = zero(T); eacc = zero(T)
-    base  = neighbors_index[i]
+    base  = _csr_base(i, cap)
     nlist = counts[i]
     ti = typeid[i]
     @inbounds for t in 0:Int(nlist-1)
@@ -127,7 +127,7 @@ end
 function _lj3_csr_kernel_pairs_virial!(
     rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
     fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, fz::CuDeviceVector{T}, Epot::CuDeviceVector{T}, V::CuDeviceMatrix{T},
-    neighbors_index::CuDeviceVector{Int32}, neighbors_flat::CuDeviceVector{Int32}, counts::CuDeviceVector{Int32},
+    neighbors_index::CuDeviceVector{Int32}, neighbors_flat::CuDeviceVector{Int32}, counts::CuDeviceVector{Int32}, cap::Int32,
     Lx::T, Ly::T, Lz::T, halfLx::T, halfLy::T, halfLz::T,
     typeid::CuDeviceVector{Int32},
     sigma_pair::CuDeviceMatrix{T}, epsilon_pair::CuDeviceMatrix{T}, rcut_pair::CuDeviceMatrix{T}
@@ -137,7 +137,7 @@ function _lj3_csr_kernel_pairs_virial!(
     xi = rx[i]; yi = ry[i]; zi = rz[i]
     accx = zero(T); accy = zero(T); accz = zero(T); eacc = zero(T)
     vxx = zero(T); vyy = zero(T); vzz = zero(T); vxy = zero(T); vxz = zero(T); vyz = zero(T)
-    base  = neighbors_index[i]
+    base  = _csr_base(i, cap)
     nlist = counts[i]
     ti = typeid[i]
     @inbounds for t in 0:Int(nlist-1)
@@ -177,7 +177,7 @@ end
 function _lj2_csr_noE_kernel_pairs!(
     rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
     fx::CuDeviceVector{T}, fy::CuDeviceVector{T},
-    neighbors_index::CuDeviceVector{Int32}, neighbors_flat::CuDeviceVector{Int32}, counts::CuDeviceVector{Int32},
+    neighbors_index::CuDeviceVector{Int32}, neighbors_flat::CuDeviceVector{Int32}, counts::CuDeviceVector{Int32}, cap::Int32,
     Lx::T, Ly::T, halfLx::T, halfLy::T,
     typeid::CuDeviceVector{Int32},
     sigma_pair::CuDeviceMatrix{T}, epsilon_pair::CuDeviceMatrix{T}, rcut_pair::CuDeviceMatrix{T}
@@ -186,7 +186,7 @@ function _lj2_csr_noE_kernel_pairs!(
     N = length(rx); if i > N; return; end
     xi = rx[i]; yi = ry[i]
     accx = zero(T); accy = zero(T)
-    base  = neighbors_index[i]
+    base  = _csr_base(i, cap)
     nlist = counts[i]
     ti = typeid[i]
     @inbounds for t in 0:Int(nlist-1)
@@ -215,7 +215,7 @@ end
 function _lj3_csr_noE_kernel_pairs!(
     rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
     fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, fz::CuDeviceVector{T},
-    neighbors_index::CuDeviceVector{Int32}, neighbors_flat::CuDeviceVector{Int32}, counts::CuDeviceVector{Int32},
+    neighbors_index::CuDeviceVector{Int32}, neighbors_flat::CuDeviceVector{Int32}, counts::CuDeviceVector{Int32}, cap::Int32,
     Lx::T, Ly::T, Lz::T, halfLx::T, halfLy::T, halfLz::T,
     typeid::CuDeviceVector{Int32},
     sigma_pair::CuDeviceMatrix{T}, epsilon_pair::CuDeviceMatrix{T}, rcut_pair::CuDeviceMatrix{T}
@@ -224,7 +224,7 @@ function _lj3_csr_noE_kernel_pairs!(
     N = length(rx); if i > N; return; end
     xi = rx[i]; yi = ry[i]; zi = rz[i]
     accx = zero(T); accy = zero(T); accz = zero(T)
-    base  = neighbors_index[i]
+    base  = _csr_base(i, cap)
     nlist = counts[i]
     ti = typeid[i]
     @inbounds for t in 0:Int(nlist-1)
@@ -265,11 +265,11 @@ function lj_forces_soa_pairs!(rx::CuArray{T,1}, ry::CuArray{T,1},
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly
     k = CUDA.@cuda launch=false _lj2_csr_kernel_pairs!(
         rx, ry, fx, fy, Epot,
-        nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+        nbh.neighbors_index, nbh.neighbors_flat, nbh.counts, nbh.cap,
         Lx, Ly, halfLx, halfLy,
         typeid, sigma_pair, epsilon_pair, rcut_pair)
     k(rx, ry, fx, fy, Epot,
-      nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+      nbh.neighbors_index, nbh.neighbors_flat, nbh.counts, nbh.cap,
       Lx, Ly, halfLx, halfLy,
       typeid, sigma_pair, epsilon_pair, rcut_pair; threads, blocks)
     return nothing
@@ -287,11 +287,11 @@ function lj_forces_soa_pairs!(rx::CuArray{T,1}, ry::CuArray{T,1},
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly
     k = CUDA.@cuda launch=false _lj2_csr_kernel_pairs_virial!(
         rx, ry, fx, fy, Epot, V,
-        nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+        nbh.neighbors_index, nbh.neighbors_flat, nbh.counts, nbh.cap,
         Lx, Ly, halfLx, halfLy,
         typeid, sigma_pair, epsilon_pair, rcut_pair)
     k(rx, ry, fx, fy, Epot, V,
-      nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+      nbh.neighbors_index, nbh.neighbors_flat, nbh.counts, nbh.cap,
       Lx, Ly, halfLx, halfLy,
       typeid, sigma_pair, epsilon_pair, rcut_pair; threads, blocks)
     return nothing
@@ -311,11 +311,11 @@ function lj_forces_soa_pairs!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly; halfLz = T(0.5)*Lz
     k = CUDA.@cuda launch=false _lj3_csr_kernel_pairs!(
         rx, ry, rz, fx, fy, fz, Epot,
-        nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+        nbh.neighbors_index, nbh.neighbors_flat, nbh.counts, nbh.cap,
         Lx, Ly, Lz, halfLx, halfLy, halfLz,
         typeid, sigma_pair, epsilon_pair, rcut_pair)
     k(rx, ry, rz, fx, fy, fz, Epot,
-      nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+      nbh.neighbors_index, nbh.neighbors_flat, nbh.counts, nbh.cap,
       Lx, Ly, Lz, halfLx, halfLy, halfLz,
       typeid, sigma_pair, epsilon_pair, rcut_pair; threads, blocks)
     return nothing
@@ -333,11 +333,11 @@ function lj_forces_soa_pairs!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly; halfLz = T(0.5)*Lz
     k = CUDA.@cuda launch=false _lj3_csr_kernel_pairs_virial!(
         rx, ry, rz, fx, fy, fz, Epot, V,
-        nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+        nbh.neighbors_index, nbh.neighbors_flat, nbh.counts, nbh.cap,
         Lx, Ly, Lz, halfLx, halfLy, halfLz,
         typeid, sigma_pair, epsilon_pair, rcut_pair)
     k(rx, ry, rz, fx, fy, fz, Epot, V,
-      nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+      nbh.neighbors_index, nbh.neighbors_flat, nbh.counts, nbh.cap,
       Lx, Ly, Lz, halfLx, halfLy, halfLz,
       typeid, sigma_pair, epsilon_pair, rcut_pair; threads, blocks)
     return nothing
@@ -356,11 +356,11 @@ function lj_forces_soa_noE_pairs!(rx::CuArray{T,1}, ry::CuArray{T,1},
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly
     k = CUDA.@cuda launch=false _lj2_csr_noE_kernel_pairs!(
         rx, ry, fx, fy,
-        nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+        nbh.neighbors_index, nbh.neighbors_flat, nbh.counts, nbh.cap,
         Lx, Ly, halfLx, halfLy,
         typeid, sigma_pair, epsilon_pair, rcut_pair)
     k(rx, ry, fx, fy,
-      nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+      nbh.neighbors_index, nbh.neighbors_flat, nbh.counts, nbh.cap,
       Lx, Ly, halfLx, halfLy,
       typeid, sigma_pair, epsilon_pair, rcut_pair; threads, blocks)
     return nothing
@@ -379,11 +379,11 @@ function lj_forces_soa_noE_pairs!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArra
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly; halfLz = T(0.5)*Lz
     k = CUDA.@cuda launch=false _lj3_csr_noE_kernel_pairs!(
         rx, ry, rz, fx, fy, fz,
-        nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+        nbh.neighbors_index, nbh.neighbors_flat, nbh.counts, nbh.cap,
         Lx, Ly, Lz, halfLx, halfLy, halfLz,
         typeid, sigma_pair, epsilon_pair, rcut_pair)
     k(rx, ry, rz, fx, fy, fz,
-      nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
+      nbh.neighbors_index, nbh.neighbors_flat, nbh.counts, nbh.cap,
       Lx, Ly, Lz, halfLx, halfLy, halfLz,
       typeid, sigma_pair, epsilon_pair, rcut_pair; threads, blocks)
     return nothing

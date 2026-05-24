@@ -34,6 +34,8 @@ end
     return threads, cld(N, threads)
 end
 
+@inline _csr_base(i::Integer, cap::Int32) = (Int64(i) - 1) * Int64(cap)
+
 # Lennard-Jones, returns force components and pair energy
 @inline function lj_pair_2d(dx::T, dy::T, r2::T, ϵ::T, σ::T) where {T<:AbstractFloat}
     invr2 = one(T) / r2
