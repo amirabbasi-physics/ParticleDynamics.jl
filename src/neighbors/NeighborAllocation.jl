@@ -15,10 +15,6 @@ function _alloc_neighbor_matrix(T::Type{<:AbstractFloat}, N::Int, D::Int,
     counts          = CUDA.CuArray{Int32}(undef, N)
     fill!(counts, Int32(0))
 
-    threads, blocks = _launchdims(N)
-    kset = CUDA.@cuda launch=false _kernel_set_rowstarts!(neighbors_index, cap)
-    kset(neighbors_index, cap; threads, blocks)
-
     particle_ids_sorted = CUDA.CuArray{Int32}(undef, N)
     cell_ids_sorted     = CUDA.CuArray{Int32}(undef, N)
     ncell = Int(nx) * Int(ny) * Int(nz)
@@ -51,10 +47,6 @@ function _alloc_stencil_matrix(T::Type{<:AbstractFloat}, N::Int, D::Int,
     neighbors_flat  = CUDA.fill(Int32(-1), N * Int(cap))
     counts          = CUDA.CuArray{Int32}(undef, N)
     fill!(counts, Int32(0))
-
-    threads, blocks = _launchdims(N)
-    kset = CUDA.@cuda launch=false _kernel_set_rowstarts!(neighbors_index, cap)
-    kset(neighbors_index, cap; threads, blocks)
 
     particle_ids_sorted = CUDA.CuArray{Int32}(undef, N)
     cell_ids_sorted     = CUDA.CuArray{Int32}(undef, N)

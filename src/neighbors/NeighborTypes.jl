@@ -22,6 +22,8 @@ abstract type AbstractNeighborMatrix end
     return threads, blocks
 end
 
+@inline _csr_base(i::Integer, cap::Int32) = (Int64(i) - 1) * Int64(cap)
+
 @inline function _choose_grid(box::Tuple, cell_size::T, D::Int) where {T<:AbstractFloat}
     if D == 2
         nx = max(1, Int32(floor(box[1] / cell_size)))
