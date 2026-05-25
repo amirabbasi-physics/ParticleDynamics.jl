@@ -67,11 +67,21 @@
         if st.rz === nothing
             if st.nb_kind == SimulationCore.NB_KIND_LJ && st.sigma_pair !== nothing
                 if compute_energy
-                    NBF.lj_forces_soa_pairs!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.virial_nonbonded,
-                                             st.nbh, st.box2, st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
-                else
-                    NBF.lj_forces_soa_noE_pairs!(st.rx, st.ry, st.fx, st.fy,
+                    if st.bonds === nothing
+                        NBF.lj_forces_soa_pairs!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.virial_nonbonded,
                                                  st.nbh, st.box2, st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
+                    else
+                        NBF.lj_forces_soa_excl!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.virial_nonbonded,
+                                                st.nbh, st.bonds, st.box2, st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
+                    end
+                else
+                    if st.bonds === nothing
+                        NBF.lj_forces_soa_noE_pairs!(st.rx, st.ry, st.fx, st.fy,
+                                                     st.nbh, st.box2, st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
+                    else
+                        NBF.lj_forces_soa_noE_excl!(st.rx, st.ry, st.fx, st.fy,
+                                                    st.nbh, st.bonds, st.box2, st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
+                    end
                 end
             elseif st.nb_kind == SimulationCore.NB_KIND_LJ && st.sigma_particle !== nothing
                 if compute_energy
@@ -83,11 +93,21 @@
                 end
             elseif st.nb_kind == SimulationCore.NB_KIND_WCA && st.sigma_pair !== nothing
                 if compute_energy
-                    NBF.wca_forces_soa_pairs!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.virial_nonbonded,
-                                              st.nbh, st.box2, st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
-                else
-                    NBF.wca_forces_soa_noE_pairs!(st.rx, st.ry, st.fx, st.fy,
+                    if st.bonds === nothing
+                        NBF.wca_forces_soa_pairs!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.virial_nonbonded,
                                                   st.nbh, st.box2, st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
+                    else
+                        NBF.wca_forces_soa_excl!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.virial_nonbonded,
+                                                 st.nbh, st.bonds, st.box2, st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
+                    end
+                else
+                    if st.bonds === nothing
+                        NBF.wca_forces_soa_noE_pairs!(st.rx, st.ry, st.fx, st.fy,
+                                                      st.nbh, st.box2, st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
+                    else
+                        NBF.wca_forces_soa_noE_excl!(st.rx, st.ry, st.fx, st.fy,
+                                                     st.nbh, st.bonds, st.box2, st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
+                    end
                 end
             elseif st.nb_kind == SimulationCore.NB_KIND_WCA && st.sigma_particle !== nothing
                 if compute_energy
@@ -149,11 +169,21 @@
         else
             if st.nb_kind == SimulationCore.NB_KIND_LJ && st.sigma_pair !== nothing
                 if compute_energy
-                    NBF.lj_forces_soa_pairs!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.virial_nonbonded,
-                                             st.nbh, st.box3, st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
-                else
-                    NBF.lj_forces_soa_noE_pairs!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz,
+                    if st.bonds === nothing
+                        NBF.lj_forces_soa_pairs!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.virial_nonbonded,
                                                  st.nbh, st.box3, st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
+                    else
+                        NBF.lj_forces_soa_excl!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.virial_nonbonded,
+                                                st.nbh, st.bonds, st.box3, st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
+                    end
+                else
+                    if st.bonds === nothing
+                        NBF.lj_forces_soa_noE_pairs!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz,
+                                                     st.nbh, st.box3, st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
+                    else
+                        NBF.lj_forces_soa_noE_excl!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz,
+                                                    st.nbh, st.bonds, st.box3, st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
+                    end
                 end
             elseif st.nb_kind == SimulationCore.NB_KIND_LJ && st.sigma_particle !== nothing
                 if compute_energy
@@ -165,11 +195,21 @@
                 end
             elseif st.nb_kind == SimulationCore.NB_KIND_WCA && st.sigma_pair !== nothing
                 if compute_energy
-                    NBF.wca_forces_soa_pairs!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.virial_nonbonded,
-                                              st.nbh, st.box3, st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
-                else
-                    NBF.wca_forces_soa_noE_pairs!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz,
+                    if st.bonds === nothing
+                        NBF.wca_forces_soa_pairs!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.virial_nonbonded,
                                                   st.nbh, st.box3, st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
+                    else
+                        NBF.wca_forces_soa_excl!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.virial_nonbonded,
+                                                 st.nbh, st.bonds, st.box3, st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
+                    end
+                else
+                    if st.bonds === nothing
+                        NBF.wca_forces_soa_noE_pairs!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz,
+                                                      st.nbh, st.box3, st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
+                    else
+                        NBF.wca_forces_soa_noE_excl!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz,
+                                                     st.nbh, st.bonds, st.box3, st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair)
+                    end
                 end
             elseif st.nb_kind == SimulationCore.NB_KIND_WCA && st.sigma_particle !== nothing
                 if compute_energy
@@ -277,6 +317,31 @@
         @test inter_mixed.coefficients isa NBI.MixedSigmaCoefficients{Float64}
 
         @test !isdefined(NBF, :lj_forces_oa_pairs_bugfix)
+    end
+
+    @testset "Pair-matrix bonded exclusions regression" begin
+        bonds = Tuple{Int32,Int32}[(Int32(1), Int32(2))]
+        sigma_pair = CuArray(Float64[1.0 1.0; 1.0 1.0])
+        epsilon_pair = CuArray(Float64[1.0 1.0; 1.0 1.0])
+        rcut_pair = CuArray(fill(2^(1 / 6), 2, 2))
+
+        st = SimulationCore.build_simulation(
+            N=3, box=(20.0, 20.0), cutoff=2.5, skin=0.3, cap=Int32(16), neigh_interval=2,
+            use_neighborlist=true, epsilon=1.0, sigma=1.0, gamma=0.0, temperature=0.0,
+            bonds=bonds, nonbonded=:wca, precision=:f64,
+        )
+        st.typeid .= CuArray(Int32[1, 2, 2])
+        st.sigma_pair = sigma_pair
+        st.epsilon_pair = epsilon_pair
+        st.rcut_pair = rcut_pair
+        set_positions_2d!(st, [0.0, 0.7, 4.0], [0.0, 0.0, 0.0])
+        refresh_neighbors!(st)
+
+        inter, snap = run_interface!(st, true)
+        @test inter.exclusions isa NBI.BondExclusions
+        @test maximum(abs.(snap.fx)) < 1e-12
+        @test maximum(abs.(snap.fy)) < 1e-12
+        @test maximum(abs.(snap.epot)) < 1e-12
     end
 
     @testset "Interface parity with legacy wrappers" begin

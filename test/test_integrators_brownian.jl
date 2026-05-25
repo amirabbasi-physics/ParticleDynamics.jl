@@ -49,6 +49,38 @@
         @test msd_2d(rx1, ry1, st.rx, st.ry) > 0.0
     end
 
+    @testset "Euler-Maruyama precomputed-noise step" begin
+        seed_all!(0xF10025)
+        T = Float32
+        st = build_tiny2d(
+            N=2, T=T, box=(20f0, 20f0), cutoff=2.5f0, skin=0.3f0, cap=Int32(8),
+            neigh_interval=4, gamma=1f0, temperature=0f0, epsilon=0f0, sigma=1f0, nonbonded=:lj
+        )
+        copyto!(st.rx, T[0, 0])
+        copyto!(st.ry, T[0, 0])
+        copyto!(st.fx, T[1, -1])
+        copyto!(st.fy, T[2, 3])
+        ξx = CuArray(T[0.4, -0.2])
+        ξy = CuArray(T[-0.1, 0.6])
+        gamma = CuArray(T[2, 4])
+        dq = CUDA.zeros(T, 2)
+        dU = CUDA.zeros(T, 2)
+        dt = T(0.1)
+
+        BrownianIntegrators.em_apply_step_2d!(
+            st.rx, st.ry, st.fx, st.fy,
+            ξx, ξy, gamma, dt, dq, dU, st.box2::ParticleDynamics.Definitions.Box2{T}
+        )
+        CUDA.synchronize()
+
+        rx = Array(st.rx)
+        ry = Array(st.ry)
+        @test isapprox(rx[1], 0.25f0; atol=1f-6)
+        @test isapprox(ry[1], 0.05f0; atol=1f-6)
+        @test isapprox(rx[2], -0.075f0; atol=1f-6)
+        @test isapprox(ry[2], 0.225f0; atol=1f-6)
+    end
+
     @testset "Freeze spring" begin
         seed_all!(0xF1003)
         N = 2

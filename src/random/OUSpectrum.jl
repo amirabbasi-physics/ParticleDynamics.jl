@@ -9,7 +9,10 @@ The precomputed coefficients implement the exact discrete update
 
 with `a = exp(-dt / τ)` and `c = scale * sqrt(1 - a^2)`. The `τ <= 0` limit is
 encoded as `a = 0`, `c = scale`, which reproduces the package's legacy white
-noise fallback.
+noise fallback. Here `scale` is the stationary standard deviation of the OU
+state `x`, not the per-step innovation amplitude `c` and not a direct spatial
+step length. Physical position increments depend on the integrator and any
+mobility factors such as `1 / gamma`.
 """
 mutable struct OUSpectrum{T<:AbstractFloat}
     dt::T

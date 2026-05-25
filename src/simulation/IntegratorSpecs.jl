@@ -187,7 +187,7 @@ stage_sequence(::BAOABSpec) = (:B1, :A1, :O, :A2, :force, :B2)
 stage_sequence(::GSMSpec) = (:B1, :A1, :O, :A2, :force, :B2)
 stage_sequence(::BAOASpec) = (:B1, :A1, :O, :A2, :force, :power, :kinetic_refresh)
 stage_sequence(::BrownianSpec) = (:midpoint_predict, :midpoint_force, :final_position, :force)
-stage_sequence(::EMSpec) = (:midpoint_predict, :midpoint_force, :final_position, :force)
+stage_sequence(::EMSpec) = (:em_position, :force)
 stage_sequence(::NHCSpec) = (:thermostat_pre, :kick1, :drift, :force, :kick2, :thermostat_post)
 stage_sequence(::CSVRSpec) = (:kick1, :drift, :force, :kick2, :thermostat)
 

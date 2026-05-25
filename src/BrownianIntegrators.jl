@@ -10,7 +10,8 @@ export BrownianParams,
        bd_midpoint_positions_2d!, bd_midpoint_positions_3d!,
        bd_prepare_noise_2d!, bd_prepare_noise_3d!,
        bd_finish_step_2d!, bd_finish_step_3d!,
-       EMParams, em_step_2d!, em_step_3d!
+       EMParams, em_step_2d!, em_step_3d!,
+       em_apply_step_2d!, em_apply_step_3d!
 
 """
     BrownianParams(gamma, noise_scale; corr_time=nothing)
@@ -700,6 +701,143 @@ function _em3_unwrap!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDevice
     return nothing
 end
 
+function _em_apply2!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
+                     fx::CuDeviceVector{T}, fy::CuDeviceVector{T},
+                     ξx::CuDeviceVector{T}, ξy::CuDeviceVector{T},
+                     gamma::CuDeviceVector{T},
+                     dt::T,
+                     dq::CuDeviceVector{T}, dU::CuDeviceVector{T},
+                     Lx::T, Ly::T) where {T<:AbstractFloat}
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    @inbounds begin
+        g = gamma[i]
+        μ = one(T) / g
+        local x0 = rx[i]; local y0 = ry[i]
+        local Δx = μ * fx[i] * dt + μ * ξx[i]
+        local Δy = μ * fy[i] * dt + μ * ξy[i]
+        local x = x0 + Δx
+        local y = y0 + Δy
+        local xw = _wrap_centered(x, Lx)
+        local yw = _wrap_centered(y, Ly)
+        rx[i] = xw
+        ry[i] = yw
+        local dx_mic = _wrap_centered(xw - x0, Lx)
+        local dy_mic = _wrap_centered(yw - y0, Ly)
+        local w = fx[i] * dx_mic + fy[i] * dy_mic
+        dq[i] = dq[i] + w
+        dU[i] = dU[i] + w
+    end
+    return nothing
+end
+
+function _em_apply2_unwrap!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
+                            rxu::CuDeviceVector{T}, ryu::CuDeviceVector{T},
+                            fx::CuDeviceVector{T}, fy::CuDeviceVector{T},
+                            ξx::CuDeviceVector{T}, ξy::CuDeviceVector{T},
+                            gamma::CuDeviceVector{T},
+                            dt::T,
+                            dq::CuDeviceVector{T}, dU::CuDeviceVector{T},
+                            Lx::T, Ly::T) where {T<:AbstractFloat}
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    @inbounds begin
+        g = gamma[i]
+        μ = one(T) / g
+        local x0 = rx[i]; local y0 = ry[i]
+        local Δx = μ * fx[i] * dt + μ * ξx[i]
+        local Δy = μ * fy[i] * dt + μ * ξy[i]
+        rxu[i] += Δx
+        ryu[i] += Δy
+        local x = x0 + Δx
+        local y = y0 + Δy
+        local xw = _wrap_centered(x, Lx)
+        local yw = _wrap_centered(y, Ly)
+        rx[i] = xw
+        ry[i] = yw
+        local dx_mic = _wrap_centered(xw - x0, Lx)
+        local dy_mic = _wrap_centered(yw - y0, Ly)
+        local w = fx[i] * dx_mic + fy[i] * dy_mic
+        dq[i] = dq[i] + w
+        dU[i] = dU[i] + w
+    end
+    return nothing
+end
+
+function _em_apply3!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
+                     fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, fz::CuDeviceVector{T},
+                     ξx::CuDeviceVector{T}, ξy::CuDeviceVector{T}, ξz::CuDeviceVector{T},
+                     gamma::CuDeviceVector{T},
+                     dt::T,
+                     dq::CuDeviceVector{T}, dU::CuDeviceVector{T},
+                     Lx::T, Ly::T, Lz::T) where {T<:AbstractFloat}
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    @inbounds begin
+        g = gamma[i]
+        μ = one(T) / g
+        local x0 = rx[i]; local y0 = ry[i]; local z0 = rz[i]
+        local Δx = μ * fx[i] * dt + μ * ξx[i]
+        local Δy = μ * fy[i] * dt + μ * ξy[i]
+        local Δz = μ * fz[i] * dt + μ * ξz[i]
+        local x = x0 + Δx
+        local y = y0 + Δy
+        local z = z0 + Δz
+        local xw = _wrap_centered(x, Lx)
+        local yw = _wrap_centered(y, Ly)
+        local zw = _wrap_centered(z, Lz)
+        rx[i] = xw
+        ry[i] = yw
+        rz[i] = zw
+        local dx_mic = _wrap_centered(xw - x0, Lx)
+        local dy_mic = _wrap_centered(yw - y0, Ly)
+        local dz_mic = _wrap_centered(zw - z0, Lz)
+        local w = fx[i] * dx_mic + fy[i] * dy_mic + fz[i] * dz_mic
+        dq[i] = dq[i] + w
+        dU[i] = dU[i] + w
+    end
+    return nothing
+end
+
+function _em_apply3_unwrap!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
+                            rxu::CuDeviceVector{T}, ryu::CuDeviceVector{T}, rzu::CuDeviceVector{T},
+                            fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, fz::CuDeviceVector{T},
+                            ξx::CuDeviceVector{T}, ξy::CuDeviceVector{T}, ξz::CuDeviceVector{T},
+                            gamma::CuDeviceVector{T},
+                            dt::T,
+                            dq::CuDeviceVector{T}, dU::CuDeviceVector{T},
+                            Lx::T, Ly::T, Lz::T) where {T<:AbstractFloat}
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    @inbounds begin
+        g = gamma[i]
+        μ = one(T) / g
+        local x0 = rx[i]; local y0 = ry[i]; local z0 = rz[i]
+        local Δx = μ * fx[i] * dt + μ * ξx[i]
+        local Δy = μ * fy[i] * dt + μ * ξy[i]
+        local Δz = μ * fz[i] * dt + μ * ξz[i]
+        rxu[i] += Δx
+        ryu[i] += Δy
+        rzu[i] += Δz
+        local x = x0 + Δx
+        local y = y0 + Δy
+        local z = z0 + Δz
+        local xw = _wrap_centered(x, Lx)
+        local yw = _wrap_centered(y, Ly)
+        local zw = _wrap_centered(z, Lz)
+        rx[i] = xw
+        ry[i] = yw
+        rz[i] = zw
+        local dx_mic = _wrap_centered(xw - x0, Lx)
+        local dy_mic = _wrap_centered(yw - y0, Ly)
+        local dz_mic = _wrap_centered(zw - z0, Lz)
+        local w = fx[i] * dx_mic + fy[i] * dy_mic + fz[i] * dz_mic
+        dq[i] = dq[i] + w
+        dU[i] = dU[i] + w
+    end
+    return nothing
+end
+
 """
     em_step_2d!(rx, ry, fx, fy, params, dt, dq, dU, box)
 
@@ -755,6 +893,66 @@ function em_step_3d!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
                                                  fx, fy, fz, params.gamma, params.noise_scale, dtT, dq, dU, Lx, Ly, Lz)
         k(rx, ry, rz, unwrapped_x, unwrapped_y, unwrapped_z,
           fx, fy, fz, params.gamma, params.noise_scale, dtT, dq, dU, Lx, Ly, Lz; threads, blocks)
+    end
+    return nothing
+end
+
+"""
+    em_apply_step_2d!(rx, ry, fx, fy, ξx, ξy, gamma, dt, dq, dU, box)
+
+Apply one Euler-Maruyama position update using precomputed stochastic
+increments `ξx`, `ξy`.
+"""
+function em_apply_step_2d!(rx::CuArray{T,1}, ry::CuArray{T,1},
+                           fx::CuArray{T,1}, fy::CuArray{T,1},
+                           ξx::CuArray{T,1}, ξy::CuArray{T,1},
+                           gamma::CuArray{T,1}, dt::Real,
+                           dq::CuArray{T,1}, dU::CuArray{T,1},
+                           box::Definitions.Box2{T};
+                           unwrapped_x::Union{Nothing,CuArray{T,1}}=nothing,
+                           unwrapped_y::Union{Nothing,CuArray{T,1}}=nothing) where {T<:AbstractFloat}
+    N = length(rx)
+    threads = min(256, N)
+    blocks = cld(N, threads)
+    dtT = convert(T, dt)
+    Lx = convert(T, box[1]); Ly = convert(T, box[2])
+    if unwrapped_x === nothing || unwrapped_y === nothing
+        k = CUDA.@cuda launch=false _em_apply2!(rx, ry, fx, fy, ξx, ξy, gamma, dtT, dq, dU, Lx, Ly)
+        k(rx, ry, fx, fy, ξx, ξy, gamma, dtT, dq, dU, Lx, Ly; threads, blocks)
+    else
+        k = CUDA.@cuda launch=false _em_apply2_unwrap!(rx, ry, unwrapped_x, unwrapped_y,
+                                                       fx, fy, ξx, ξy, gamma, dtT, dq, dU, Lx, Ly)
+        k(rx, ry, unwrapped_x, unwrapped_y,
+          fx, fy, ξx, ξy, gamma, dtT, dq, dU, Lx, Ly; threads, blocks)
+    end
+    return nothing
+end
+
+"""
+3D variant of [`em_apply_step_2d!`](@ref).
+"""
+function em_apply_step_3d!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
+                           fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1},
+                           ξx::CuArray{T,1}, ξy::CuArray{T,1}, ξz::CuArray{T,1},
+                           gamma::CuArray{T,1}, dt::Real,
+                           dq::CuArray{T,1}, dU::CuArray{T,1},
+                           box::Definitions.Box3{T};
+                           unwrapped_x::Union{Nothing,CuArray{T,1}}=nothing,
+                           unwrapped_y::Union{Nothing,CuArray{T,1}}=nothing,
+                           unwrapped_z::Union{Nothing,CuArray{T,1}}=nothing) where {T<:AbstractFloat}
+    N = length(rx)
+    threads = min(256, N)
+    blocks = cld(N, threads)
+    dtT = convert(T, dt)
+    Lx = convert(T, box[1]); Ly = convert(T, box[2]); Lz = convert(T, box[3])
+    if unwrapped_x === nothing || unwrapped_y === nothing || unwrapped_z === nothing
+        k = CUDA.@cuda launch=false _em_apply3!(rx, ry, rz, fx, fy, fz, ξx, ξy, ξz, gamma, dtT, dq, dU, Lx, Ly, Lz)
+        k(rx, ry, rz, fx, fy, fz, ξx, ξy, ξz, gamma, dtT, dq, dU, Lx, Ly, Lz; threads, blocks)
+    else
+        k = CUDA.@cuda launch=false _em_apply3_unwrap!(rx, ry, rz, unwrapped_x, unwrapped_y, unwrapped_z,
+                                                       fx, fy, fz, ξx, ξy, ξz, gamma, dtT, dq, dU, Lx, Ly, Lz)
+        k(rx, ry, rz, unwrapped_x, unwrapped_y, unwrapped_z,
+          fx, fy, fz, ξx, ξy, ξz, gamma, dtT, dq, dU, Lx, Ly, Lz; threads, blocks)
     end
     return nothing
 end

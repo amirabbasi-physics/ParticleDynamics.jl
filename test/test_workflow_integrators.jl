@@ -89,6 +89,7 @@ end
     compiled_ou = ParticleDynamics.Workflow.compile_integrator(system, active_ou; precision=:f64)
     spec_ou = ParticleDynamics.Workflow.build_lowlevel_integrator(compiled_ou, st; system=system, materialized_groups=materialized)
     @test spec_ou isa SimulationCore.EMSpec{Float64}
+    @test ParticleDynamics.IntegratorInterfaces.stage_sequence(spec_ou) == (:em_position, :force)
     @test spec_ou.params.ou !== nothing
     @test size(spec_ou.params.ou.tau, 1) == 2
     gamma_ou = Array(spec_ou.params.gamma)

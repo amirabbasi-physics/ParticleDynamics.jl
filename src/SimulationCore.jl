@@ -1045,6 +1045,46 @@ function _execute_brownian_midpoint_stage!(params::Union{BrownianIntegrators.Bro
     return nothing
 end
 
+function _execute_em_stage!(params::BrownianIntegrators.EMParams{T},
+                            ws::StochasticWorkspace{T},
+                            st::SimulationState{T},
+                            stage_tag::Symbol,
+                            dt::T;
+                            compute_energy::Bool,
+                            freeze_hold::Bool,
+                            freeze_spring::Bool) where {T<:AbstractFloat}
+    if stage_tag === :em_position
+        _prepare_brownian_noise!(params, ws, st, dt)
+        if _is_3d(st)
+            BrownianIntegrators.em_apply_step_3d!(st.rx, st.ry, st.rz,
+                                                  st.fx, st.fy, st.fz,
+                                                  ws.rf_x, ws.rf_y, ws.rf_z,
+                                                  params.gamma, dt,
+                                                  st.dq, st.dU,
+                                                  st.box3::Definitions.Box3;
+                                                  unwrapped_x=st.rx_unwrap,
+                                                  unwrapped_y=st.ry_unwrap,
+                                                  unwrapped_z=st.rz_unwrap)
+        else
+            BrownianIntegrators.em_apply_step_2d!(st.rx, st.ry,
+                                                  st.fx, st.fy,
+                                                  ws.rf_x, ws.rf_y,
+                                                  params.gamma, dt,
+                                                  st.dq, st.dU,
+                                                  st.box2::Definitions.Box2;
+                                                  unwrapped_x=st.rx_unwrap,
+                                                  unwrapped_y=st.ry_unwrap)
+        end
+        apply_post_position_hooks!(st, :after_final_position; freeze_hold=freeze_hold)
+    elseif stage_tag === :force
+        evaluate_forces_into_f!(st, compute_energy; freeze_spring=freeze_spring)
+    else
+        throw(ArgumentError("Unsupported stage $(stage_tag) for euler_maruyama."))
+    end
+
+    return nothing
+end
+
 function execute_integrator_stage!(spec::BrownianSpec{T},
                                    st::SimulationState{T},
                                    dt::T,
@@ -1065,10 +1105,10 @@ function execute_integrator_stage!(spec::EMSpec{T},
                                    compute_energy::Bool=true,
                                    freeze_hold::Bool=false,
                                    freeze_spring::Bool=false) where {T<:AbstractFloat}
-    return _execute_brownian_midpoint_stage!(spec.params, spec.workspace, st, stage_tag, dt;
-                                             compute_energy=compute_energy,
-                                             freeze_hold=freeze_hold,
-                                             freeze_spring=freeze_spring)
+    return _execute_em_stage!(spec.params, spec.workspace, st, stage_tag, dt;
+                              compute_energy=compute_energy,
+                              freeze_hold=freeze_hold,
+                              freeze_spring=freeze_spring)
 end
 
 function execute_integrator_stage!(spec::NHCSpec{T},
