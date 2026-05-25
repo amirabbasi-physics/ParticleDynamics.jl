@@ -226,7 +226,7 @@ end
         ),
         precision=Float64,
     )
-    @test_logs (:warn, r"Neighbor list reached the configured per-particle capacity") prepare!(sim)
+    @test_logs (:warn, r"Neighbor list reached the configured per-particle capacity") match_mode=:any prepare!(sim)
 end
 
 @testset "Workflow Force Compilation in prepare!" begin

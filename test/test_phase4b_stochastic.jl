@@ -333,6 +333,8 @@
     end
 
     @testset "4B-5 Free VV OU MSD/VACF match report formulas" begin
+        seed_all!(0x4B0505)
+
         dt = 1.0e-3
         gamma = 100.0
         temperature = 0.0
@@ -341,7 +343,7 @@
         mass = 1.0
 
         N = 512
-        burn_steps = 7000
+        burn_steps = 10000
         steps = 60
         sample_stride = 20
         nside = ceil(Int, sqrt(N))

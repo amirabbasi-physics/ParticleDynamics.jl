@@ -20,15 +20,15 @@ end
 
 N = maybe_override_int(10_000, "SIM_NPARTICLES")
 L = 125.0
-dt = 2e-4
+dt = 1e-6
 nsteps = maybe_override_int(100_000, "SIM_MAX_STEPS")
 write_interval = maybe_override_interval(10_000, nsteps)
 
 gamma = 1.0
 temperature = 0.0
-corr_time = 100.0
-active_impulse = 10.0
-epsilon = 1.0e6
+corr_time = 2.0
+active_impulse = 1.0
+epsilon = 1.0e8
 sigma = 1.0
 
 system = ParticleSystem(
@@ -45,7 +45,7 @@ sim = Simulation(
     groups=Groups(all_particles),
     integrator=Integrator(
         dt=dt,
-        scheme=EulerMaruyama(),
+        scheme=EulerHeun(),
         forces=[SoftRepulsive(epsilon=epsilon, sigma=sigma, cutoff=sigma, pairs=:neighborlist,
                               neighborlist=CellList(buffer=0.5, capacity=256, rebuild_interval=20))],
         methods=[ActiveOrnsteinUhlenbeck(all_particles; gamma=gamma, kT=temperature, tau=corr_time, noise_scale=active_impulse)],

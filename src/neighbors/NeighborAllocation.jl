@@ -10,7 +10,7 @@ function _alloc_neighbor_matrix(T::Type{<:AbstractFloat}, N::Int, D::Int,
     cell_size = max(T(1e-6), cutoffT + skinT)
     nx, ny, nz = _choose_grid(box, cell_size, D)
 
-    neighbors_index = CUDA.CuArray{Int32}(undef, N)
+    neighbors_index = CuArray(Int32[(i - 1) * Int(cap) for i in 1:N])
     neighbors_flat  = CUDA.fill(Int32(-1), N * Int(cap))
     counts          = CUDA.CuArray{Int32}(undef, N)
     fill!(counts, Int32(0))
@@ -43,7 +43,7 @@ function _alloc_stencil_matrix(T::Type{<:AbstractFloat}, N::Int, D::Int,
     skinT = T(skin)
     nx, ny, nz = _choose_grid(box, cellT, D)
 
-    neighbors_index = CUDA.CuArray{Int32}(undef, N)
+    neighbors_index = CuArray(Int32[(i - 1) * Int(cap) for i in 1:N])
     neighbors_flat  = CUDA.fill(Int32(-1), N * Int(cap))
     counts          = CUDA.CuArray{Int32}(undef, N)
     fill!(counts, Int32(0))
