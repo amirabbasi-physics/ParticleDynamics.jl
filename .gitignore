@@ -34,6 +34,14 @@ cuda-memcheck.log
 /Documents/*
 /Bug_report/
 
-# Examples files
-
-/examples/TwoT_LJ2D_MD_CSVR_slab.jl
+# Examples: keep only the public example whitelist in git
+/examples/*
+!/examples/README.md
+!/examples/_example_utils.jl
+!/examples/2D_active_OU_brownian.jl
+!/examples/2D_example_virial.jl
+!/examples/2D_polymer_bonded.jl
+!/examples/3D_BD.jl
+!/examples/3D_polymer_melt.jl
+!/examples/SingleT_2D_MD_CSVR.jl
+!/examples/TwoT_LJ2D_LD.jl
