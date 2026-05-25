@@ -1,6 +1,6 @@
 name = "ParticleDynamics"
 uuid = "12ca460a-85bb-48c4-9960-620229cee2bc"
-version = "0.4.0"
+version = "0.1.1"
 authors = ["abbaa90 <abbaa90@fu-berlin.de> and contributors"]
 
 [deps]

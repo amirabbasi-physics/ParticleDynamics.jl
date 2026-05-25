@@ -32,6 +32,7 @@ cuda-memcheck.log
 
 # Local scratch/output trees
 /Documents/*
+/Bug_report/
 
 # Examples files
 

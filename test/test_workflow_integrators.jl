@@ -203,7 +203,7 @@ end
         precision=Float64,
     )
 
-    @test_logs (:warn, r"Brownian dynamics ignores particle masses") prepare!(sim)
+    @test_logs (:warn, r"Brownian dynamics ignores particle masses") match_mode=:any prepare!(sim)
     @test sim.prepared
     @test sim.lowlevel_integrator isa SimulationCore.EMSpec{Float64}
 end
