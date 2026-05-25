@@ -57,6 +57,13 @@ runs when you only want a smoke test.
 - `2D_polymer_bonded.jl`
 - `2D_polymer_bonded_BP.jl`
 - `3D_polymer_bonded.jl`
+- `3D_polymer_melt.jl`
+
+### Reproductions and diagnostics
+
+- `3D_gel_tracer_diagnostics.jl`
+- `3D_gel_tracer_overlap_repro.jl`
+- `3D_gel_overlap_repro_no_tracer.jl`
 
 ### Two-temperature and filter-driven workflows
 

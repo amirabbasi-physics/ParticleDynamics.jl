@@ -237,6 +237,18 @@ function compute_nonbonded!(rx::CuArray{T,1}, ry::CuArray{T,1},
 end
 
 function compute_nonbonded!(rx::CuArray{T,1}, ry::CuArray{T,1},
+                            fx::CuArray{T,1}, fy::CuArray{T,1},
+                            nbh::NeighborLists.AbstractNeighborMatrix,
+                            box::Definitions.Box2{T},
+                            interaction::NonBondedInteraction{LennardJonesPotential,PairMatrixCoefficients{T},BondExclusions},
+                            ::ForceOnly) where {T<:AbstractFloat}
+    c = interaction.coefficients
+    NonBondedForces.lj_forces_soa_noE_excl!(rx, ry, fx, fy, nbh, interaction.exclusions.bonds,
+                                            box, c.typeid, c.sigma_pair, c.epsilon_pair, c.rcut_pair)
+    return nothing
+end
+
+function compute_nonbonded!(rx::CuArray{T,1}, ry::CuArray{T,1},
                             fx::CuArray{T,1}, fy::CuArray{T,1}, Epot::CuArray{T,1}, V::CuArray{T,2},
                             nbh::NeighborLists.AbstractNeighborMatrix,
                             box::Definitions.Box2{T},
@@ -244,6 +256,18 @@ function compute_nonbonded!(rx::CuArray{T,1}, ry::CuArray{T,1},
                             ::ForceEnergyVirial) where {T<:AbstractFloat}
     c = interaction.coefficients
     NonBondedForces.lj_forces_soa_pairs!(rx, ry, fx, fy, Epot, V, nbh, box, c.typeid, c.sigma_pair, c.epsilon_pair, c.rcut_pair)
+    return nothing
+end
+
+function compute_nonbonded!(rx::CuArray{T,1}, ry::CuArray{T,1},
+                            fx::CuArray{T,1}, fy::CuArray{T,1}, Epot::CuArray{T,1}, V::CuArray{T,2},
+                            nbh::NeighborLists.AbstractNeighborMatrix,
+                            box::Definitions.Box2{T},
+                            interaction::NonBondedInteraction{LennardJonesPotential,PairMatrixCoefficients{T},BondExclusions},
+                            ::ForceEnergyVirial) where {T<:AbstractFloat}
+    c = interaction.coefficients
+    NonBondedForces.lj_forces_soa_excl!(rx, ry, fx, fy, Epot, V, nbh, interaction.exclusions.bonds,
+                                        box, c.typeid, c.sigma_pair, c.epsilon_pair, c.rcut_pair)
     return nothing
 end
 
@@ -259,6 +283,18 @@ function compute_nonbonded!(rx::CuArray{T,1}, ry::CuArray{T,1},
 end
 
 function compute_nonbonded!(rx::CuArray{T,1}, ry::CuArray{T,1},
+                            fx::CuArray{T,1}, fy::CuArray{T,1},
+                            nbh::NeighborLists.AbstractNeighborMatrix,
+                            box::Definitions.Box2{T},
+                            interaction::NonBondedInteraction{WCAPotential,PairMatrixCoefficients{T},BondExclusions},
+                            ::ForceOnly) where {T<:AbstractFloat}
+    c = interaction.coefficients
+    NonBondedForces.wca_forces_soa_noE_excl!(rx, ry, fx, fy, nbh, interaction.exclusions.bonds,
+                                             box, c.typeid, c.sigma_pair, c.epsilon_pair, c.rcut_pair)
+    return nothing
+end
+
+function compute_nonbonded!(rx::CuArray{T,1}, ry::CuArray{T,1},
                             fx::CuArray{T,1}, fy::CuArray{T,1}, Epot::CuArray{T,1}, V::CuArray{T,2},
                             nbh::NeighborLists.AbstractNeighborMatrix,
                             box::Definitions.Box2{T},
@@ -266,6 +302,18 @@ function compute_nonbonded!(rx::CuArray{T,1}, ry::CuArray{T,1},
                             ::ForceEnergyVirial) where {T<:AbstractFloat}
     c = interaction.coefficients
     NonBondedForces.wca_forces_soa_pairs!(rx, ry, fx, fy, Epot, V, nbh, box, c.typeid, c.sigma_pair, c.epsilon_pair, c.rcut_pair)
+    return nothing
+end
+
+function compute_nonbonded!(rx::CuArray{T,1}, ry::CuArray{T,1},
+                            fx::CuArray{T,1}, fy::CuArray{T,1}, Epot::CuArray{T,1}, V::CuArray{T,2},
+                            nbh::NeighborLists.AbstractNeighborMatrix,
+                            box::Definitions.Box2{T},
+                            interaction::NonBondedInteraction{WCAPotential,PairMatrixCoefficients{T},BondExclusions},
+                            ::ForceEnergyVirial) where {T<:AbstractFloat}
+    c = interaction.coefficients
+    NonBondedForces.wca_forces_soa_excl!(rx, ry, fx, fy, Epot, V, nbh, interaction.exclusions.bonds,
+                                         box, c.typeid, c.sigma_pair, c.epsilon_pair, c.rcut_pair)
     return nothing
 end
 
@@ -447,6 +495,18 @@ function compute_nonbonded!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1}
 end
 
 function compute_nonbonded!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
+                            fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1},
+                            nbh::NeighborLists.AbstractNeighborMatrix,
+                            box::Definitions.Box3{T},
+                            interaction::NonBondedInteraction{LennardJonesPotential,PairMatrixCoefficients{T},BondExclusions},
+                            ::ForceOnly) where {T<:AbstractFloat}
+    c = interaction.coefficients
+    NonBondedForces.lj_forces_soa_noE_excl!(rx, ry, rz, fx, fy, fz, nbh, interaction.exclusions.bonds,
+                                            box, c.typeid, c.sigma_pair, c.epsilon_pair, c.rcut_pair)
+    return nothing
+end
+
+function compute_nonbonded!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
                             fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1}, Epot::CuArray{T,1}, V::CuArray{T,2},
                             nbh::NeighborLists.AbstractNeighborMatrix,
                             box::Definitions.Box3{T},
@@ -454,6 +514,18 @@ function compute_nonbonded!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1}
                             ::ForceEnergyVirial) where {T<:AbstractFloat}
     c = interaction.coefficients
     NonBondedForces.lj_forces_soa_pairs!(rx, ry, rz, fx, fy, fz, Epot, V, nbh, box, c.typeid, c.sigma_pair, c.epsilon_pair, c.rcut_pair)
+    return nothing
+end
+
+function compute_nonbonded!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
+                            fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1}, Epot::CuArray{T,1}, V::CuArray{T,2},
+                            nbh::NeighborLists.AbstractNeighborMatrix,
+                            box::Definitions.Box3{T},
+                            interaction::NonBondedInteraction{LennardJonesPotential,PairMatrixCoefficients{T},BondExclusions},
+                            ::ForceEnergyVirial) where {T<:AbstractFloat}
+    c = interaction.coefficients
+    NonBondedForces.lj_forces_soa_excl!(rx, ry, rz, fx, fy, fz, Epot, V, nbh, interaction.exclusions.bonds,
+                                        box, c.typeid, c.sigma_pair, c.epsilon_pair, c.rcut_pair)
     return nothing
 end
 
@@ -469,6 +541,18 @@ function compute_nonbonded!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1}
 end
 
 function compute_nonbonded!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
+                            fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1},
+                            nbh::NeighborLists.AbstractNeighborMatrix,
+                            box::Definitions.Box3{T},
+                            interaction::NonBondedInteraction{WCAPotential,PairMatrixCoefficients{T},BondExclusions},
+                            ::ForceOnly) where {T<:AbstractFloat}
+    c = interaction.coefficients
+    NonBondedForces.wca_forces_soa_noE_excl!(rx, ry, rz, fx, fy, fz, nbh, interaction.exclusions.bonds,
+                                             box, c.typeid, c.sigma_pair, c.epsilon_pair, c.rcut_pair)
+    return nothing
+end
+
+function compute_nonbonded!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
                             fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1}, Epot::CuArray{T,1}, V::CuArray{T,2},
                             nbh::NeighborLists.AbstractNeighborMatrix,
                             box::Definitions.Box3{T},
@@ -476,6 +560,18 @@ function compute_nonbonded!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1}
                             ::ForceEnergyVirial) where {T<:AbstractFloat}
     c = interaction.coefficients
     NonBondedForces.wca_forces_soa_pairs!(rx, ry, rz, fx, fy, fz, Epot, V, nbh, box, c.typeid, c.sigma_pair, c.epsilon_pair, c.rcut_pair)
+    return nothing
+end
+
+function compute_nonbonded!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
+                            fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1}, Epot::CuArray{T,1}, V::CuArray{T,2},
+                            nbh::NeighborLists.AbstractNeighborMatrix,
+                            box::Definitions.Box3{T},
+                            interaction::NonBondedInteraction{WCAPotential,PairMatrixCoefficients{T},BondExclusions},
+                            ::ForceEnergyVirial) where {T<:AbstractFloat}
+    c = interaction.coefficients
+    NonBondedForces.wca_forces_soa_excl!(rx, ry, rz, fx, fy, fz, Epot, V, nbh, interaction.exclusions.bonds,
+                                         box, c.typeid, c.sigma_pair, c.epsilon_pair, c.rcut_pair)
     return nothing
 end
 

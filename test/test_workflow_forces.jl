@@ -67,6 +67,7 @@ end
             :temperature => 0.0,
             :dt => 1e-3,
             :precision => :f64,
+            :bonds => topo.bonds,
         ),
         compiled_pair.build_kwargs,
     )
@@ -81,6 +82,7 @@ end
     @test st.rcut_pair !== nothing
     @test size(st.sigma_pair) == (2, 2)
     @test SimulationCore._nonbonded_interaction(st).coefficients isa ParticleDynamics.NonBondedInteractions.PairMatrixCoefficients{Float64}
+    @test SimulationCore._nonbonded_interaction(st).exclusions isa ParticleDynamics.NonBondedInteractions.BondExclusions
 
     harmonic = HarmonicBondForce(k=300.0, r0=1.1)
     compiled_bond = ParticleDynamics.Workflow.compile_forces(system, [harmonic]; precision=:f64)
@@ -129,6 +131,42 @@ end
     st_fene = SimulationCore.build_simulation(; kwargs_fene...)
     @test st_fene.bonds !== nothing
     @test st_fene.bonding isa ParticleDynamics.FENEBond{Float64}
+end
+
+@testset "Workflow PairTable pairs=:all runs with bonded exclusions" begin
+    system = ParticleSystem(
+        [
+            (-2.0, 0.0, 0.0),
+            (0.0, 0.0, 0.0),
+            (2.5, 0.0, 0.0),
+        ];
+        box=PeriodicBox((12.0, 12.0, 12.0)),
+        types=[:A],
+        typeids=Int32[1, 1, 1],
+        topology=Topology(bonds=[(1, 2)]),
+    )
+    all_particles = Group(:all, AllSelection())
+    pair_table = PairTable(
+        sigma=reshape([1.0], 1, 1),
+        epsilon=reshape([1.0], 1, 1),
+        cutoff=reshape([2^(1 / 6)], 1, 1),
+        type_names=[:A],
+    )
+
+    sim = Simulation(
+        system;
+        groups=Groups(all_particles),
+        integrator=Integrator(
+            dt=1.0e-4,
+            scheme=EulerMaruyama(),
+            forces=[WCA(pair_table=pair_table, pairs=:all)],
+            methods=[Brownian(all_particles; gamma=1.0, kT=0.0)],
+        ),
+        precision=Float64,
+        seed=1,
+    )
+
+    @test_nowarn run!(sim, Stage(:production, steps=1; compute_energy=false, progress=false))
 end
 
 @testset "Workflow PairTable ignores zero-strength cutoff branches" begin
