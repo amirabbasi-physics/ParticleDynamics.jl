@@ -18,10 +18,22 @@ end
 
 function thermostatted_particle_mask(st::SimulationState,
                                      spec::NHCSpec)
+    ws = spec.workspace
+    active = ifelse.(ws.particle_bath_id .> Int32(0), UInt8(1), UInt8(0))
     if st.freeze_mask === nothing || st.freeze_mode == FREEZE_NONE
-        return nothing
+        return active
     end
-    return ifelse.(st.freeze_mask .== UInt8(0), UInt8(1), UInt8(0))
+    return ifelse.((ws.particle_bath_id .> Int32(0)) .& (st.freeze_mask .== UInt8(0)), UInt8(1), UInt8(0))
+end
+
+function thermostatted_particle_mask(st::SimulationState,
+                                     spec::CSVRSpec)
+    ws = spec.workspace
+    active = ifelse.(ws.particle_bath_id .> Int32(0), UInt8(1), UInt8(0))
+    if st.freeze_mask === nothing || st.freeze_mode == FREEZE_NONE
+        return active
+    end
+    return ifelse.((ws.particle_bath_id .> Int32(0)) .& (st.freeze_mask .== UInt8(0)), UInt8(1), UInt8(0))
 end
 
 """
@@ -44,12 +56,22 @@ function thermostatted_dof(st::SimulationState,
                            spec::NHCSpec)
     D = _is_3d(st) ? 3 : 2
     mask = thermostatted_particle_mask(st, spec)
-    if mask === nothing
-        return D * length(st.rx)
-    end
     ntherm = Int(CUDA.sum(Int32.(mask)))
     return D * ntherm
 end
+
+function thermostatted_dof(st::SimulationState,
+                           spec::CSVRSpec)
+    D = _is_3d(st) ? 3 : 2
+    mask = thermostatted_particle_mask(st, spec)
+    ntherm = Int(CUDA.sum(Int32.(mask)))
+    return D * ntherm
+end
+
+thermostatted_dof(st::SimulationState, spec::NVESpec) = 0
+
+collect_integrator_observables(spec::NVESpec, st::SimulationState) =
+    (thermostat_kind=:none,)
 
 function collect_integrator_observables(spec::NHCSpec{T},
                                         st::SimulationState{T}) where {T<:AbstractFloat}

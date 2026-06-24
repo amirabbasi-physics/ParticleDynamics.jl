@@ -42,6 +42,7 @@ cuda-memcheck.log
 !/examples/2D_example_virial.jl
 !/examples/2D_polymer_bonded.jl
 !/examples/3D_BD.jl
+!/examples/3D_LJ_NVE.jl
 !/examples/3D_polymer_melt.jl
 !/examples/SingleT_2D_MD_CSVR.jl
 !/examples/TwoT_LJ2D_LD.jl

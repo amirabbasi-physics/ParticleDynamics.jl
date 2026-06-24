@@ -137,6 +137,64 @@ end
     @test Array(spec_nhc.workspace.particle_bath_id) == Int32[1, 2, 1, 2, 1, 2, 1, 2]
 end
 
+@testset "Workflow ConstantVolume Supports Pure and Partial NVE" begin
+    system = _workflow_system_two_types(N=8, T=Float64)
+    cold, hot, all_particles, groups = _workflow_groups_for_two_types()
+    materialized = _materialized_group_map(system, groups)
+
+    st = build_tiny2d(N=8, T=Float64, nonbonded=:wca, temperature=0.0, dt=1e-3)
+    copyto!(st.typeid, system.typeids)
+
+    nve_integrator = Integrator(
+        dt=1e-3,
+        methods=[ConstantVolume(all_particles)],
+    )
+    compiled_nve = ParticleDynamics.Workflow.compile_integrator(system, nve_integrator; precision=:f64)
+    spec_nve = ParticleDynamics.Workflow.build_lowlevel_integrator(compiled_nve, st; system=system, materialized_groups=materialized)
+    @test spec_nve isa SimulationCore.NVESpec{Float64}
+    @test ParticleDynamics.SimulationCore.thermostatted_dof(st, spec_nve) == 0
+
+    sim_nve = Simulation(
+        system;
+        groups=groups,
+        integrator=nve_integrator,
+        precision=Float64,
+    )
+    prepare!(sim_nve)
+    @test sim_nve.prepared
+    @test sim_nve.lowlevel_integrator isa SimulationCore.NVESpec{Float64}
+    SimulationCore.step!(sim_nve.state, sim_nve.lowlevel_integrator, 1e-3; compute_energy=false)
+    @test state_allfinite(sim_nve.state)
+
+    partial_csvr = Integrator(
+        dt=1e-3,
+        methods=[
+            ConstantVolume(cold; thermostat=CSVR(kT=0.75, tau=0.10)),
+            ConstantVolume(hot),
+        ],
+    )
+    compiled_partial_csvr = ParticleDynamics.Workflow.compile_integrator(system, partial_csvr; precision=:f64)
+    spec_partial_csvr = ParticleDynamics.Workflow.build_lowlevel_integrator(compiled_partial_csvr, st; system=system, materialized_groups=materialized)
+    @test spec_partial_csvr isa SimulationCore.CSVRSpec{Float64}
+    @test spec_partial_csvr.params.target_temperature == [0.75]
+    @test spec_partial_csvr.params.tau == [0.10]
+    @test Array(spec_partial_csvr.workspace.particle_bath_id) == Int32[1, 0, 1, 0, 1, 0, 1, 0]
+    @test ParticleDynamics.SimulationCore.thermostatted_dof(st, spec_partial_csvr) == length(st.rx)
+
+    sim_partial_csvr = Simulation(
+        system;
+        groups=groups,
+        integrator=partial_csvr,
+        precision=Float64,
+    )
+    prepare!(sim_partial_csvr)
+    @test sim_partial_csvr.prepared
+    @test sim_partial_csvr.lowlevel_integrator isa SimulationCore.CSVRSpec{Float64}
+    @test Array(sim_partial_csvr.lowlevel_integrator.workspace.particle_bath_id) == Int32[1, 0, 1, 0, 1, 0, 1, 0]
+    SimulationCore.step!(sim_partial_csvr.state, sim_partial_csvr.lowlevel_integrator, 1e-3; compute_energy=false)
+    @test state_allfinite(sim_partial_csvr.state)
+end
+
 @testset "Workflow Deterministic Thermostats Support Heterogeneous Masses" begin
     seed_all!(0xA2105)
     system = _workflow_system_two_types(N=8, T=Float64, masses=Dict(:C => 1.0, :H => 2.0))

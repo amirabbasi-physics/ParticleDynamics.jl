@@ -2,6 +2,18 @@ const NHC_PROPAGATOR_LEGACY  = UInt8(1)
 const NHC_PROPAGATOR_GROMACS = UInt8(2)
 const NHC_PROPAGATOR_LAMMPS  = UInt8(3)
 
+"""
+    nve(st; dt=st.dt) -> NVESpec
+
+Create a deterministic microcanonical MD integrator using plain velocity
+Verlet. Unlike the stochastic `velocityverlet` constructor, this path owns no
+thermostat or noise parameters and advances only under conservative forces.
+"""
+function nve(st::SimulationState{T};
+             dt::Real=st.dt) where {T<:AbstractFloat}
+    return NVESpec{T}(T(dt))
+end
+
 @inline function _nhc_propagator_id(propagator::Symbol)
     if propagator === :legacy
         return NHC_PROPAGATOR_LEGACY

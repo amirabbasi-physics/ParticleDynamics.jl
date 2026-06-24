@@ -10,8 +10,8 @@ function _workflow_smoke_groups_single()
     return all_particles, Groups(all_particles)
 end
 
-function _workflow_smoke_system_2d_two_type(; N=12, T=Float64)
-    cfg = hex_random_2d(N, 1.0, 0.28; T=T)
+function _workflow_smoke_system_2d_two_type(; N=12, T=Float64, phi=0.28)
+    cfg = hex_random_2d(N, 1.0, phi; T=T)
     typeids = Int32[isodd(i) ? 1 : 2 for i in 1:N]
     return ParticleSystem(
         cfg;
@@ -39,6 +39,46 @@ function _workflow_smoke_system_3d_single(; N=16, T=Float64)
         typeids=fill(Int32(1), N),
         masses=Dict(:A => 1.0),
     )
+end
+
+function _workflow_smoke_system_3d_boxed_single(; N=27, T=Float64, box=(T(10), T(10), T(10)), spacing=T(1.75))
+    nx = max(1, ceil(Int, cbrt(N)))
+    nxy = nx * nx
+    nz = cld(N, nxy)
+    positions = Vector{NTuple{3,T}}(undef, N)
+    for k in 1:N
+        i = (k - 1) % nx
+        j = ((k - 1) ÷ nx) % nx
+        l = (k - 1) ÷ nxy
+        positions[k] = (
+            (T(i) - T(nx - 1) / T(2)) * spacing,
+            (T(j) - T(nx - 1) / T(2)) * spacing,
+            (T(l) - T(nz - 1) / T(2)) * spacing,
+        )
+    end
+    return ParticleSystem(
+        positions;
+        box=PeriodicBox(box),
+        types=[:A],
+        typeids=fill(Int32(1), N),
+        masses=Dict(:A => 1.0),
+    )
+end
+
+function _workflow_smoke_velocities_3d(; N=27, T=Float64, initial_temperature=1.0, seed=0xA9)
+    rng = Random.MersenneTwister(seed)
+    vx = randn(rng, T, N)
+    vy = randn(rng, T, N)
+    vz = randn(rng, T, N)
+    vx .-= sum(vx) / N
+    vy .-= sum(vy) / N
+    vz .-= sum(vz) / N
+    current_temperature = sum(vx .^ 2 .+ vy .^ 2 .+ vz .^ 2) / (3 * N)
+    scale = sqrt(T(initial_temperature) / current_temperature)
+    vx .*= scale
+    vy .*= scale
+    vz .*= scale
+    return collect(zip(vx, vy, vz))
 end
 
 function _workflow_smoke_pair_table()
@@ -160,7 +200,7 @@ end
     end
 
     @testset "Pair-table two-size run" begin
-        system = _workflow_smoke_system_2d_two_type(N=12, T=T)
+        system = _workflow_smoke_system_2d_two_type(N=12, T=T, phi=0.18)
         _, _, all_particles, groups = _workflow_smoke_groups_two_type()
         sim = Simulation(
             system;
@@ -258,5 +298,43 @@ end
         )
         _run_workflow_smoke(sim_nhc)
         @test sim_nhc.lowlevel_integrator isa SimulationCore.NHCSpec{Float64}
+    end
+
+    @testset "3D LJ pure NVE workflow" begin
+        system = _workflow_smoke_system_3d_boxed_single(N=27, T=T)
+        velocities = _workflow_smoke_velocities_3d(N=27, T=T, initial_temperature=1.0, seed=0xA9)
+        system = ParticleSystem(
+            system.positions;
+            box=system.box,
+            velocities=velocities,
+            types=system.types,
+            typeids=system.typeids,
+            masses=system.masses,
+        )
+        all_particles, groups = _workflow_smoke_groups_single()
+        lj = LennardJones(
+            epsilon=1.0,
+            sigma=1.0,
+            cutoff=2.5,
+            pairs=:neighborlist,
+            neighborlist=CellList(buffer=0.25, capacity=64, rebuild_interval=3),
+        )
+
+        sim = Simulation(
+            system;
+            groups=groups,
+            integrator=Integrator(
+                dt=5e-4,
+                forces=[lj],
+                methods=[ConstantVolume(all_particles)],
+            ),
+            observables=[ThermodynamicObservable(all_particles; name=:thermo)],
+            precision=Float64,
+        )
+
+        st = _run_workflow_smoke(sim; steps=2)
+        @test sim.lowlevel_integrator isa SimulationCore.NVESpec{Float64}
+        @test st.step == 2
+        @test Array(st.Ekin)[1] >= 0
     end
 end

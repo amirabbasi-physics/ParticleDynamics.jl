@@ -136,3 +136,36 @@ end
     @test isfinite(bath_md.temperature_error)
     @test isfinite(bath_md.extended_hamiltonian)
 end
+
+@testset "Workflow Bath Observable for NVE" begin
+    system = _workflow_observable_system(N=8, T=Float64)
+    _, _, all_particles, groups = _workflow_observable_groups()
+    st = build_tiny2d(N=8, T=Float64, nonbonded=:wca, temperature=0.0, dt=1e-3)
+    copyto!(st.typeid, system.typeids)
+
+    sim = Simulation(
+        system;
+        groups=groups,
+        observables=[BathExchangeObservable(name=:bath_nve)],
+        integrator=Integrator(
+            dt=1e-3,
+            methods=[ConstantVolume(all_particles)],
+        ),
+        state=st,
+        precision=Float64,
+    )
+    prepare!(sim)
+    SimulationCore.step!(st, sim.lowlevel_integrator, 1e-3; compute_energy=true)
+    sim.metadata[:workflow_time] = st.step * sim.integrator.dt
+
+    bath_nve = ParticleDynamics.Workflow.sample_observable(
+        sim,
+        BathExchangeObservable(name=:bath_nve);
+        fields=[:heat, :entropy, :temperature_error, :extended_hamiltonian],
+    )
+    obs = SimulationCore.collect_step_observables(st, sim.lowlevel_integrator)
+    @test bath_nve.heat == 0.0
+    @test bath_nve.entropy == 0.0
+    @test bath_nve.temperature_error == 0.0
+    @test bath_nve.extended_hamiltonian ≈ obs.Etot atol=1e-12
+end

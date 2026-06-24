@@ -2,6 +2,13 @@
 # Allocation helpers
 # ============================================================================
 
+function _validate_neighbor_grid(box, cell_size, nx::Integer, ny::Integer, nz::Integer, D::Int, style::AbstractString)
+    ok = D == 2 ? (nx >= 3 && ny >= 3) : (nx >= 3 && ny >= 3 && nz >= 3)
+    ok && return nothing
+    grid = D == 2 ? "($(Int(nx)), $(Int(ny)))" : "($(Int(nx)), $(Int(ny)), $(Int(nz)))"
+    throw(ArgumentError("$(style) requires at least 3 cells per periodic dimension to avoid duplicate neighbor-cell visits. Got grid=$(grid) for box=$(box) and cell_size=$(cell_size). Increase the box size, reduce cutoff+skin, or use a different neighbor strategy."))
+end
+
 function _alloc_neighbor_matrix(T::Type{<:AbstractFloat}, N::Int, D::Int,
                                 box, cutoff::Real, skin::Real, cap::Int32)
     cutoffT = T(cutoff)
@@ -9,6 +16,7 @@ function _alloc_neighbor_matrix(T::Type{<:AbstractFloat}, N::Int, D::Int,
     cutoff2 = cutoffT * cutoffT
     cell_size = max(T(1e-6), cutoffT + skinT)
     nx, ny, nz = _choose_grid(box, cell_size, D)
+    _validate_neighbor_grid(box, cell_size, nx, ny, nz, D, "Dense cell-list neighbor builder")
 
     neighbors_index = CuArray(Int32[(i - 1) * Int(cap) for i in 1:N])
     neighbors_flat  = CUDA.fill(Int32(-1), N * Int(cap))
@@ -42,6 +50,7 @@ function _alloc_stencil_matrix(T::Type{<:AbstractFloat}, N::Int, D::Int,
     cellT = T(cell_size)
     skinT = T(skin)
     nx, ny, nz = _choose_grid(box, cellT, D)
+    _validate_neighbor_grid(box, cellT, nx, ny, nz, D, "Stencil cell-list neighbor builder")
 
     neighbors_index = CuArray(Int32[(i - 1) * Int(cap) for i in 1:N])
     neighbors_flat  = CUDA.fill(Int32(-1), N * Int(cap))

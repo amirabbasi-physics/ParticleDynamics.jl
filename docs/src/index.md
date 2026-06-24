@@ -14,6 +14,7 @@ simulations on `CUDA.jl`. The recommended public surface is the workflow API:
 ## Scope
 
 - 2D/3D particle dynamics with periodic boundaries.
+- Deterministic MD: pure NVE plus thermostat-driven constant-volume dynamics.
 - Langevin integrators: velocity-Verlet (default), BAOAB, BAOA, GSM.
 - Brownian integrators: midpoint (Euler-Heun style) and Euler-Maruyama.
 - Nonbonded interactions (LJ/WCA/soft-repulsive), bonded interactions (harmonic/FENE), filters/freeze controls, collision counting, and XYZ/CSV/GSD outputs.
@@ -52,7 +53,7 @@ low-level expert layer.
 | API group | Exported symbols | Primary page |
 |---|---|---|
 | Workflow | `Simulation`, `ParticleSystem`, `Topology`, `Group`, `Groups`, `Force` objects, `Integrator`, `Observable` objects, `Writer` objects, `Stage`, `prepare!`, `run!`, `reset_step!`, `reset_observables!`, `state` | `quickstart.md` |
-| Low-level expert API | `SimulationState`, `build_simulation`, `step!`, `step_graph!`, `sync_unwrapped!`, `collect_step_observables`, `reset_bath_exchange_accumulators!`, `velocityverlet`, `baoab`, `baoa`, `gsm`, `eulerheun`, `eulermaruyama`, `nosehooverchain`, `csvr` | `manual/getting_started.md`, `manual/simulation_state.md`, `manual/integrators.md` |
+| Low-level expert API | `SimulationState`, `build_simulation`, `step!`, `step_graph!`, `sync_unwrapped!`, `collect_step_observables`, `reset_bath_exchange_accumulators!`, `nve`, `velocityverlet`, `baoab`, `baoa`, `gsm`, `eulerheun`, `eulermaruyama`, `nosehooverchain`, `csvr` | `manual/getting_started.md`, `manual/simulation_state.md`, `manual/integrators.md` |
 | Parameters and physical helpers | `LJParams`, `SoftRepulsiveParams`, `HarmonicBondParams`, `FENEParams`, `BondPotential`, `HarmonicBond`, `FENEBond`, `harmonic_bond`, `fene_bond`, `StokesFrictionCoefficient`, `SphereMass`, `InertialTime`, `DiffusiveTime` | `manual/forces.md` |
 | Initialization generators | `box_from_phi_2d`, `box_from_phi_3d`, `hex_random_2d`, `hex_circle_2d`, `hex_circle_plus_random_2d`, `hex_sites_in_box_2d`, `hex_circle_in_box_2d`, `hex_slab_coexistence_2d`, `fcc_sites_in_box_3d`, `fcc_random_3d`, `fcc_slab_coexistence_3d` | `manual/getting_started.md` |
 | Writers and I/O | `write_xyz!`, `write_observables_csv!`, `gsd_open`, `gsd_close`, `write_gsd_frame!`, `read_gsd_frame!`, `InMemoryLogger`, `CSVWriter`, `XYZWriter` | `manual/io.md` |

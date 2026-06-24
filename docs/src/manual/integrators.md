@@ -6,6 +6,7 @@ workspace needed for repeated stepping. Reuse a spec across many `step!` calls.
 ## Integrator constructors
 
 ```@docs
+ParticleDynamics.nve
 ParticleDynamics.velocityverlet
 ParticleDynamics.baoab
 ParticleDynamics.baoa
@@ -26,6 +27,7 @@ ParticleDynamics.BAOASpec
 ParticleDynamics.GSMSpec
 ParticleDynamics.BrownianSpec
 ParticleDynamics.EMSpec
+ParticleDynamics.NVESpec
 ParticleDynamics.NHCSpec
 ParticleDynamics.CSVRSpec
 ```
@@ -33,14 +35,15 @@ ParticleDynamics.CSVRSpec
 ## Usage pattern
 
 ```julia
-vv = velocityverlet(st; gamma=50.0f0, temperature=1.0f0, dt=2.0f-4)
+nve_spec = nve(st; dt=2.0f-4)
 for _ in 1:100
-    step!(st, vv, 2.0f-4; compute_energy=false)
+    step!(st, nve_spec, 2.0f-4; compute_energy=false)
 end
 ```
 
 ## Notes
 
+- `nve` is the deterministic microcanonical MD path.
 - Langevin and Brownian constructors own stochastic buffers.
 - `gamma > 0` is required on stochastic paths that divide by friction.
 - Thermostat-driven MD paths (`nosehooverchain`, `csvr`) allocate device
@@ -53,3 +56,4 @@ end
 - `examples/TwoT_2D_LD_GSM.jl`
 - `examples/TwoT_2D_BD_EH.jl`
 - `examples/3D_BD.jl`
+- `examples/3D_LJ_NVE.jl`

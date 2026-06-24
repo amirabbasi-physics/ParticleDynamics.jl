@@ -3,6 +3,7 @@ const INTEGRATOR_ID_LANGEVIN = UInt8(1)
 const INTEGRATOR_ID_BROWNIAN = UInt8(2)
 const INTEGRATOR_ID_NHC      = UInt8(3)
 const INTEGRATOR_ID_CSVR     = UInt8(4)
+const INTEGRATOR_ID_NVE      = UInt8(5)
 
 """
 Concrete spec for the package's Langevin/GJF `velocityverlet` path.
@@ -50,6 +51,16 @@ Euler-Maruyama overdamped spec created by [`eulermaruyama`](@ref).
 mutable struct EMSpec{T<:AbstractFloat} <: IntegratorSpec{T}
     params::BrownianIntegrators.EMParams{T}
     workspace::StochasticWorkspace{T}
+end
+
+"""
+    NVESpec{T}
+
+Concrete integrator specification for deterministic microcanonical (NVE)
+dynamics using plain velocity Verlet.
+"""
+struct NVESpec{T<:AbstractFloat} <: IntegratorSpec{T}
+    dt::T
 end
 
 """
@@ -172,6 +183,7 @@ integrator_id(::Union{VVSpec,BAOABSpec,BAOASpec,GSMSpec}) = INTEGRATOR_ID_LANGEV
 integrator_id(::Union{BrownianSpec,EMSpec}) = INTEGRATOR_ID_BROWNIAN
 integrator_id(::NHCSpec) = INTEGRATOR_ID_NHC
 integrator_id(::CSVRSpec) = INTEGRATOR_ID_CSVR
+integrator_id(::NVESpec) = INTEGRATOR_ID_NVE
 
 integrator_name(::VVSpec) = :velocity_verlet
 integrator_name(::BAOABSpec) = :baoab
@@ -181,6 +193,7 @@ integrator_name(::BrownianSpec) = :brownian_midpoint
 integrator_name(::EMSpec) = :euler_maruyama
 integrator_name(::NHCSpec) = :nose_hoover_chain
 integrator_name(::CSVRSpec) = :csvr
+integrator_name(::NVESpec) = :nve
 
 stage_sequence(::VVSpec) = (:kick1, :drift, :force, :kick2)
 stage_sequence(::BAOABSpec) = (:B1, :A1, :O, :A2, :force, :B2)
@@ -190,6 +203,7 @@ stage_sequence(::BrownianSpec) = (:midpoint_predict, :midpoint_force, :final_pos
 stage_sequence(::EMSpec) = (:em_position, :force)
 stage_sequence(::NHCSpec) = (:thermostat_pre, :kick1, :drift, :force, :kick2, :thermostat_post)
 stage_sequence(::CSVRSpec) = (:kick1, :drift, :force, :kick2, :thermostat)
+stage_sequence(::NVESpec) = (:kick1, :drift, :force, :kick2)
 
 @inline function _require_positive_gamma!(gamma::CuArray{T,1}, integrator::AbstractString) where {T<:AbstractFloat}
     gmin = minimum(gamma)

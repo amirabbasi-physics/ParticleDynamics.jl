@@ -28,6 +28,7 @@
             :virial_tensor,
         )
         integrator_symbols = (
+            :nve,
             :velocityverlet,
             :baoab,
             :baoa,
@@ -36,6 +37,7 @@
             :eulermaruyama,
             :nosehooverchain,
             :csvr,
+            :NVESpec,
             :NHCSpec,
             :CSVRSpec,
         )
@@ -244,6 +246,16 @@
         @test isfinite(obs.Etot)
         @test isfinite(obs.Qtot)
         @test obs.thermostatted_dof == 3 * length(st.rx)
+    end
+
+    @testset "NVE controls" begin
+        nve_spec = SimulationCore.nve(st; dt=dt)
+        @test ParticleDynamics.IntegratorInterfaces.stage_sequence(nve_spec) == (:kick1, :drift, :force, :kick2)
+        @test ParticleDynamics.IntegratorInterfaces.integrator_name(nve_spec) == :nve
+        @test_throws ArgumentError Filters.set_friction!(nve_spec, 1.0f0)
+        @test_throws ArgumentError Filters.set_temperature!(nve_spec, dt, 1.0f0)
+        @test_throws ArgumentError Filters.set_noise_scale!(nve_spec, 1.0f0)
+        @test_throws ArgumentError Filters.set_corr_time!(nve_spec, 0.1f0)
     end
 
     @testset "NHC controls" begin

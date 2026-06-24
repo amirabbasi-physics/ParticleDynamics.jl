@@ -42,6 +42,7 @@ using .ParamsFromExamples
         include("test_neighbors.jl")
         include("test_integrators_langevin.jl")
         include("test_integrators_brownian.jl")
+        include("test_integrators_nve.jl")
         include("test_integrators_nhc.jl")
         include("test_integrators_csvr.jl")
         include("test_entropy_observables.jl")

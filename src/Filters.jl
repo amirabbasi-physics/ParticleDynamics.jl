@@ -10,7 +10,7 @@ using ..Backends
 import ..ParticleGroups
 import ..SimulationCore
 using ..Definitions
-using ..SimulationCore: SimulationState, IntegratorSpec, VVSpec, BAOABSpec, BAOASpec, GSMSpec, BrownianSpec, EMSpec, NHCSpec, CSVRSpec
+using ..SimulationCore: SimulationState, IntegratorSpec, VVSpec, BAOABSpec, BAOASpec, GSMSpec, BrownianSpec, EMSpec, NVESpec, NHCSpec, CSVRSpec
 using ..BrownianIntegrators
 using ..LangevinIntegrators
 
@@ -104,6 +104,8 @@ _gamma_view(spec::VVSpec) = spec.params.gamma
 _gamma_view(spec::Union{BAOABSpec,BAOASpec,GSMSpec}) = spec.params.gamma
 _gamma_view(spec::BrownianSpec) = spec.params.gamma
 _gamma_view(spec::EMSpec) = spec.params.gamma
+_gamma_view(spec::NVESpec) =
+    throw(ArgumentError("NVE integrator has no stochastic friction buffer. Use a thermostat-bearing or Langevin integrator to control temperature."))
 _gamma_view(spec::NHCSpec) =
     throw(ArgumentError("NHC integrator has no per-particle friction buffer. Use set_thermostat_timescale!."))
 _gamma_view(spec::CSVRSpec) =
@@ -113,6 +115,8 @@ _noise_scale_view(spec::VVSpec) = spec.params.noise_scale
 _noise_scale_view(spec::Union{BAOABSpec,BAOASpec,GSMSpec}) = spec.params.noise_scale
 _noise_scale_view(spec::BrownianSpec) = spec.params.noise_scale
 _noise_scale_view(spec::EMSpec) = spec.params.noise_scale
+_noise_scale_view(spec::NVESpec) =
+    throw(ArgumentError("NVE integrator has no stochastic noise scale."))
 _noise_scale_view(spec::NHCSpec) =
     throw(ArgumentError("NHC integrator has no stochastic noise scale."))
 _noise_scale_view(spec::CSVRSpec) =
@@ -122,6 +126,7 @@ _corr_time_view(spec::VVSpec) = spec.params.corr_time
 _corr_time_view(spec::Union{BAOABSpec,BAOASpec,GSMSpec}) = spec.params.corr_time
 _corr_time_view(spec::BrownianSpec) = spec.params.corr_time
 _corr_time_view(spec::EMSpec) = spec.params.corr_time
+_corr_time_view(spec::NVESpec) = nothing
 _corr_time_view(spec::NHCSpec) = nothing
 _corr_time_view(spec::CSVRSpec) = nothing
 
@@ -129,6 +134,7 @@ _ou_view(spec::VVSpec) = spec.params.ou
 _ou_view(spec::Union{BAOABSpec,BAOASpec,GSMSpec}) = spec.params.ou
 _ou_view(spec::BrownianSpec) = spec.params.ou
 _ou_view(spec::EMSpec) = spec.params.ou
+_ou_view(spec::NVESpec) = nothing
 _ou_view(spec::NHCSpec) = nothing
 _ou_view(spec::CSVRSpec) = nothing
 
