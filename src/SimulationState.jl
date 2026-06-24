@@ -103,7 +103,7 @@ mutable struct SimulationState{T<:AbstractFloat}
 
     # misc
     step::Int
-    # last integrator used: 1=Langevin, 2=Brownian, 3=NHC, 4=CSVR, 0=unknown
+    # last integrator used: 1=Langevin, 2=Brownian, 3=NHC, 4=CSVR, 5=NVE, 0=unknown
     last_integrator::UInt8
     nb_kind::UInt8
     softrep::Union{Nothing,Definitions.SoftRepulsiveParams{T}}

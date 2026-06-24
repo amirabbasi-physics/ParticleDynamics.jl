@@ -46,7 +46,8 @@ abstract type Method end
     ConstantVolume(group; thermostat=nothing)
 
 Molecular-dynamics method for a particle group, optionally coupled to a
-workflow thermostat.
+workflow thermostat. When `thermostat === nothing`, the group evolves in the
+microcanonical NVE limit.
 """
 @kwdef struct ConstantVolume <: Method
     group
@@ -261,62 +262,70 @@ end
 
 function _constant_volume_builder(methods::Vector{Method}, dtT)
     thermostats = Any[method.thermostat for method in methods]
-    all(thermo -> thermo isa Thermostat, thermostats) ||
-        throw(ArgumentError("ConstantVolume methods require a thermostat."))
+    all(thermo -> thermo === nothing || thermo isa Thermostat, thermostats) ||
+        throw(ArgumentError("ConstantVolume methods require either `thermostat=nothing` for NVE or a workflow Thermostat."))
 
-    if all(thermo -> thermo isa CSVR, thermostats)
-        seed = thermostats[1]
+    active_idx = findall(thermo -> thermo !== nothing, thermostats)
+    isempty(active_idx) && return function (st::SimulationState, system::ParticleSystem, materialized_groups::Dict{Symbol,Any})
+        return SimulationCore.nve(st; dt=dtT)
+    end
+
+    bath_ids = Int32[]
+    nbaths = 0
+    for thermo in thermostats
+        if thermo === nothing
+            push!(bath_ids, Int32(0))
+        else
+            nbaths += 1
+            push!(bath_ids, Int32(nbaths))
+        end
+    end
+
+    active_thermostats = Thermostat[thermostats[i] for i in active_idx]
+
+    if all(thermo -> thermo isa CSVR, active_thermostats)
+        temperatures = Float64[(thermostats[i]::CSVR).kT for i in active_idx]
+        taus = Float64[(thermostats[i]::CSVR).tau for i in active_idx]
         return function (st::SimulationState, system::ParticleSystem, materialized_groups::Dict{Symbol,Any})
-            spec = SimulationCore.csvr(st; temperature=seed.kT, tau=seed.tau, mass=st.mass)
-            if length(methods) == 1
-                filter = _materialized_group_filter(system, materialized_groups, methods[1].group)
-                Filters.set_thermostat_temperature!(spec, st, seed.kT; filter=filter)
-                Filters.set_thermostat_timescale!(spec, st, seed.tau; filter=filter)
-            else
-                temp_pairs = Pair{Filters.Filter,Float64}[]
-                tau_pairs = Pair{Filters.Filter,Float64}[]
-                for method in methods
-                    filter = _materialized_group_filter(system, materialized_groups, method.group)
-                    thermo = method.thermostat::CSVR
-                    push!(temp_pairs, filter => Float64(thermo.kT))
-                    push!(tau_pairs, filter => Float64(thermo.tau))
-                end
-                Filters.set_temperature!(spec, st, dtT, temp_pairs...)
-                Filters.set_thermostat_timescale!(spec, st, tau_pairs...)
+            spec = SimulationCore.csvr(st; temperatures=temperatures, taus=taus, mass=st.mass)
+            fill!(spec.workspace.particle_bath_id, Int32(0))
+            for (method, bath_id) in zip(methods, bath_ids)
+                filter = _materialized_group_filter(system, materialized_groups, method.group)
+                idx = Filters.resolve_gpu(filter, st)
+                Filters.assign_scalar!(spec.workspace.particle_bath_id, idx, bath_id)
             end
+            fill!(spec.workspace.cumulative_energy_exchange_per_bath, zero(eltype(spec.workspace.cumulative_energy_exchange_per_bath)))
+            fill!(spec.workspace.last_velocity_scale_per_bath, one(eltype(spec.workspace.last_velocity_scale_per_bath)))
+            spec.workspace.kinetic_initialized = false
+            spec.workspace.dof_dirty = true
             return spec
         end
-    elseif all(thermo -> thermo isa NoseHooverChain, thermostats)
-        chain_lengths = unique((thermo::NoseHooverChain).chain_length for thermo in thermostats)
-        substeps = unique((thermo::NoseHooverChain).substeps for thermo in thermostats)
+    elseif all(thermo -> thermo isa NoseHooverChain, active_thermostats)
+        chain_lengths = unique((thermo::NoseHooverChain).chain_length for thermo in active_thermostats)
+        substeps = unique((thermo::NoseHooverChain).substeps for thermo in active_thermostats)
         length(chain_lengths) == 1 ||
             throw(ArgumentError("All NoseHooverChain workflow methods must use the same chain_length."))
         length(substeps) == 1 ||
             throw(ArgumentError("All NoseHooverChain workflow methods must use the same substeps."))
-        seed = thermostats[1]::NoseHooverChain
+        temperatures = Float64[(thermostats[i]::NoseHooverChain).kT for i in active_idx]
+        taus = Float64[(thermostats[i]::NoseHooverChain).tau for i in active_idx]
         return function (st::SimulationState, system::ParticleSystem, materialized_groups::Dict{Symbol,Any})
             spec = SimulationCore.nosehooverchain(st;
-                                                  temperature=seed.kT,
-                                                  tau=seed.tau,
-                                                  chain_length=seed.chain_length,
-                                                  substeps=seed.substeps,
+                                                  temperatures=temperatures,
+                                                  taus=taus,
+                                                  chain_length=chain_lengths[1],
+                                                  substeps=substeps[1],
                                                   mass=st.mass)
-            if length(methods) == 1
-                filter = _materialized_group_filter(system, materialized_groups, methods[1].group)
-                Filters.set_thermostat_temperature!(spec, st, seed.kT; filter=filter)
-                Filters.set_thermostat_timescale!(spec, st, seed.tau; filter=filter)
-            else
-                temp_pairs = Pair{Filters.Filter,Float64}[]
-                tau_pairs = Pair{Filters.Filter,Float64}[]
-                for method in methods
-                    filter = _materialized_group_filter(system, materialized_groups, method.group)
-                    thermo = method.thermostat::NoseHooverChain
-                    push!(temp_pairs, filter => Float64(thermo.kT))
-                    push!(tau_pairs, filter => Float64(thermo.tau))
-                end
-                Filters.set_temperature!(spec, st, dtT, temp_pairs...)
-                Filters.set_thermostat_timescale!(spec, st, tau_pairs...)
+            fill!(spec.workspace.particle_bath_id, Int32(0))
+            for (method, bath_id) in zip(methods, bath_ids)
+                filter = _materialized_group_filter(system, materialized_groups, method.group)
+                idx = Filters.resolve_gpu(filter, st)
+                Filters.assign_scalar!(spec.workspace.particle_bath_id, idx, bath_id)
             end
+            fill!(spec.workspace.cumulative_energy_exchange_per_bath, zero(eltype(spec.workspace.cumulative_energy_exchange_per_bath)))
+            fill!(spec.workspace.last_velocity_scale_per_bath, one(eltype(spec.workspace.last_velocity_scale_per_bath)))
+            spec.workspace.kinetic_initialized = false
+            spec.workspace.dof_dirty = true
             return spec
         end
     else

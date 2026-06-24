@@ -82,8 +82,8 @@ using .Thermostats: AbstractThermostat, ThermostatState,
 
 using .SimulationCore: SimulationState, build_simulation, step!, step_graph!, sync_unwrapped!, accumulate_virial!, virial_components, virial_tensor
 using .SimulationCore: collect_step_observables, reset_bath_exchange_accumulators!
-using .SimulationCore: IntegratorSpec, VVSpec, BAOABSpec, BAOASpec, GSMSpec, BrownianSpec, EMSpec, NHCParams, NHCSpec, CSVRParams, CSVRSpec
-using .SimulationCore: velocityverlet, baoab, baoa, gsm, eulerheun, eulermaruyama, nosehooverchain, csvr
+using .SimulationCore: IntegratorSpec, VVSpec, BAOABSpec, BAOASpec, GSMSpec, BrownianSpec, EMSpec, NVESpec, NHCParams, NHCSpec, CSVRParams, CSVRSpec
+using .SimulationCore: velocityverlet, baoab, baoa, gsm, eulerheun, eulermaruyama, nve, nosehooverchain, csvr
 using .Writers: InMemoryLogger, CSVWriter, XYZWriter,
     write_xyz!, write_observables_csv!, gsd_open, gsd_close, write_gsd_frame!, read_gsd_frame!
 using .BondedForces: BondList, build_bondlist
@@ -122,8 +122,8 @@ export Filters, BondedForces, ParticleGroups, Thermostats, SimulationCore,
        SimulationState, build_simulation, step!, step_graph!, sync_unwrapped!, accumulate_virial!, virial_components, virial_tensor,
        collect_step_observables, reset_bath_exchange_accumulators!,
        AbstractIntegratorSpec,
-       IntegratorSpec, VVSpec, BAOABSpec, BAOASpec, GSMSpec, BrownianSpec, EMSpec, NHCParams, NHCSpec, CSVRParams, CSVRSpec,
-       velocityverlet, baoab, baoa, gsm, eulerheun, eulermaruyama, nosehooverchain, csvr,
+       IntegratorSpec, VVSpec, BAOABSpec, BAOASpec, GSMSpec, BrownianSpec, EMSpec, NVESpec, NHCParams, NHCSpec, CSVRParams, CSVRSpec,
+       velocityverlet, baoab, baoa, gsm, eulerheun, eulermaruyama, nve, nosehooverchain, csvr,
        # Writers
        InMemoryLogger, CSVWriter, XYZWriter,
        write_xyz!, write_observables_csv!, gsd_open, gsd_close, write_gsd_frame!, read_gsd_frame!,

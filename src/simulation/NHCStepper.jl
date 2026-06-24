@@ -388,13 +388,13 @@ function _nhc_apply_half_kick!(st::SimulationState{T},
 end
 
 """
-    _nhc_drift_positions!(st, dt)
+    _deterministic_drift_positions!(st, dt)
 
 Advance positions by one full deterministic drift under periodic boundaries.
 Implemented through the existing BAOAB A-kernel using `2dt` so the effective
 drift is exactly `dt`.
 """
-function _nhc_drift_positions!(st::SimulationState{T}, dt::T) where {T<:AbstractFloat}
+function _deterministic_drift_positions!(st::SimulationState{T}, dt::T) where {T<:AbstractFloat}
     drift_dt = T(2) * dt
     if _is_3d(st)
         LangevinIntegrators.baoab_A_3d!(st.rx, st.ry, st.rz,

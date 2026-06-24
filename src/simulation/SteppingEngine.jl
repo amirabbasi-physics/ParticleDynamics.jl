@@ -38,7 +38,7 @@ function prepare_previous_force_buffers!(st::SimulationState,
 end
 
 function prepare_previous_force_buffers!(st::SimulationState,
-                                         spec::Union{VVSpec,BAOABSpec,BAOASpec,GSMSpec,NHCSpec,CSVRSpec})
+                                         spec::Union{VVSpec,BAOABSpec,BAOASpec,GSMSpec,NVESpec,NHCSpec,CSVRSpec})
     if st.step > 1
         _swap_force_slots!(st)
     end
@@ -59,7 +59,7 @@ function ensure_reference_forces_ready!(st::SimulationState,
 end
 
 function ensure_reference_forces_ready!(st::SimulationState,
-                                        spec::Union{VVSpec,BAOABSpec,BAOASpec,GSMSpec,NHCSpec,CSVRSpec},
+                                        spec::Union{VVSpec,BAOABSpec,BAOASpec,GSMSpec,NVESpec,NHCSpec,CSVRSpec},
                                         compute_energy::Bool,
                                         freeze_spring::Bool)
     if st.step <= 1
@@ -90,7 +90,7 @@ function finalize_step_accounting!(st::SimulationState,
 end
 
 function finalize_step_accounting!(st::SimulationState{T},
-                                   spec::Union{NHCSpec{T},CSVRSpec{T}},
+                                   spec::Union{NVESpec{T},NHCSpec{T},CSVRSpec{T}},
                                    compute_energy::Bool) where {T<:AbstractFloat}
     # Deterministic thermostatted MD paths do not define per-particle
     # stochastic heat/work channels.

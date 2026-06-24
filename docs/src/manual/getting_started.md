@@ -25,7 +25,7 @@ current implementation uses CUDA-backed arrays internally.
 ## 2) First low-level simulation (2D, tiny and fast)
 
 ```julia
-using ParticleDynamics: build_simulation, step!, velocityverlet, baoab, eulerheun, eulermaruyama,
+using ParticleDynamics: build_simulation, step!, nve, velocityverlet, baoab, eulerheun, eulermaruyama,
     write_xyz!, write_observables_csv!, gsd_open, gsd_close, write_gsd_frame!
 using CUDA
 
@@ -63,6 +63,10 @@ Expected result: `st.step == 200` and finite state arrays.
 ## 3) Explicit integrator selection
 
 ```julia
+# Deterministic NVE velocity Verlet
+nve_spec = nve(st; dt=dt)
+step!(st, nve_spec, dt; compute_energy=true)
+
 # Langevin BAOAB
 bao = baoab(st; gamma=50.0f0, temperature=1.0f0, dt=dt)
 step!(st, bao, dt; compute_energy=true)
@@ -83,7 +87,9 @@ to `SimulationState`.
 ### Important runtime policy
 
 For stochastic paths that divide by friction, `gamma` must be strictly positive.  
-Tests enforce informative errors for invalid `gamma <= 0` usage on BAOAB/Brownian/EM paths.
+Tests enforce informative errors for invalid `gamma <= 0` usage on BAOAB/Brownian/EM paths.  
+Use `nve(st; dt=...)` for deterministic inertial dynamics instead of encoding
+NVE through zero-friction stochastic parameters.
 
 ## 4) Simple output writing
 
@@ -119,5 +125,6 @@ Use repository examples as templates:
 - `examples/TwoT_2D_BD_EH.jl`
 - `examples/2D_active_OU_brownian.jl`
 - `examples/3D_BD.jl`
+- `examples/3D_LJ_NVE.jl`
 
 These scripts contain production-like parameter scales; for quick iteration/tests, downscale `N` and total steps first.

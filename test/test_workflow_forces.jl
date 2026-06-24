@@ -39,7 +39,7 @@
 end
 
 @testset "Workflow PairTable and Bond Force Mapping" begin
-    cfg = hex_random_2d(8, 1.0, 0.25; T=Float64)
+    cfg = hex_random_2d(8, 1.0, 0.10; T=Float64)
     typeids = Int32[1, 2, 1, 2, 1, 2, 1, 2]
     topo = Topology(bonds=[(1, 2), (2, 3), (3, 4)])
     system = ParticleSystem(cfg; types=[:small, :large], typeids=typeids, topology=topo)
@@ -170,8 +170,17 @@ end
 end
 
 @testset "Workflow PairTable ignores zero-strength cutoff branches" begin
-    cfg = hex_random_2d(4, 1.0, 0.20; T=Float64)
-    system = ParticleSystem(cfg; types=[:A, :B], typeids=Int32[1, 1, 2, 2])
+    system = ParticleSystem(
+        [
+            (-3.0, -3.0),
+            (3.0, -3.0),
+            (-3.0, 3.0),
+            (3.0, 3.0),
+        ];
+        box=PeriodicBox((20.0, 20.0)),
+        types=[:A, :B],
+        typeids=Int32[1, 1, 2, 2],
+    )
 
     pair_table = PairTable(
         sigma=[1.0 5.0; 5.0 2.0],
@@ -229,8 +238,38 @@ end
     @test_logs (:warn, r"Neighbor list reached the configured per-particle capacity") match_mode=:any prepare!(sim)
 end
 
+@testset "Workflow rejects undersized dense cell-list grids" begin
+    system = ParticleSystem(
+        [
+            [-0.20, 0.0],
+            [0.20, 0.0],
+            [0.0, 0.20],
+            [0.0, -0.20],
+        ];
+        box=PeriodicBox((4.0, 4.0)),
+    )
+    sim = Simulation(
+        system;
+        integrator=Integrator(
+            dt=1e-3,
+            forces=[LennardJones(epsilon=1.0, sigma=1.0, cutoff=2.0, pairs=:neighborlist,
+                                 neighborlist=CellList(buffer=0.2, capacity=16, rebuild_interval=4))],
+        ),
+        precision=Float64,
+    )
+
+    err = try
+        prepare!(sim)
+        nothing
+    catch caught
+        caught
+    end
+    @test err isa ArgumentError
+    @test occursin("at least 3 cells per periodic dimension", sprint(showerror, err))
+end
+
 @testset "Workflow Force Compilation in prepare!" begin
-    cfg = hex_random_2d(6, 1.0, 0.30; T=Float64)
+    cfg = hex_random_2d(6, 1.0, 0.20; T=Float64)
     system = ParticleSystem(cfg; typeids=fill(Int32(1), 6))
     force = WCA(epsilon=1.0, sigma=1.0, pairs=:neighborlist, neighborlist=CellList(buffer=0.3, capacity=24, rebuild_interval=4))
     integ = Integrator(dt=1e-3, forces=[force])

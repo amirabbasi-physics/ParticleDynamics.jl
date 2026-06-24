@@ -20,6 +20,7 @@ runs when you only want a smoke test.
 - `2D_example_virial.jl`
 - `2D_polymer_bonded.jl`
 - `3D_BD.jl`
+- `3D_LJ_NVE.jl`
 - `3D_polymer_melt.jl`
 - `SingleT_2D_MD_CSVR.jl`
 - `TwoT_LJ2D_LD.jl`

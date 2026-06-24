@@ -38,8 +38,8 @@ const FREEZE_SPRING = UInt8(2)
 export SimulationState, build_simulation, step!, step_graph!, sync_unwrapped!, accumulate_virial!, virial_components, virial_tensor
 export collect_step_observables
 export reset_bath_exchange_accumulators!
-export IntegratorSpec, VVSpec, BAOABSpec, BAOASpec, GSMSpec, BrownianSpec, EMSpec, NHCParams, NHCSpec, CSVRParams, CSVRSpec
-export velocityverlet, baoab, baoa, gsm, eulerheun, eulermaruyama, nosehooverchain, csvr
+export IntegratorSpec, VVSpec, BAOABSpec, BAOASpec, GSMSpec, BrownianSpec, EMSpec, NVESpec, NHCParams, NHCSpec, CSVRParams, CSVRSpec
+export velocityverlet, baoab, baoa, gsm, eulerheun, eulermaruyama, nve, nosehooverchain, csvr
 
 include("SimulationState.jl")
 
@@ -440,6 +440,11 @@ function validate_integrator_inputs!(spec::VVSpec{T}, st::SimulationState{T}, dt
     return nothing
 end
 
+function validate_integrator_inputs!(spec::NVESpec{T}, st::SimulationState{T}, dt) where {T<:AbstractFloat}
+    _require_positive_inertial_mass!(st, string(integrator_name(spec)))
+    return nothing
+end
+
 function validate_integrator_inputs!(spec::Union{BAOABSpec,BAOASpec,GSMSpec}, st, dt)
     _require_positive_gamma!(spec.params.gamma, string(integrator_name(spec)))
     _require_positive_inertial_mass!(st, string(integrator_name(spec)))
@@ -633,6 +638,71 @@ function ensure_integrator_workspace!(spec::CSVRSpec{T},
     return nothing
 end
 
+function _deterministic_half_kick!(st::SimulationState{T},
+                                   fx::CuArray{T,1},
+                                   fy::CuArray{T,1},
+                                   fz::Union{Nothing,CuArray{T,1}},
+                                   dt::T) where {T<:AbstractFloat}
+    N = length(st.vx)
+    N == 0 && return nothing
+    threads = min(256, N)
+    blocks = cld(N, threads)
+    if _is_3d(st)
+        if st.mass_particle === nothing
+            k = CUDA.@cuda launch=false LangevinIntegrators._baoab_B3!(st.vx, st.vy, st.vz::CuArray{T,1},
+                                                                       fx, fy, fz::CuArray{T,1},
+                                                                       st.mass, dt,
+                                                                       st.Ekin, st.dU)
+            k(st.vx, st.vy, st.vz::CuArray{T,1},
+              fx, fy, fz::CuArray{T,1},
+              st.mass, dt,
+              st.Ekin, st.dU;
+              threads, blocks)
+        else
+            mass_particle = st.mass_particle::CuArray{T,1}
+            inv_mass_particle = st.inv_mass_particle::CuArray{T,1}
+            k = CUDA.@cuda launch=false LangevinIntegrators._baoab_B3!(st.vx, st.vy, st.vz::CuArray{T,1},
+                                                                       fx, fy, fz::CuArray{T,1},
+                                                                       mass_particle, inv_mass_particle,
+                                                                       dt,
+                                                                       st.Ekin, st.dU)
+            k(st.vx, st.vy, st.vz::CuArray{T,1},
+              fx, fy, fz::CuArray{T,1},
+              mass_particle, inv_mass_particle,
+              dt,
+              st.Ekin, st.dU;
+              threads, blocks)
+        end
+    else
+        if st.mass_particle === nothing
+            k = CUDA.@cuda launch=false LangevinIntegrators._baoab_B2!(st.vx, st.vy,
+                                                                       fx, fy,
+                                                                       st.mass, dt,
+                                                                       st.Ekin, st.dU)
+            k(st.vx, st.vy,
+              fx, fy,
+              st.mass, dt,
+              st.Ekin, st.dU;
+              threads, blocks)
+        else
+            mass_particle = st.mass_particle::CuArray{T,1}
+            inv_mass_particle = st.inv_mass_particle::CuArray{T,1}
+            k = CUDA.@cuda launch=false LangevinIntegrators._baoab_B2!(st.vx, st.vy,
+                                                                       fx, fy,
+                                                                       mass_particle, inv_mass_particle,
+                                                                       dt,
+                                                                       st.Ekin, st.dU)
+            k(st.vx, st.vy,
+              fx, fy,
+              mass_particle, inv_mass_particle,
+              dt,
+              st.Ekin, st.dU;
+              threads, blocks)
+        end
+    end
+    return nothing
+end
+
 function execute_integrator_stage!(spec::VVSpec{T},
                                    st::SimulationState{T},
                                    dt::T,
@@ -728,6 +798,29 @@ function execute_integrator_stage!(spec::VVSpec{T},
                                                        params, dt)
             end
         end
+    else
+        throw(ArgumentError("Unsupported stage $(stage_tag) for $(integrator_name(spec))."))
+    end
+
+    return nothing
+end
+
+function execute_integrator_stage!(spec::NVESpec{T},
+                                   st::SimulationState{T},
+                                   dt::T,
+                                   stage_tag;
+                                   compute_energy::Bool=true,
+                                   freeze_hold::Bool=false,
+                                   freeze_spring::Bool=false) where {T<:AbstractFloat}
+    if stage_tag === :kick1
+        _deterministic_half_kick!(st, st.f0x, st.f0y, st.f0z, dt)
+    elseif stage_tag === :drift
+        _deterministic_drift_positions!(st, dt)
+        apply_post_position_hooks!(st, :after_drift; freeze_hold=freeze_hold)
+    elseif stage_tag === :force
+        evaluate_forces_into_f!(st, compute_energy; freeze_spring=freeze_spring)
+    elseif stage_tag === :kick2
+        _deterministic_half_kick!(st, st.fx, st.fy, st.fz, dt)
     else
         throw(ArgumentError("Unsupported stage $(stage_tag) for $(integrator_name(spec))."))
     end
@@ -1125,7 +1218,7 @@ function execute_integrator_stage!(spec::NHCSpec{T},
     elseif stage_tag === :kick1
         _nhc_apply_half_kick!(st, st.f0x, st.f0y, st.f0z, dt, ws.kinetic_total_per_bath, ws.particle_bath_id)
     elseif stage_tag === :drift
-        _nhc_drift_positions!(st, dt)
+        _deterministic_drift_positions!(st, dt)
         apply_post_position_hooks!(st, :after_drift; freeze_hold=freeze_hold)
     elseif stage_tag === :force
         evaluate_forces_into_f!(st, compute_energy; freeze_spring=freeze_spring)
@@ -1152,7 +1245,7 @@ function execute_integrator_stage!(spec::CSVRSpec{T},
     if stage_tag === :kick1
         _nhc_apply_half_kick!(st, st.f0x, st.f0y, st.f0z, dt, ws.kinetic_total_per_bath, ws.particle_bath_id)
     elseif stage_tag === :drift
-        _nhc_drift_positions!(st, dt)
+        _deterministic_drift_positions!(st, dt)
         apply_post_position_hooks!(st, :after_drift; freeze_hold=freeze_hold)
     elseif stage_tag === :force
         evaluate_forces_into_f!(st, compute_energy; freeze_spring=freeze_spring)

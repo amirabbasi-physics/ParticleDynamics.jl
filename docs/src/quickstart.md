@@ -77,6 +77,41 @@ reset_step!(sim, 0)
 run!(sim, Stage(:production, steps=1_000))
 ```
 
+## NVE production after equilibration
+
+Pure NVE on the workflow API is expressed as `ConstantVolume(group)` with no
+thermostat. A common pattern is to equilibrate with a thermostat, then swap the
+integrator and re-prepare before production:
+
+```julia
+all = Group(:all, AllSelection())
+
+sim = Simulation(
+    system;
+    groups=Groups(all),
+    integrator=Integrator(
+        dt=2.0f-4,
+        forces=[force],
+        methods=[ConstantVolume(all; thermostat=CSVR(kT=1.0f0, tau=0.1f0))],
+    ),
+)
+
+run!(sim, Stage(:equil, steps=5_000))
+
+sim.integrator = Integrator(
+    dt=2.0f-4,
+    forces=[force],
+    methods=[ConstantVolume(all)],
+)
+prepare!(sim)
+reset_observables!(sim)
+reset_step!(sim, 0)
+run!(sim, Stage(:production, steps=20_000))
+```
+
+`examples/3D_LJ_NVE.jl` is stricter than this pattern: it runs pure NVE from
+step 0 and sets the initial velocities explicitly on the `ParticleSystem`.
+
 ## Groups apply methods and observables
 
 Groups are currently particle selections. They are designed so the same
@@ -121,7 +156,7 @@ The older expert API is still supported:
 - `build_simulation`
 - `step!`
 - `step_graph!`
-- `velocityverlet`, `baoab`, `baoa`, `gsm`, `eulerheun`, `eulermaruyama`, `nosehooverchain`, `csvr`
+- `nve`, `velocityverlet`, `baoab`, `baoa`, `gsm`, `eulerheun`, `eulermaruyama`, `nosehooverchain`, `csvr`
 - `ParticleDynamics.SimulationCore`
 
 Use that surface if you need direct control over the GPU-resident
