@@ -227,17 +227,36 @@
         @test spec.params.corr_time !== nothing
         @test all(abs.(Array(spec.params.corr_time) .- 0.2f0) .< 1f-6)
 
+        noise_before_ou = copy(Array(spec.params.noise_scale))
         Filters.set_ou_spectrum!(spec, st, 0.15f0, 0.4f0; filter=cold_filter, dt=dt)
         @test spec.params.ou !== nothing
         @test size(spec.params.ou.coeff_a, 1) == 1
-        corr_host = Array(spec.params.corr_time)
-        @test all(abs.(corr_host[cold_sel.host] .- 0.15f0) .< 1f-6)
-        @test all(abs.(corr_host[hot_sel.host]) .< 1f-6)
+        @test spec.params.corr_time === nothing
+        @test Array(spec.params.noise_scale) ≈ noise_before_ou
+        @test all(abs.(Array(spec.params.ou.scale) .- 0.4f0) .< 1f-6)
+
+        Filters.set_temperature!(spec, st, dt, 0.6f0; filter=hot_filter)
+        hot_noise = Array(spec.params.noise_scale)[hot_sel.host]
+        expected_hot_after = sqrt.(2f0 .* g_spec[hot_sel.host] .* 0.6f0 .* dt)
+        @test all(abs.(hot_noise .- expected_hot_after) .< 1f-6)
+        @test spec.params.ou !== nothing
+        @test size(spec.params.ou.coeff_a, 1) == 1
+        @test all(abs.(Array(spec.params.ou.scale) .- 0.4f0) .< 1f-6)
 
         Filters.set_ou_spectrum!(spec, st, Float32[0.05f0, 0.3f0], Float32[0.2f0, 0.1f0]; filter=cold_filter, dt=dt)
         @test spec.params.ou !== nothing
         @test size(spec.params.ou.coeff_a, 1) == 2
         @test spec.params.corr_time === nothing
+
+        explicit_ou = SimulationCore.velocityverlet(st; gamma=1f0, temperature=0.7f0, noise_corr_time=0.15f0, ou_scales=0.4f0, dt=dt)
+        @test explicit_ou.params.ou !== nothing
+        @test explicit_ou.params.corr_time === nothing
+        @test all(abs.(Array(explicit_ou.params.noise_scale) .- sqrt(2f0 * 0.7f0 * dt)) .< 1f-6)
+        @test all(abs.(Array(explicit_ou.params.ou.scale) .- 0.4f0) .< 1f-6)
+
+        Filters.set_temperature!(explicit_ou, dt, 0.9f0)
+        @test explicit_ou.params.ou !== nothing
+        @test all(abs.(Array(explicit_ou.params.ou.scale) .- 0.4f0) .< 1f-6)
 
         SimulationCore.step!(st, spec, dt; compute_energy=true)
         obs = SimulationCore.collect_step_observables(st, spec)

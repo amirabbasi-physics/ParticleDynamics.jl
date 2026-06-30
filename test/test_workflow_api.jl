@@ -100,7 +100,7 @@ end
         groups=Groups(all_particles),
         integrator=Integrator(
             dt=5e-4,
-            methods=[ActiveOrnsteinUhlenbeck(all_particles; gamma=1.0, kT=0.0, tau=0.05, noise_scale=0.2)],
+            methods=[ActiveOrnsteinUhlenbeck(all_particles; gamma=1.0, tau=0.05, noise_scale=0.2)],
         ),
         observables=Observable[MSDObservable(all_particles)],
         precision=Float64,

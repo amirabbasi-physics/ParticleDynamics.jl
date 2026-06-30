@@ -82,15 +82,6 @@ function _build_mode_ou(backend::Backends.AbstractBackend,
                                      coeff_a, coeff_c)
 end
 
-@inline function _compat_corr_time(backend::Backends.AbstractBackend,
-                                   ::Type{T},
-                                   N::Integer,
-                                   taus::AbstractVector{T},
-                                   scales::AbstractVector{T}) where {T<:AbstractFloat}
-    length(taus) == 1 && length(scales) == 1 || return nothing
-    return Backends.fill_vector(backend, taus[1], N)
-end
-
 function _refresh_ou_coefficients!(ou::Definitions.OUSpectrum{T}, dt::T) where {T<:AbstractFloat}
     ou.dt == dt && return ou
     coeff_a, coeff_c = _ou_coefficients(Backends.CUDABackend(), T, dt, Array(ou.tau), Array(ou.scale))

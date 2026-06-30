@@ -21,7 +21,7 @@ end
 
 @testset "Workflow Langevin and Brownian Integrator Mapping" begin
     system = _workflow_system_two_types(N=8, T=Float64)
-    cold, hot, _, groups = _workflow_groups_for_two_types()
+    cold, hot, all_particles, groups = _workflow_groups_for_two_types()
     materialized = _materialized_group_map(system, groups)
 
     st = build_tiny2d(N=8, T=Float64, nonbonded=:wca, temperature=0.0, dt=1e-3)
@@ -55,7 +55,7 @@ end
         dt=dt,
         scheme=VelocityVerlet(),
         methods=[
-            ActiveOrnsteinUhlenbeck(cold; gamma=3.0, kT=0.0, tau=0.25, noise_scale=0.4),
+            ActiveOrnsteinUhlenbeck(cold; gamma=3.0, tau=0.25, noise_scale=0.4),
             Langevin(hot; gamma=5.0, kT=1.25),
         ],
     )
@@ -63,18 +63,22 @@ end
     spec_ou_vv = ParticleDynamics.Workflow.build_lowlevel_integrator(compiled_ou_vv, st; system=system, materialized_groups=materialized)
     @test spec_ou_vv isa SimulationCore.VVSpec{Float64}
     @test spec_ou_vv.params.ou !== nothing
+    @test spec_ou_vv.params.corr_time === nothing
     gamma_ou_vv = Array(spec_ou_vv.params.gamma)
     noise_ou_vv = Array(spec_ou_vv.params.noise_scale)
-    corr_ou_vv = Array(spec_ou_vv.params.corr_time)
+    ou_idx_ou_vv = Array(spec_ou_vv.params.ou.active_idx)
+    ou_scale_ou_vv = Array(spec_ou_vv.params.ou.scale)
+    ou_tau_ou_vv = Array(spec_ou_vv.params.ou.tau)
+    @test ou_idx_ou_vv == Int32[1, 3, 5, 7]
+    @test all(ou_scale_ou_vv .== 0.4)
+    @test all(ou_tau_ou_vv .== 0.25)
     for i in eachindex(gamma_ou_vv)
         if isodd(i)
             @test gamma_ou_vv[i] == 3.0
-            @test noise_ou_vv[i] == 0.4
-            @test corr_ou_vv[i] == 0.25
+            @test noise_ou_vv[i] == 0.0
         else
             @test gamma_ou_vv[i] == 5.0
             @test isapprox(noise_ou_vv[i], sqrt(2 * 5.0 * 1.25 * dt); atol=1e-12)
-            @test corr_ou_vv[i] == 0.0
         end
     end
 
@@ -82,7 +86,7 @@ end
         dt=dt,
         scheme=EulerMaruyama(),
         methods=[
-            ActiveOrnsteinUhlenbeck(cold; gamma=3.0, kT=0.0, spectrum=OUSpectrum([0.05, 0.2], [0.4, 0.1])),
+            ActiveOrnsteinUhlenbeck(cold; gamma=3.0, spectrum=OUSpectrum([0.05, 0.2], [0.4, 0.1])),
             Brownian(hot; gamma=5.0, kT=1.25),
         ],
     )
@@ -96,6 +100,25 @@ end
     for i in eachindex(gamma_ou)
         @test gamma_ou[i] == (isodd(i) ? 3.0 : 5.0)
     end
+
+    thermal_active_ou = Integrator(
+        dt=dt,
+        scheme=EulerMaruyama(),
+        methods=[
+            Brownian(all_particles; gamma=3.0, kT=0.5),
+            ActiveOrnsteinUhlenbeck(all_particles; gamma=3.0, tau=0.25, noise_scale=0.4),
+        ],
+    )
+    compiled_thermal_active_ou = ParticleDynamics.Workflow.compile_integrator(system, thermal_active_ou; precision=:f64)
+    spec_thermal_active_ou = ParticleDynamics.Workflow.build_lowlevel_integrator(compiled_thermal_active_ou, st; system=system, materialized_groups=materialized)
+    @test spec_thermal_active_ou isa SimulationCore.EMSpec{Float64}
+    @test spec_thermal_active_ou.params.ou !== nothing
+    @test spec_thermal_active_ou.params.corr_time === nothing
+    @test all(Array(spec_thermal_active_ou.params.gamma) .== 3.0)
+    @test all(isapprox.(Array(spec_thermal_active_ou.params.noise_scale), sqrt(2 * 3.0 * 0.5 * dt); atol=1e-12))
+    @test Array(spec_thermal_active_ou.params.ou.active_idx) == Int32.(collect(1:length(st.rx)))
+    @test all(Array(spec_thermal_active_ou.params.ou.scale) .== 0.4)
+    @test all(Array(spec_thermal_active_ou.params.ou.tau) .== 0.25)
 end
 
 @testset "Workflow Deterministic Thermostat Mapping" begin

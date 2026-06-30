@@ -37,6 +37,34 @@
         )
     end
 
+    function _free_aoup_mode_msd_weight(steps::Integer, a::Float64)
+        steps <= 0 && return 0.0
+        total = Float64(steps)
+        a_pow = a
+        for lag in 1:(steps - 1)
+            total += 2.0 * (steps - lag) * a_pow
+            a_pow *= a
+        end
+        return total
+    end
+
+    function free_aoup_msd_1d(steps::Integer, gamma::Float64, dt::Float64,
+                              temperature::Float64, taus, scales)
+        tau_vals = taus isa Real ? Float64[Float64(taus)] : Float64.(collect(taus))
+        scale_vals = scales isa Real ? Float64[Float64(scales)] : Float64.(collect(scales))
+        M = max(length(tau_vals), length(scale_vals))
+        length(tau_vals) == M || (tau_vals = fill(tau_vals[1], M))
+        length(scale_vals) == M || (scale_vals = fill(scale_vals[1], M))
+
+        thermal = 2.0 * temperature * Float64(max(steps, 0)) * dt / gamma
+        active = 0.0
+        for (tau, scale) in zip(tau_vals, scale_vals)
+            a = tau <= 0 ? 0.0 : exp(-dt / tau)
+            active += (scale / gamma)^2 * _free_aoup_mode_msd_weight(steps, a)
+        end
+        return thermal + active
+    end
+
     @testset "4B-1 Brownian free diffusion MSD slope" begin
         p = params.brownian
         dt = clamp(Float64(p.dt), 2.0e-4, 5.0e-4)
@@ -414,5 +442,153 @@
         @test maximum(rel_msd) <= 0.08
         @test mean_rel_vacf <= 0.05
         @test maximum(rel_vacf) <= 0.08
+    end
+
+    @testset "4B-6 Free BD AOUP MSD matches exact discrete formula" begin
+        cases = [
+            (name="athermal", temperature=0.0, tau=2.25, noise_scale=2.0),
+            (name="thermal", temperature=0.75, tau=2.25, noise_scale=2.0),
+        ]
+
+        for case in cases
+            dt = 1.0e-3
+            gamma = 100.0
+            temperature = case.temperature
+            tau = case.tau
+            noise_scale = case.noise_scale
+
+            N = 4096
+            steps = 600
+            sample_stride = 20
+            nside = ceil(Int, sqrt(N))
+            boxL = 2048.0
+
+            st = SimulationCore.build_simulation(
+                N = N, box = (boxL, boxL),
+                cutoff = 1.0, skin = 0.5, cap = Int32(32), neigh_interval = 50,
+                use_neighborlist = false, epsilon = 0.0, sigma = 1.0,
+                gamma = gamma, temperature = temperature, dt = dt,
+                nonbonded = :soft_repulsive, precision = :f64,
+                unwrapped_positions = true
+            )
+
+            rx = Vector{Float64}(undef, N)
+            ry = similar(rx)
+            for i in 1:N
+                ix = (i - 1) % nside
+                iy = (i - 1) ÷ nside
+                rx[i] = (ix + 0.5) * boxL / nside - boxL / 2
+                ry[i] = (iy + 0.5) * boxL / nside - boxL / 2
+            end
+            copyto!(st.rx, rx)
+            copyto!(st.ry, ry)
+            copyto!(st.vx, zeros(Float64, N))
+            copyto!(st.vy, zeros(Float64, N))
+            SimulationCore.sync_unwrapped!(st)
+
+            spec = SimulationCore.eulerheun(st;
+                                            gamma=gamma,
+                                            temperature=temperature,
+                                            noise_corr_time=tau,
+                                            ou_scales=noise_scale,
+                                            dt=dt)
+
+            rx0 = copy(st.rx_unwrap)
+            ry0 = copy(st.ry_unwrap)
+
+            msd_num = Float64[]
+            msd_ref = Float64[]
+            for step in 1:steps
+                SimulationCore.step!(st, spec, dt; compute_energy = false)
+                if step % sample_stride == 0
+                    push!(msd_num, Float64(CUDA.sum((st.rx_unwrap .- rx0).^2 .+ (st.ry_unwrap .- ry0).^2) / N))
+                    push!(msd_ref, 2.0 * free_aoup_msd_1d(step, gamma, dt, temperature, tau, noise_scale))
+                end
+            end
+
+            rel = [abs(xn - xr) / max(abs(xr), 1.0e-12) for (xn, xr) in zip(msd_num, msd_ref)]
+            mean_rel = sum(rel) / length(rel)
+
+            @testset "$(case.name)" begin
+                @test all(isfinite, msd_num)
+                @test all(isfinite, msd_ref)
+                @test mean_rel <= 0.04
+                @test maximum(rel) <= 0.07
+            end
+        end
+    end
+
+    @testset "4B-7 Free BD multi-OU MSD matches exact discrete formula" begin
+        cases = [
+            (name="athermal_multi", temperature=0.0, taus=[0.15, 0.9, 2.25], scales=[1.5, 0.8, 0.35]),
+            (name="thermal_multi", temperature=0.75, taus=[0.15, 0.9, 2.25], scales=[1.5, 0.8, 0.35]),
+        ]
+
+        for case in cases
+            dt = 1.0e-3
+            gamma = 100.0
+            temperature = case.temperature
+            taus = case.taus
+            scales = case.scales
+
+            N = 4096
+            steps = 600
+            sample_stride = 20
+            nside = ceil(Int, sqrt(N))
+            boxL = 2048.0
+
+            st = SimulationCore.build_simulation(
+                N = N, box = (boxL, boxL),
+                cutoff = 1.0, skin = 0.5, cap = Int32(32), neigh_interval = 50,
+                use_neighborlist = false, epsilon = 0.0, sigma = 1.0,
+                gamma = gamma, temperature = temperature, dt = dt,
+                nonbonded = :soft_repulsive, precision = :f64,
+                unwrapped_positions = true
+            )
+
+            rx = Vector{Float64}(undef, N)
+            ry = similar(rx)
+            for i in 1:N
+                ix = (i - 1) % nside
+                iy = (i - 1) ÷ nside
+                rx[i] = (ix + 0.5) * boxL / nside - boxL / 2
+                ry[i] = (iy + 0.5) * boxL / nside - boxL / 2
+            end
+            copyto!(st.rx, rx)
+            copyto!(st.ry, ry)
+            copyto!(st.vx, zeros(Float64, N))
+            copyto!(st.vy, zeros(Float64, N))
+            SimulationCore.sync_unwrapped!(st)
+
+            spec = SimulationCore.eulerheun(st;
+                                            gamma=gamma,
+                                            temperature=temperature,
+                                            noise_corr_time=taus,
+                                            ou_scales=scales,
+                                            dt=dt)
+
+            rx0 = copy(st.rx_unwrap)
+            ry0 = copy(st.ry_unwrap)
+
+            msd_num = Float64[]
+            msd_ref = Float64[]
+            for step in 1:steps
+                SimulationCore.step!(st, spec, dt; compute_energy = false)
+                if step % sample_stride == 0
+                    push!(msd_num, Float64(CUDA.sum((st.rx_unwrap .- rx0).^2 .+ (st.ry_unwrap .- ry0).^2) / N))
+                    push!(msd_ref, 2.0 * free_aoup_msd_1d(step, gamma, dt, temperature, taus, scales))
+                end
+            end
+
+            rel = [abs(xn - xr) / max(abs(xr), 1.0e-12) for (xn, xr) in zip(msd_num, msd_ref)]
+            mean_rel = sum(rel) / length(rel)
+
+            @testset "$(case.name)" begin
+                @test all(isfinite, msd_num)
+                @test all(isfinite, msd_ref)
+                @test mean_rel <= 0.04
+                @test maximum(rel) <= 0.07
+            end
+        end
     end
 end

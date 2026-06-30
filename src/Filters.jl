@@ -227,7 +227,6 @@ end
 function _rebuild_single_mode_ou!(spec::IntegratorSpec{T}) where {T<:AbstractFloat}
     corr = _corr_time_view(spec)
     if corr === nothing
-        _set_ou_view!(spec, nothing)
         return spec
     end
     ou = SimulationCore._build_single_mode_ou(Backends.CUDABackend(), T, _noise_scale_view(spec), corr, _dt_view(spec))

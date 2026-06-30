@@ -179,25 +179,14 @@ function set_corr_time!(spec::IntegratorSpec, st::SimulationState, pairs::Pair{<
     return spec
 end
 
-@inline function _compat_corr_time_for_selection(backend::Backends.AbstractBackend,
-                                                 ::Type{T},
-                                                 N::Integer,
-                                                 idx::CuArray{Int32,1},
-                                                 taus::AbstractVector{T},
-                                                 scales::AbstractVector{T}) where {T<:AbstractFloat}
-    length(taus) == 1 && length(scales) == 1 || return nothing
-    corr = Backends.fill_vector(backend, zero(T), N)
-    assign_scalar!(corr, idx, taus[1])
-    return corr
-end
-
 """
     set_ou_spectrum!(spec, st, taus, scales; filter=All(), dt=spec.params.dt)
     set_ou_spectrum!(st, spec, taus, scales; filter=All(), dt=spec.params.dt)
 
-Configure a generalized OU spectrum on the selected particles. Scalars are
-treated as one-mode spectra, so the new implementation reduces exactly to the
-legacy single-exponential process when `taus` and `scales` are scalars.
+Configure a generalized OU spectrum on the selected particles. This explicit OU
+path stores the active spectrum separately from the white-noise
+`noise_scale` buffer, so thermal Gaussian noise and active OU forcing can be
+combined on the same particles. Scalars are treated as one-mode spectra.
 """
 function set_ou_spectrum!(spec::IntegratorSpec{T},
                           st::SimulationState,
@@ -209,13 +198,9 @@ function set_ou_spectrum!(spec::IntegratorSpec{T},
     backend = Backends.storage_backend(st)
     dtT = convert(T, dt)
     tau_vals, scale_vals = SimulationCore._canonical_mode_vectors(T, taus, scales)
-    if length(tau_vals) == 1 && length(scale_vals) == 1
-        assign_scalar!(_noise_scale_view(spec), sel.device, scale_vals[1])
-    end
     ou = SimulationCore._build_mode_ou(backend, T, sel.device, tau_vals, scale_vals, dtT)
-    corr = _compat_corr_time_for_selection(backend, T, length(_gamma_view(spec)), sel.device, tau_vals, scale_vals)
     _set_dt_view!(spec, dtT)
-    _set_corr_time_view!(spec, corr)
+    _set_corr_time_view!(spec, nothing)
     _set_ou_view!(spec, ou)
     return spec
 end

@@ -139,13 +139,16 @@ function _ensure_workspace_buffers!(workspace::StochasticWorkspace{T},
         M, K = size(ou.coeff_a)
         if workspace.ou_x === nothing || size(workspace.ou_x) != (M, K)
             workspace.ou_x = CUDA.zeros(T, M, K)
+            _initialize_ou_state!(workspace.ou_x, ou.scale)
         end
         if workspace.ou_y === nothing || size(workspace.ou_y) != (M, K)
             workspace.ou_y = CUDA.zeros(T, M, K)
+            _initialize_ou_state!(workspace.ou_y, ou.scale)
         end
         if _is_3d(st)
             if workspace.ou_z === nothing || size(workspace.ou_z) != (M, K)
                 workspace.ou_z = CUDA.zeros(T, M, K)
+                _initialize_ou_state!(workspace.ou_z, ou.scale)
             end
         else
             workspace.ou_z = nothing
@@ -157,6 +160,15 @@ function _ensure_workspace_buffers!(workspace::StochasticWorkspace{T},
     end
 
     return nothing
+end
+
+function _initialize_ou_state!(state::CuArray{T,2},
+                               scale::CuArray{T,2}) where {T<:AbstractFloat}
+    size(state) == size(scale) || throw(ArgumentError("OU state and scale buffers must have identical shapes."))
+    M, K = size(state)
+    M == 0 && return state
+    state .= scale .* CUDA.randn(T, M, K)
+    return state
 end
 
 include("simulation/Freeze.jl")

@@ -121,7 +121,7 @@ function _workflow_seed_temperature(sim, ::Type{T}) where {T<:AbstractFloat}
     methods = hasproperty(sim.integrator, :methods) ? sim.integrator.methods : Method[]
     temps = T[]
     for method in methods
-        if method isa Union{Langevin,Brownian,ActiveOrnsteinUhlenbeck}
+        if method isa Union{Langevin,Brownian}
             push!(temps, T(method.kT))
         elseif method isa ConstantVolume && method.thermostat !== nothing
             push!(temps, T(method.thermostat.kT))

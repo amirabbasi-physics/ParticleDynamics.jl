@@ -80,22 +80,27 @@ end
 Brownian(group; gamma, kT) = Brownian(group=group, gamma=gamma, kT=kT)
 
 """
-    ActiveOrnsteinUhlenbeck(group; gamma, kT, tau=nothing, noise_scale=nothing, spectrum=nothing)
+    ActiveOrnsteinUhlenbeck(group; gamma, tau=nothing, noise_scale=nothing, spectrum=nothing)
 
-Active Ornstein-Uhlenbeck method applied to a workflow group.
+Active Ornstein-Uhlenbeck method applied to a workflow group. This method only
+configures the correlated OU process. Thermal white noise is controlled
+separately through [`Brownian`](@ref) or [`Langevin`](@ref), so a thermal AOUP
+model is built by assigning both methods to the same group.
+
+The active OU amplitude is set by `noise_scale` or by the `scales` stored in
+`spectrum`. Those values are stationary standard deviations of the OU impulse,
+not bath temperatures.
 """
 @kwdef struct ActiveOrnsteinUhlenbeck <: Method
     group
     gamma
-    kT
     tau = nothing
     noise_scale = nothing
     spectrum = nothing
 end
-function ActiveOrnsteinUhlenbeck(group; gamma, kT, tau=nothing, noise_scale=nothing, spectrum=nothing)
+function ActiveOrnsteinUhlenbeck(group; gamma, tau=nothing, noise_scale=nothing, spectrum=nothing)
     return ActiveOrnsteinUhlenbeck(group=group,
                                    gamma=gamma,
-                                   kT=kT,
                                    tau=tau,
                                    noise_scale=noise_scale,
                                    spectrum=spectrum)
@@ -176,10 +181,19 @@ end
 function _apply_stochastic_method!(spec,
                                    st::SimulationState,
                                    filter,
-                                   method::Union{Langevin,Brownian,ActiveOrnsteinUhlenbeck},
+                                   method::Union{Langevin,Brownian},
                                    dtT)
     Filters.set_friction!(spec, st, method.gamma; filter=filter)
     Filters.set_temperature!(spec, st, dtT, method.kT; filter=filter)
+    return spec
+end
+
+function _apply_stochastic_method!(spec,
+                                   st::SimulationState,
+                                   filter,
+                                   method::ActiveOrnsteinUhlenbeck,
+                                   dtT)
+    Filters.set_friction!(spec, st, method.gamma; filter=filter)
     return spec
 end
 
@@ -188,26 +202,27 @@ function _apply_ou_controls!(spec,
                              filter,
                              method::ActiveOrnsteinUhlenbeck,
                              dtT)
-    if method isa ActiveOrnsteinUhlenbeck
-        if method.spectrum !== nothing
-            (method.tau === nothing && method.noise_scale === nothing) ||
-                throw(ArgumentError("ActiveOrnsteinUhlenbeck accepts either `spectrum` or (`tau`, `noise_scale`), not both."))
-            spec_in = method.spectrum
-            if spec_in isa OUSpectrum
-                Filters.set_ou_spectrum!(spec, st, spec_in.taus, spec_in.scales; filter=filter, dt=dtT)
-            elseif spec_in isa Tuple && length(spec_in) == 2
-                Filters.set_ou_spectrum!(spec, st, spec_in[1], spec_in[2]; filter=filter, dt=dtT)
-            else
-                throw(ArgumentError("Unsupported OU spectrum container $(typeof(spec_in)). Use OUSpectrum(taus, scales) or a two-tuple."))
-            end
+    if method.spectrum !== nothing
+        (method.tau === nothing && method.noise_scale === nothing) ||
+            throw(ArgumentError("ActiveOrnsteinUhlenbeck accepts either `spectrum` or (`tau`, `noise_scale`), not both."))
+        spec_in = method.spectrum
+        if spec_in isa OUSpectrum
+            Filters.set_ou_spectrum!(spec, st, spec_in.taus, spec_in.scales; filter=filter, dt=dtT)
+        elseif spec_in isa Tuple && length(spec_in) == 2
+            Filters.set_ou_spectrum!(spec, st, spec_in[1], spec_in[2]; filter=filter, dt=dtT)
         else
-            (method.tau !== nothing && method.noise_scale !== nothing) ||
-                throw(ArgumentError("ActiveOrnsteinUhlenbeck requires either `spectrum` or both `tau` and `noise_scale`."))
-            Filters.set_ou_spectrum!(spec, st, method.tau, method.noise_scale; filter=filter, dt=dtT)
+            throw(ArgumentError("Unsupported OU spectrum container $(typeof(spec_in)). Use OUSpectrum(taus, scales) or a two-tuple."))
         end
+    else
+        (method.tau !== nothing && method.noise_scale !== nothing) ||
+            throw(ArgumentError("ActiveOrnsteinUhlenbeck requires either `spectrum` or both `tau` and `noise_scale`."))
+        Filters.set_ou_spectrum!(spec, st, method.tau, method.noise_scale; filter=filter, dt=dtT)
     end
     return spec
 end
+
+_stochastic_seed_temperature(method::Union{Langevin,Brownian}, dtT::T) where {T<:AbstractFloat} = T(method.kT)
+_stochastic_seed_temperature(::ActiveOrnsteinUhlenbeck, dtT::T) where {T<:AbstractFloat} = zero(T)
 
 function _stochastic_builder(scheme::AbstractWorkflowScheme,
                              methods::Vector{Method},
@@ -227,7 +242,7 @@ function _stochastic_builder(scheme::AbstractWorkflowScheme,
             SimulationCore.gsm
         end
         return function (st::SimulationState, system::ParticleSystem, materialized_groups::Dict{Symbol,Any})
-            spec = constructor(st; gamma=seed.gamma, temperature=seed.kT, dt=dtT)
+            spec = constructor(st; gamma=seed.gamma, temperature=_stochastic_seed_temperature(seed, dtT), dt=dtT)
             for method in methods
                 filter = _materialized_group_filter(system, materialized_groups, method.group)
                 _apply_stochastic_method!(spec, st, filter, method, dtT)
@@ -245,7 +260,7 @@ function _stochastic_builder(scheme::AbstractWorkflowScheme,
         seed = methods[1]
         constructor = scheme isa EulerHeun ? SimulationCore.eulerheun : SimulationCore.eulermaruyama
         return function (st::SimulationState, system::ParticleSystem, materialized_groups::Dict{Symbol,Any})
-            spec = constructor(st; gamma=seed.gamma, temperature=seed.kT, dt=dtT)
+            spec = constructor(st; gamma=seed.gamma, temperature=_stochastic_seed_temperature(seed, dtT), dt=dtT)
             for method in methods
                 filter = _materialized_group_filter(system, materialized_groups, method.group)
                 _apply_stochastic_method!(spec, st, filter, method, dtT)
