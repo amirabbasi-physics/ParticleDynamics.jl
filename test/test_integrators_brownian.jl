@@ -10,6 +10,15 @@
         SimulationCore.ensure_integrator_workspace!(spec, st)
         bp = spec.params
         @test bp.corr_time !== nothing
+        @test spec.workspace.ou_x !== nothing
+        @test spec.workspace.ou_y !== nothing
+        @test sum(abs, Array(spec.workspace.ou_x)) > 0f0
+        @test sum(abs, Array(spec.workspace.ou_y)) > 0f0
+        ou_x0 = copy(Array(spec.workspace.ou_x))
+        ou_y0 = copy(Array(spec.workspace.ou_y))
+        SimulationCore.ensure_integrator_workspace!(spec, st)
+        @test Array(spec.workspace.ou_x) == ou_x0
+        @test Array(spec.workspace.ou_y) == ou_y0
         spec.params = Filters.set_corr_time!(bp, 0.2f0)
         bp = spec.params
         @test bp.corr_time !== nothing

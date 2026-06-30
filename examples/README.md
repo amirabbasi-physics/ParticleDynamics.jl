@@ -17,6 +17,11 @@ runs when you only want a smoke test.
 ## Public examples
 
 - `2D_active_OU_brownian.jl`
+- `2D_active_OU_brownian_free_msd.jl`
+- `2D_active_multi_OU_brownian_free_msd.jl`
+- `2D_active_thermal_OU_brownian.jl`
+- `2D_active_thermal_OU_brownian_free_msd.jl`
+- `2D_active_thermal_multi_OU_brownian_free_msd.jl`
 - `2D_example_virial.jl`
 - `2D_polymer_bonded.jl`
 - `3D_BD.jl`
@@ -30,4 +35,5 @@ runs when you only want a smoke test.
 The following files support the examples and are not meant to be run directly:
 
 - `_example_utils.jl`
+- `_free_aoup_msd_utils.jl`
 - `_restart_workflow.jl`

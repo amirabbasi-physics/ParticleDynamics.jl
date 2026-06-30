@@ -126,8 +126,8 @@ function _vv_apply_ou2_kernel!(beta_x::CuDeviceVector{T},
         sumy += ny
     end
     @inbounds begin
-        beta_x[i] = sumx
-        beta_y[i] = sumy
+        beta_x[i] += sumx
+        beta_y[i] += sumy
     end
     return
 end
@@ -160,9 +160,9 @@ function _vv_apply_ou3_kernel!(beta_x::CuDeviceVector{T},
         sumz += nz
     end
     @inbounds begin
-        beta_x[i] = sumx
-        beta_y[i] = sumy
-        beta_z[i] = sumz
+        beta_x[i] += sumx
+        beta_y[i] += sumy
+        beta_z[i] += sumz
     end
     return
 end

@@ -162,8 +162,8 @@ function _apply_ou2!(ξx::CuDeviceVector{T}, ξy::CuDeviceVector{T},
         sumy += ny
     end
     @inbounds begin
-        ξx[i] = sumx
-        ξy[i] = sumy
+        ξx[i] += sumx
+        ξy[i] += sumy
     end
     return nothing
 end
@@ -191,9 +191,9 @@ function _apply_ou3!(ξx::CuDeviceVector{T}, ξy::CuDeviceVector{T}, ξz::CuDevi
         sumz += nz
     end
     @inbounds begin
-        ξx[i] = sumx
-        ξy[i] = sumy
-        ξz[i] = sumz
+        ξx[i] += sumx
+        ξy[i] += sumy
+        ξz[i] += sumz
     end
     return nothing
 end

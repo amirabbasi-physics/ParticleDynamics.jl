@@ -166,7 +166,7 @@ end
                 scheme=EulerMaruyama(),
                 forces=[WCA(epsilon=1.0, sigma=1.0, pairs=:neighborlist, neighborlist=CellList(buffer=0.25, capacity=48, rebuild_interval=4))],
                 methods=[
-                    ActiveOrnsteinUhlenbeck(cold; gamma=2.0, kT=0.0, tau=0.05, noise_scale=0.2),
+                    ActiveOrnsteinUhlenbeck(cold; gamma=2.0, tau=0.05, noise_scale=0.2),
                     Brownian(hot; gamma=3.0, kT=0.5),
                 ],
             ),
@@ -176,6 +176,31 @@ end
         _run_workflow_smoke(sim)
         @test sim.lowlevel_integrator isa SimulationCore.EMSpec{Float64}
         @test sim.lowlevel_integrator.params.ou !== nothing
+    end
+
+    @testset "Thermal Active OU on Same Group" begin
+        system = _workflow_smoke_system_2d_single(N=12, T=T)
+        all_particles, groups = _workflow_smoke_groups_single()
+        sim = Simulation(
+            system;
+            groups=groups,
+            integrator=Integrator(
+                dt=5e-4,
+                scheme=EulerMaruyama(),
+                forces=[WCA(epsilon=1.0, sigma=1.0, pairs=:neighborlist, neighborlist=CellList(buffer=0.25, capacity=48, rebuild_interval=4))],
+                methods=[
+                    Brownian(all_particles; gamma=2.0, kT=0.15),
+                    ActiveOrnsteinUhlenbeck(all_particles; gamma=2.0, tau=0.05, noise_scale=0.2),
+                ],
+            ),
+            precision=Float64,
+            seed=0xA3A,
+        )
+        _run_workflow_smoke(sim)
+        @test sim.lowlevel_integrator isa SimulationCore.EMSpec{Float64}
+        @test sim.lowlevel_integrator.params.ou !== nothing
+        @test sim.lowlevel_integrator.params.corr_time === nothing
+        @test all(Array(sim.lowlevel_integrator.params.noise_scale) .> 0)
     end
 
     @testset "VelocityVerlet Active OU" begin
@@ -189,7 +214,7 @@ end
                 scheme=VelocityVerlet(),
                 forces=[SoftRepulsive(epsilon=1.0e3, sigma=1.0, cutoff=1.0,
                                       pairs=:neighborlist, neighborlist=CellList(buffer=0.25, capacity=48, rebuild_interval=4))],
-                methods=[ActiveOrnsteinUhlenbeck(all_particles; gamma=2.0, kT=0.0, tau=0.05, noise_scale=0.2)],
+                methods=[ActiveOrnsteinUhlenbeck(all_particles; gamma=2.0, tau=0.05, noise_scale=0.2)],
             ),
             precision=Float64,
             seed=0xA3B,

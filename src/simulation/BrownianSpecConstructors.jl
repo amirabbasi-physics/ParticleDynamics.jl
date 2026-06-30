@@ -15,8 +15,6 @@ function _build_brownian_params(st::SimulationState{T};
         noise_corr_time === nothing &&
             throw(ArgumentError("`ou_scales` requires `noise_corr_time` to be provided as OU mode correlation times."))
         ou = _build_mode_ou(backend, T, _all_particle_indices(backend, N), noise_corr_time, ou_scales, dt)
-        tau_vals, scale_vals = _canonical_mode_vectors(T, noise_corr_time, ou_scales)
-        corr = _compat_corr_time(backend, T, N, tau_vals, scale_vals)
     elseif noise_corr_time !== nothing
         if noise_corr_time isa AbstractVector && length(noise_corr_time) != N
             throw(ArgumentError("Vector `noise_corr_time` without `ou_scales` is interpreted as legacy per-particle single-mode OU and must have length $(N). Pass `ou_scales` as well for a multi-mode spectrum."))
