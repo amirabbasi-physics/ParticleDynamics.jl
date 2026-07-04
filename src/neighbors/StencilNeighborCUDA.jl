@@ -36,7 +36,6 @@ function _kernel_neighbors_stencil2!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T
         inv_cs = one(T) / cell_size
         cx = Int32(floor(x * inv_cs)); cx = cx >= nx ? (nx-1) : cx
         cy = Int32(floor(y * inv_cs)); cy = cy >= ny ? (ny-1) : cy
-        base  = _csr_base(i1, cap)
         found = Int32(0)
         rl    = rlist[i1]
         rl2   = rlist2[i1]
@@ -59,7 +58,7 @@ function _kernel_neighbors_stencil2!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T
                         dy = mic_fast(ry[j] - ry[i1], halfLy, Ly)
                         r2 = muladd(dx, dx, dy*dy)
                         if r2 <= rl2 && found < cap
-                            neighbors_flat[base + found + 1] = j
+                            neighbors_flat[_ell_index(i1, found, N)] = j
                             found += 1
                         end
                     end
@@ -93,7 +92,6 @@ function _kernel_neighbors_stencil3!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T
         cx = Int32(floor(x * inv_cs)); cx = cx >= nx ? (nx-1) : cx
         cy = Int32(floor(y * inv_cs)); cy = cy >= ny ? (ny-1) : cy
         cz = Int32(floor(z * inv_cs)); cz = cz >= nz ? (nz-1) : cz
-        base  = _csr_base(i1, cap)
         found = Int32(0)
         rl    = rlist[i1]
         rl2   = rlist2[i1]
@@ -115,7 +113,7 @@ function _kernel_neighbors_stencil3!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T
                             dz = mic_fast(rz[j] - rz[i1], halfLz, Lz)
                             r2 = muladd(dx, dx, muladd(dy, dy, dz*dz))
                             if r2 <= rl2 && found < cap
-                                neighbors_flat[base + found + 1] = j
+                                neighbors_flat[_ell_index(i1, found, N)] = j
                                 found += 1
                             end
                         end

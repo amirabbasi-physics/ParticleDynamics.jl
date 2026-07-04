@@ -650,6 +650,68 @@ function ensure_integrator_workspace!(spec::CSVRSpec{T},
     return nothing
 end
 
+# ---------------------------------------------------------------------------
+# Minimal deterministic (NVE-family) half-kick kernels.
+#
+# These deliberately do *not* maintain `Ekin`/`dU`: deterministic MD defines
+# no per-particle stochastic heat/work channel, and the kinetic-energy buffer
+# is refreshed lazily at sampling time (`_refresh_kinetic_buffer!`).
+# Arithmetic stays in the state's native precision; consumer GPUs execute
+# Float64 at a small fraction of Float32 throughput.
+# ---------------------------------------------------------------------------
+
+function _nve_kick2_kernel!(vx::CuDeviceVector{T}, vy::CuDeviceVector{T},
+                            fx::CuDeviceVector{T}, fy::CuDeviceVector{T},
+                            c::T) where {T<:AbstractFloat}
+    i = (blockIdx().x-1)*blockDim().x + threadIdx().x
+    N = length(vx); if i > N; return; end
+    @inbounds begin
+        vx[i] = muladd(c, fx[i], vx[i])
+        vy[i] = muladd(c, fy[i], vy[i])
+    end
+    return
+end
+
+function _nve_kick3_kernel!(vx::CuDeviceVector{T}, vy::CuDeviceVector{T}, vz::CuDeviceVector{T},
+                            fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, fz::CuDeviceVector{T},
+                            c::T) where {T<:AbstractFloat}
+    i = (blockIdx().x-1)*blockDim().x + threadIdx().x
+    N = length(vx); if i > N; return; end
+    @inbounds begin
+        vx[i] = muladd(c, fx[i], vx[i])
+        vy[i] = muladd(c, fy[i], vy[i])
+        vz[i] = muladd(c, fz[i], vz[i])
+    end
+    return
+end
+
+function _nve_kick2_pm_kernel!(vx::CuDeviceVector{T}, vy::CuDeviceVector{T},
+                               fx::CuDeviceVector{T}, fy::CuDeviceVector{T},
+                               inv_mass::CuDeviceVector{T}, half_dt::T) where {T<:AbstractFloat}
+    i = (blockIdx().x-1)*blockDim().x + threadIdx().x
+    N = length(vx); if i > N; return; end
+    @inbounds begin
+        c = half_dt * inv_mass[i]
+        vx[i] = muladd(c, fx[i], vx[i])
+        vy[i] = muladd(c, fy[i], vy[i])
+    end
+    return
+end
+
+function _nve_kick3_pm_kernel!(vx::CuDeviceVector{T}, vy::CuDeviceVector{T}, vz::CuDeviceVector{T},
+                               fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, fz::CuDeviceVector{T},
+                               inv_mass::CuDeviceVector{T}, half_dt::T) where {T<:AbstractFloat}
+    i = (blockIdx().x-1)*blockDim().x + threadIdx().x
+    N = length(vx); if i > N; return; end
+    @inbounds begin
+        c = half_dt * inv_mass[i]
+        vx[i] = muladd(c, fx[i], vx[i])
+        vy[i] = muladd(c, fy[i], vy[i])
+        vz[i] = muladd(c, fz[i], vz[i])
+    end
+    return
+end
+
 function _deterministic_half_kick!(st::SimulationState{T},
                                    fx::CuArray{T,1},
                                    fy::CuArray{T,1},
@@ -659,57 +721,33 @@ function _deterministic_half_kick!(st::SimulationState{T},
     N == 0 && return nothing
     threads = min(256, N)
     blocks = cld(N, threads)
+    half_dt = dt / T(2)
     if _is_3d(st)
         if st.mass_particle === nothing
-            k = CUDA.@cuda launch=false LangevinIntegrators._baoab_B3!(st.vx, st.vy, st.vz::CuArray{T,1},
-                                                                       fx, fy, fz::CuArray{T,1},
-                                                                       st.mass, dt,
-                                                                       st.Ekin, st.dU)
-            k(st.vx, st.vy, st.vz::CuArray{T,1},
-              fx, fy, fz::CuArray{T,1},
-              st.mass, dt,
-              st.Ekin, st.dU;
+            c = half_dt / st.mass
+            k = CUDA.@cuda launch=false _nve_kick3_kernel!(st.vx, st.vy, st.vz::CuArray{T,1},
+                                                           fx, fy, fz::CuArray{T,1}, c)
+            k(st.vx, st.vy, st.vz::CuArray{T,1}, fx, fy, fz::CuArray{T,1}, c;
               threads, blocks)
         else
-            mass_particle = st.mass_particle::CuArray{T,1}
             inv_mass_particle = st.inv_mass_particle::CuArray{T,1}
-            k = CUDA.@cuda launch=false LangevinIntegrators._baoab_B3!(st.vx, st.vy, st.vz::CuArray{T,1},
-                                                                       fx, fy, fz::CuArray{T,1},
-                                                                       mass_particle, inv_mass_particle,
-                                                                       dt,
-                                                                       st.Ekin, st.dU)
-            k(st.vx, st.vy, st.vz::CuArray{T,1},
-              fx, fy, fz::CuArray{T,1},
-              mass_particle, inv_mass_particle,
-              dt,
-              st.Ekin, st.dU;
+            k = CUDA.@cuda launch=false _nve_kick3_pm_kernel!(st.vx, st.vy, st.vz::CuArray{T,1},
+                                                              fx, fy, fz::CuArray{T,1},
+                                                              inv_mass_particle, half_dt)
+            k(st.vx, st.vy, st.vz::CuArray{T,1}, fx, fy, fz::CuArray{T,1},
+              inv_mass_particle, half_dt;
               threads, blocks)
         end
     else
         if st.mass_particle === nothing
-            k = CUDA.@cuda launch=false LangevinIntegrators._baoab_B2!(st.vx, st.vy,
-                                                                       fx, fy,
-                                                                       st.mass, dt,
-                                                                       st.Ekin, st.dU)
-            k(st.vx, st.vy,
-              fx, fy,
-              st.mass, dt,
-              st.Ekin, st.dU;
-              threads, blocks)
+            c = half_dt / st.mass
+            k = CUDA.@cuda launch=false _nve_kick2_kernel!(st.vx, st.vy, fx, fy, c)
+            k(st.vx, st.vy, fx, fy, c; threads, blocks)
         else
-            mass_particle = st.mass_particle::CuArray{T,1}
             inv_mass_particle = st.inv_mass_particle::CuArray{T,1}
-            k = CUDA.@cuda launch=false LangevinIntegrators._baoab_B2!(st.vx, st.vy,
-                                                                       fx, fy,
-                                                                       mass_particle, inv_mass_particle,
-                                                                       dt,
-                                                                       st.Ekin, st.dU)
-            k(st.vx, st.vy,
-              fx, fy,
-              mass_particle, inv_mass_particle,
-              dt,
-              st.Ekin, st.dU;
-              threads, blocks)
+            k = CUDA.@cuda launch=false _nve_kick2_pm_kernel!(st.vx, st.vy, fx, fy,
+                                                              inv_mass_particle, half_dt)
+            k(st.vx, st.vy, fx, fy, inv_mass_particle, half_dt; threads, blocks)
         end
     end
     return nothing

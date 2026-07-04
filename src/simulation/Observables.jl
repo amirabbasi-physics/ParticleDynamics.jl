@@ -284,6 +284,18 @@ function reset_bath_exchange_accumulators!(st::SimulationState{T},
 end
 
 """
+    _ensure_sample_buffers!(st, spec)
+
+Bring lazily-maintained observable buffers up to date before sampling. The
+deterministic NVE hot loop does not touch `st.Ekin`; refresh it from the
+velocities here instead of paying for it every timestep.
+"""
+_ensure_sample_buffers!(st::SimulationState, spec::IntegratorSpec) = nothing
+
+_ensure_sample_buffers!(st::SimulationState{T}, spec::NVESpec{T}) where {T<:AbstractFloat} =
+    _refresh_kinetic_buffer!(st)
+
+"""
     collect_step_observables(st, spec) -> NamedTuple
 
 Collect universal diagnostics, integrator-specific diagnostics, and bath heat /
@@ -291,6 +303,7 @@ entropy totals accumulated since the last reset of the relevant buffers.
 """
 function collect_step_observables(st::SimulationState{T},
                                   spec::IntegratorSpec{T}) where {T<:AbstractFloat}
+    _ensure_sample_buffers!(st, spec)
     Epot_total = T(CUDA.sum(st.Epot))
     Ekin_total = T(CUDA.sum(st.Ekin))
     virial_total = T(CUDA.sum(st.virial))

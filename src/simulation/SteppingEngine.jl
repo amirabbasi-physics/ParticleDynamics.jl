@@ -93,9 +93,14 @@ function finalize_step_accounting!(st::SimulationState{T},
                                    spec::Union{NVESpec{T},NHCSpec{T},CSVRSpec{T}},
                                    compute_energy::Bool) where {T<:AbstractFloat}
     # Deterministic thermostatted MD paths do not define per-particle
-    # stochastic heat/work channels.
-    fill!(st.dq, zero(T))
-    fill!(st.dU, zero(T))
+    # stochastic heat/work channels, and none of their kernels write `dq`/`dU`.
+    # The buffers only need clearing when the previous step was taken by an
+    # integrator that populated them; clearing every step costs two full-N
+    # sweeps in the hot loop.
+    if st.last_integrator != integrator_id(spec)
+        fill!(st.dq, zero(T))
+        fill!(st.dU, zero(T))
+    end
     return nothing
 end
 
@@ -128,7 +133,7 @@ function run_integrator_step!(st::SimulationState{T},
     freeze_spring = freeze_active && st.freeze_mode == FREEZE_SPRING
 
     rebuild_needed = plan_neighbor_rebuild!(st, dt)
-    apply_neighbor_rebuild_if_needed!(st, rebuild_needed)
+    apply_neighbor_rebuild_if_needed!(st, spec, rebuild_needed)
 
     prepare_previous_force_buffers!(st, spec)
     ensure_reference_forces_ready!(st, spec, compute_energy, freeze_spring)

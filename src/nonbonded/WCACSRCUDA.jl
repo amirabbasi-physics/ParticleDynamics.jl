@@ -7,11 +7,10 @@ function _wca2_csr_kernel!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
     N = length(rx); if i > N; return; end
     xi = rx[i]; yi = ry[i]
     accx = zero(T); accy = zero(T); eacc = zero(T)
-    base  = _csr_base(i, cap)
     nlist = counts[i]
     rc2 = T(1.2599211) * (σ*σ)
     @inbounds for t in 0:Int(nlist-1)
-        j = neighbors_flat[base + t + 1]
+        j = neighbors_flat[_ell_index(i, t, N)]
         dx = mic_fast(xi - rx[j], halfLx, Lx)
         dy = mic_fast(yi - ry[j], halfLy, Ly)
         r2 = muladd(dx, dx, dy*dy)
@@ -41,11 +40,10 @@ function _wca2_csr_kernel_virial!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
     xi = rx[i]; yi = ry[i]
     accx = zero(T); accy = zero(T); eacc = zero(T)
     vxx = zero(T); vyy = zero(T); vxy = zero(T)
-    base  = _csr_base(i, cap)
     nlist = counts[i]
     rc2 = T(1.2599211) * (σ*σ)
     @inbounds for t in 0:Int(nlist-1)
-        j = neighbors_flat[base + t + 1]
+        j = neighbors_flat[_ell_index(i, t, N)]
         dx = mic_fast(xi - rx[j], halfLx, Lx)
         dy = mic_fast(yi - ry[j], halfLy, Ly)
         r2 = muladd(dx, dx, dy*dy)
@@ -81,11 +79,10 @@ function _wca2_csr_kernel_excl!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
     N = length(rx); if i > N; return; end
     xi = rx[i]; yi = ry[i]
     accx = zero(T); accy = zero(T); eacc = zero(T)
-    base  = _csr_base(i, cap)
     nlist = counts[i]
     rc2 = T(1.2599211) * (σ*σ)
     @inbounds for t in 0:Int(nlist-1)
-        j = neighbors_flat[base + t + 1]
+        j = neighbors_flat[_ell_index(i, t, N)]
         if _is_bonded(Int32(i), j, bindex, bflat, bcounts); continue; end
         dx = mic_fast(xi - rx[j], halfLx, Lx)
         dy = mic_fast(yi - ry[j], halfLy, Ly)
@@ -117,11 +114,10 @@ function _wca2_csr_kernel_excl_virial!(rx::CuDeviceVector{T}, ry::CuDeviceVector
     xi = rx[i]; yi = ry[i]
     accx = zero(T); accy = zero(T); eacc = zero(T)
     vxx = zero(T); vyy = zero(T); vxy = zero(T)
-    base  = _csr_base(i, cap)
     nlist = counts[i]
     rc2 = T(1.2599211) * (σ*σ)
     @inbounds for t in 0:Int(nlist-1)
-        j = neighbors_flat[base + t + 1]
+        j = neighbors_flat[_ell_index(i, t, N)]
         if _is_bonded(Int32(i), j, bindex, bflat, bcounts); continue; end
         dx = mic_fast(xi - rx[j], halfLx, Lx)
         dy = mic_fast(yi - ry[j], halfLy, Ly)
@@ -157,11 +153,10 @@ function _wca3_csr_kernel_excl!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz
     N = length(rx); if i > N; return; end
     xi = rx[i]; yi = ry[i]; zi = rz[i]
     accx = zero(T); accy = zero(T); accz = zero(T); eacc = zero(T)
-    base  = _csr_base(i, cap)
     nlist = counts[i]
     rc2 = T(1.2599211) * (σ*σ)
     @inbounds for t in 0:Int(nlist-1)
-        j = neighbors_flat[base + t + 1]
+        j = neighbors_flat[_ell_index(i, t, N)]
         if _is_bonded(Int32(i), j, bindex, bflat, bcounts); continue; end
         dx = mic_fast(xi - rx[j], halfLx, Lx)
         dy = mic_fast(yi - ry[j], halfLy, Ly)
@@ -195,11 +190,10 @@ function _wca3_csr_kernel_excl_virial!(rx::CuDeviceVector{T}, ry::CuDeviceVector
     xi = rx[i]; yi = ry[i]; zi = rz[i]
     accx = zero(T); accy = zero(T); accz = zero(T); eacc = zero(T)
     vxx = zero(T); vyy = zero(T); vzz = zero(T); vxy = zero(T); vxz = zero(T); vyz = zero(T)
-    base  = _csr_base(i, cap)
     nlist = counts[i]
     rc2 = T(1.2599211) * (σ*σ)
     @inbounds for t in 0:Int(nlist-1)
-        j = neighbors_flat[base + t + 1]
+        j = neighbors_flat[_ell_index(i, t, N)]
         if _is_bonded(Int32(i), j, bindex, bflat, bcounts); continue; end
         dx = mic_fast(xi - rx[j], halfLx, Lx)
         dy = mic_fast(yi - ry[j], halfLy, Ly)
@@ -240,11 +234,10 @@ function _wca2_csr_noE_kernel_excl!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}
     N = length(rx); if i > N; return; end
     xi = rx[i]; yi = ry[i]
     accx = zero(T); accy = zero(T)
-    base  = _csr_base(i, cap)
     nlist = counts[i]
     rc2 = T(1.2599211) * (σ*σ)
     @inbounds for t in 0:Int(nlist-1)
-        j = neighbors_flat[base + t + 1]
+        j = neighbors_flat[_ell_index(i, t, N)]
         if _is_bonded(Int32(i), j, bindex, bflat, bcounts); continue; end
         dx = mic_fast(xi - rx[j], halfLx, Lx)
         dy = mic_fast(yi - ry[j], halfLy, Ly)
@@ -273,11 +266,10 @@ function _wca3_csr_noE_kernel_excl!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}
     N = length(rx); if i > N; return; end
     xi = rx[i]; yi = ry[i]; zi = rz[i]
     accx = zero(T); accy = zero(T); accz = zero(T)
-    base  = _csr_base(i, cap)
     nlist = counts[i]
     rc2 = T(1.2599211) * (σ*σ)
     @inbounds for t in 0:Int(nlist-1)
-        j = neighbors_flat[base + t + 1]
+        j = neighbors_flat[_ell_index(i, t, N)]
         if _is_bonded(Int32(i), j, bindex, bflat, bcounts); continue; end
         dx = mic_fast(xi - rx[j], halfLx, Lx)
         dy = mic_fast(yi - ry[j], halfLy, Ly)
@@ -457,11 +449,10 @@ function _wca3_csr_kernel!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuD
     N = length(rx); if i > N; return; end
     xi = rx[i]; yi = ry[i]; zi = rz[i]
     accx = zero(T); accy = zero(T); accz = zero(T); eacc = zero(T)
-    base  = _csr_base(i, cap)
     nlist = counts[i]
     rc2 = T(1.2599211) * (σ*σ)
     @inbounds for t in 0:Int(nlist-1)
-        j = neighbors_flat[base + t + 1]
+        j = neighbors_flat[_ell_index(i, t, N)]
         dx = mic_fast(xi - rx[j], halfLx, Lx)
         dy = mic_fast(yi - ry[j], halfLy, Ly)
         dz = mic_fast(zi - rz[j], halfLz, Lz)
@@ -493,11 +484,10 @@ function _wca3_csr_kernel_virial!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, 
     xi = rx[i]; yi = ry[i]; zi = rz[i]
     accx = zero(T); accy = zero(T); accz = zero(T); eacc = zero(T)
     vxx = zero(T); vyy = zero(T); vzz = zero(T); vxy = zero(T); vxz = zero(T); vyz = zero(T)
-    base  = _csr_base(i, cap)
     nlist = counts[i]
     rc2 = T(1.2599211) * (σ*σ)
     @inbounds for t in 0:Int(nlist-1)
-        j = neighbors_flat[base + t + 1]
+        j = neighbors_flat[_ell_index(i, t, N)]
         dx = mic_fast(xi - rx[j], halfLx, Lx)
         dy = mic_fast(yi - ry[j], halfLy, Ly)
         dz = mic_fast(zi - rz[j], halfLz, Lz)
@@ -536,11 +526,10 @@ function _wca2_csr_noE_kernel!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
     N = length(rx); if i > N; return; end
     xi = rx[i]; yi = ry[i]
     accx = zero(T); accy = zero(T)
-    base  = _csr_base(i, cap)
     nlist = counts[i]
     rc2 = T(1.2599211) * (σ*σ)
     @inbounds for t in 0:Int(nlist-1)
-        j = neighbors_flat[base + t + 1]
+        j = neighbors_flat[_ell_index(i, t, N)]
         dx = mic_fast(xi - rx[j], halfLx, Lx)
         dy = mic_fast(yi - ry[j], halfLy, Ly)
         r2 = muladd(dx, dx, dy*dy)
@@ -567,11 +556,10 @@ function _wca3_csr_noE_kernel!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz:
     N = length(rx); if i > N; return; end
     xi = rx[i]; yi = ry[i]; zi = rz[i]
     accx = zero(T); accy = zero(T); accz = zero(T)
-    base  = _csr_base(i, cap)
     nlist = counts[i]
     rc2 = T(1.2599211) * (σ*σ)
     @inbounds for t in 0:Int(nlist-1)
-        j = neighbors_flat[base + t + 1]
+        j = neighbors_flat[_ell_index(i, t, N)]
         dx = mic_fast(xi - rx[j], halfLx, Lx)
         dy = mic_fast(yi - ry[j], halfLy, Ly)
         dz = mic_fast(zi - rz[j], halfLz, Lz)

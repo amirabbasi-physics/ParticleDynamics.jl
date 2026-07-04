@@ -121,6 +121,14 @@ mutable struct SimulationState{T<:AbstractFloat}
     coll_prev::Union{Nothing,CuArray{UInt8,1}}
     coll_counts::Union{Nothing,CuArray{Int64,1}}
     coll_bins::Union{Nothing,CuArray{Int32,2}}
+    # Spatial-reorder identity map: `tag[k]` is the original (build-time) id of
+    # the particle currently stored in slot `k`. `nothing` disables reordering.
+    tag::Union{Nothing,CuArray{Int32,1}}
+    # Step of the last spatial reorder (-1 = none yet) and the minimum number
+    # of steps between reorders. Locality decays diffusively over thousands of
+    # steps, so reordering at every rebuild would waste the gather cost.
+    last_reorder_step::Int
+    reorder_interval::Int
 end
 
 @inline backend(st::SimulationState) = storage_backend(st.rx)

@@ -206,6 +206,21 @@ gsd_close(h) = GSDFiles.close_gsd(h)
 
 # -- internal helpers -----------------------------------------------------
 
+# Undo the spatial-reorder permutation so trajectory frames keep a stable
+# particle identity: element k of the state array belongs to original
+# particle `tag[k]`.
+_unpermuted(a, ::Nothing) = a
+function _unpermuted(a::CuArray{<:Any,1}, tag::CuArray{Int32,1})
+    out = similar(a)
+    out[tag] = a
+    return out
+end
+function _unpermuted(A::CuArray{<:Any,2}, tag::CuArray{Int32,1})
+    out = similar(A)
+    out[tag, :] = A
+    return out
+end
+
 @inline function _pack_box2(box::Tuple{T,T}) where {T<:AbstractFloat}
     return SVector{6,T}(box[1], box[2], zero(T), zero(T), zero(T), zero(T))
 end
@@ -326,22 +341,24 @@ function write_gsd_frame!(h, st; diameter=1.0, types_names=["A"], step::Int=0,
                           write_virial::Bool=false, sync_on_write::Bool=false)
     T = eltype(st.rx)
     N = length(st.rx)
+    tag = hasproperty(st, :tag) ? st.tag : nothing
+    u(a) = _unpermuted(a, tag)
 
-    posM = st.rz === nothing ? _soa_to_posmat(st.rx, st.ry) :
-                               _soa_to_posmat(st.rx, st.ry, st.rz)
+    posM = st.rz === nothing ? _soa_to_posmat(u(st.rx), u(st.ry)) :
+                               _soa_to_posmat(u(st.rx), u(st.ry), u(st.rz))
     write_velocities = !(hasproperty(st, :last_integrator) && st.last_integrator == UInt8(2))
     if write_velocities
-        velM = st.vz === nothing ? _soa_to_velmat(st.vx, st.vy) :
-                                   _soa_to_velmat(st.vx, st.vy, st.vz)
+        velM = st.vz === nothing ? _soa_to_velmat(u(st.vx), u(st.vy)) :
+                                   _soa_to_velmat(u(st.vx), u(st.vy), u(st.vz))
     end
 
     if write_forces
-        frcM = st.fz === nothing ? _soa_to_frcmat(st.fx, st.fy) :
-                                   _soa_to_frcmat(st.fx, st.fy, st.fz)
+        frcM = st.fz === nothing ? _soa_to_frcmat(u(st.fx), u(st.fy)) :
+                                   _soa_to_frcmat(u(st.fx), u(st.fy), u(st.fz))
     end
 
     if write_virial
-        virialM = _soa_to_tensormat(st.virial_tensor)
+        virialM = _soa_to_tensormat(u(st.virial_tensor))
     end
 
     if write_unwrapped
@@ -349,12 +366,12 @@ function write_gsd_frame!(h, st; diameter=1.0, types_names=["A"], step::Int=0,
             if st.rx_unwrap === nothing || st.ry_unwrap === nothing
                 error("write_unwrapped=true requires unwrapped_positions=true in build_simulation")
             end
-            posM_unwrap = _soa_to_posmat(st.rx_unwrap, st.ry_unwrap)
+            posM_unwrap = _soa_to_posmat(u(st.rx_unwrap), u(st.ry_unwrap))
         else
             if st.rx_unwrap === nothing || st.ry_unwrap === nothing || st.rz_unwrap === nothing
                 error("write_unwrapped=true requires unwrapped_positions=true in build_simulation")
             end
-            posM_unwrap = _soa_to_posmat(st.rx_unwrap, st.ry_unwrap, st.rz_unwrap)
+            posM_unwrap = _soa_to_posmat(u(st.rx_unwrap), u(st.ry_unwrap), u(st.rz_unwrap))
         end
     end
 
@@ -367,7 +384,7 @@ function write_gsd_frame!(h, st; diameter=1.0, types_names=["A"], step::Int=0,
     end
 
     tid_host = Vector{Int32}(undef, length(st.typeid))
-    copyto!(tid_host, st.typeid)
+    copyto!(tid_host, u(st.typeid))
     CUDA.synchronize()
     tid_0based = UInt32.(tid_host .- 1)
 

@@ -1,12 +1,22 @@
 # ============================================================================
 # Core kernels
 # ============================================================================
+#
+# Binning is a counting sort by cell id:
+#   1. `_kernel_cell_ids{2,3}!`     — cell id per particle;
+#   2. `_kernel_cell_histogram!`    — particles per cell (atomic);
+#   3. prefix scan (host-driven)    — `cell_offsets` from the histogram;
+#   4. `_kernel_scatter_by_cell!`   — cell-sorted particle ids.
+# This is O(N) with two light passes and replaces the previous global
+# `CUDA.sort!` of packed 64-bit keys plus per-cell binary searches, which
+# dominated rebuild time at large N. The order of particles within one cell
+# is nondeterministic (atomic cursor), which is physically irrelevant but
+# changes floating-point summation order between runs.
 
-# Pack `(cell_id, particle_id)` pairs so particles can be sorted by cell id.
-function _kernel_compute_packed2!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
-                                  Lx::T, Ly::T, inv_cs::T,
-                                  nx::Int32, ny::Int32,
-                                  packed::CuDeviceVector{UInt64}) where {T<:AbstractFloat}
+function _kernel_cell_ids2!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
+                            Lx::T, Ly::T, inv_cs::T,
+                            nx::Int32, ny::Int32,
+                            cell_of_particle::CuDeviceVector{Int32}) where {T<:AbstractFloat}
     i = (blockIdx().x-1)*blockDim().x + threadIdx().x
     N = length(rx); if i > N; return; end
     @inbounds begin
@@ -14,17 +24,15 @@ function _kernel_compute_packed2!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
         y = ry[i] + T(0.5)*Ly; y -= floor(y/Ly)*Ly
         cx = Int32(floor(x * inv_cs)); cx = cx >= nx ? (nx-1) : cx
         cy = Int32(floor(y * inv_cs)); cy = cy >= ny ? (ny-1) : cy
-        cid = Int32(cy*nx + cx)
-        packed[i] = (UInt64(UInt32(cid)) << 32) | UInt64(UInt32(i-1))
+        cell_of_particle[i] = cy*nx + cx
     end
     return
 end
 
-# 3D variant of the packing kernel described above.
-function _kernel_compute_packed3!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
-                                  Lx::T, Ly::T, Lz::T, inv_cs::T,
-                                  nx::Int32, ny::Int32, nz::Int32,
-                                  packed::CuDeviceVector{UInt64}) where {T<:AbstractFloat}
+function _kernel_cell_ids3!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
+                            Lx::T, Ly::T, Lz::T, inv_cs::T,
+                            nx::Int32, ny::Int32, nz::Int32,
+                            cell_of_particle::CuDeviceVector{Int32}) where {T<:AbstractFloat}
     i = (blockIdx().x-1)*blockDim().x + threadIdx().x
     N = length(rx); if i > N; return; end
     @inbounds begin
@@ -34,56 +42,32 @@ function _kernel_compute_packed3!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, 
         cx = Int32(floor(x * inv_cs)); cx = cx >= nx ? (nx-1) : cx
         cy = Int32(floor(y * inv_cs)); cy = cy >= ny ? (ny-1) : cy
         cz = Int32(floor(z * inv_cs)); cz = cz >= nz ? (nz-1) : cz
-        cid = Int32((cz*ny + cy)*nx + cx)
-        packed[i] = (UInt64(UInt32(cid)) << 32) | UInt64(UInt32(i-1))
+        cell_of_particle[i] = (cz*ny + cy)*nx + cx
     end
     return
 end
 
-function _kernel_unpack_sorted!(packed::CuDeviceVector{UInt64},
-                                cell_ids_sorted::CuDeviceVector{Int32},
-                                particle_ids_sorted::CuDeviceVector{Int32},
-                                cell_of_particle::CuDeviceVector{Int32})
+function _kernel_cell_histogram!(cell_of_particle::CuDeviceVector{Int32},
+                                 cell_counts::CuDeviceVector{Int32})
     i = (blockIdx().x-1)*blockDim().x + threadIdx().x
-    N = length(packed); if i > N; return; end
+    N = length(cell_of_particle); if i > N; return; end
     @inbounds begin
-        pv = packed[i]
-        cid = Int32(UInt32(pv >> 32))
-        pid = Int32(UInt32(pv & 0xFFFF_FFFF)) + 1
-        cell_ids_sorted[i]     = cid
-        particle_ids_sorted[i] = pid
-        cell_of_particle[pid]  = cid
+        c = cell_of_particle[i]
+        CUDA.@atomic cell_counts[c+1] += Int32(1)
     end
     return
 end
 
-@inline function _lb_search(arr::CuDeviceVector{Int32}, N::Int32, key::Int32)
-    lo = Int32(1)
-    hi = N + 1
-    while lo < hi
-        mid = (lo + hi) >>> 1
-        v = arr[mid]
-        if v < key
-            lo = mid + 1
-        else
-            hi = mid
-        end
-    end
-    return lo
-end
-
-function _kernel_cell_offsets!(cell_ids_sorted::CuDeviceVector{Int32},
-                               cell_offsets::CuDeviceVector{Int32},
-                               ncell::Int32)
-    c = (blockIdx().x-1)*blockDim().x + threadIdx().x
-    if c < 1 || c > ncell + 1
-        return
-    end
-    N = Int32(length(cell_ids_sorted))
-    if c <= ncell
-        @inbounds cell_offsets[c] = _lb_search(cell_ids_sorted, N, Int32(c-1))
-    else
-        @inbounds cell_offsets[c] = N + 1
+function _kernel_scatter_by_cell!(cell_of_particle::CuDeviceVector{Int32},
+                                  cell_offsets::CuDeviceVector{Int32},
+                                  cursors::CuDeviceVector{Int32},
+                                  particle_ids_sorted::CuDeviceVector{Int32})
+    i = (blockIdx().x-1)*blockDim().x + threadIdx().x
+    N = length(cell_of_particle); if i > N; return; end
+    @inbounds begin
+        c = cell_of_particle[i]
+        slot = CUDA.@atomic cursors[c+1] += Int32(1)
+        particle_ids_sorted[cell_offsets[c+1] + slot] = Int32(i)
     end
     return
 end
@@ -106,7 +90,6 @@ function _kernel_neighbors2!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
         c0 = cell_of_particle[i1]
         cx = c0 % nx
         cy = c0 ÷ nx
-        base  = _csr_base(i1, cap)
         found = Int32(0)
         for oy in Int32(-1):Int32(1)
             cy2 = cy + oy; cy2 -= (cy2 >= ny)*ny; cy2 += (cy2 < 0)*ny
@@ -122,7 +105,7 @@ function _kernel_neighbors2!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
                         dy = mic_fast(ry[j] - ry[i1], halfLy, Ly)
                         r2 = muladd(dx, dx, dy*dy)
                         if r2 <= cutoff2 && found < cap
-                            neighbors_flat[base + found + 1] = j
+                            neighbors_flat[_ell_index(i1, found, N)] = j
                             found += 1
                         end
                     end
@@ -154,7 +137,6 @@ function _kernel_neighbors3!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::C
         tmp = c0 ÷ nx
         cy = tmp % ny
         cz = tmp ÷ ny
-        base  = _csr_base(i1, cap)
         found = Int32(0)
         for oz in Int32(-1):Int32(1)
             cz2 = cz + oz; cz2 -= (cz2 >= nz)*nz; cz2 += (cz2 < 0)*nz
@@ -173,7 +155,7 @@ function _kernel_neighbors3!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::C
                             dz = mic_fast(rz[j] - rz[i1], halfLz, Lz)
                             r2 = muladd(dx, dx, muladd(dy, dy, dz*dz))
                             if r2 <= rl2 && found < cap
-                                neighbors_flat[base + found + 1] = j
+                                neighbors_flat[_ell_index(i1, found, N)] = j
                                 found += 1
                             end
                         end

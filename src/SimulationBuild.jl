@@ -8,7 +8,8 @@
                       noise_corr_time=nothing, dt=0.001,
                       mass=1, bonds=nothing, bonding=nothing,
                       nonbonded=:lj, softrep_params=nothing, backend=:cuda,
-                      precision=:f32, unwrapped_positions::Bool=false)
+                      precision=:f32, unwrapped_positions::Bool=false,
+                      spatial_reorder::Bool=true, reorder_interval::Int=500)
 
 Construct a [`SimulationState`](@ref) with GPU-resident SoA arrays and a
 neighbor list configured for the requested potential. All inputs are keyword
@@ -30,6 +31,15 @@ Key behaviors:
   particles with positive mass, then centered to remove center-of-mass drift.
 - When `unwrapped_positions=true`, additional `rx_unwrap`/`ry_unwrap`/`rz_unwrap`
   buffers track continuous positions across periodic boundaries.
+- With `spatial_reorder=true` (the default) and a dense cell list, NVE runs
+  periodically permute all per-particle arrays into cell-sorted order (at most
+  once per `reorder_interval` steps, at a neighbor rebuild). This keeps
+  storage order aligned with space, which is essential for force-kernel memory
+  locality at large `N`. `st.tag[k]` records the build-time id of the particle
+  in slot `k`, and GSD/restart output is written in build-time order. Pass
+  `spatial_reorder=false` if external code indexes into the state arrays by
+  fixed particle number (e.g. `Filters.Indices`); typeid-based selections
+  remain valid because `typeid` is permuted consistently.
 
 Example (mirrors `examples/2D_example.jl`, scaled down to N=4096 for testing):
 
@@ -152,7 +162,9 @@ function build_simulation(;N::Int,
                            softrep_params::Union{Nothing,Definitions.SoftRepulsiveParams{<:Real}}=nothing,
                            backend::Union{Backends.AbstractBackend,Symbol}=:cuda,
                            precision::Symbol = :f32,
-                           unwrapped_positions::Bool = false)
+                           unwrapped_positions::Bool = false,
+                           spatial_reorder::Bool = true,
+                           reorder_interval::Int = 500)
 
     backend_impl = Backends.normalize_backend(backend)
     Backends.ensure_available(backend_impl)
@@ -300,6 +312,13 @@ function build_simulation(;N::Int,
         bond_spec = nothing
     end
 
+    # Spatial reordering keeps per-particle arrays in cell-sorted order for
+    # memory locality. Only meaningful with a cell list, and unsupported with
+    # bonds (topology arrays are index-based). External index lists into this
+    # state (e.g. `Filters.Indices`) require `spatial_reorder=false`.
+    tag = (spatial_reorder && use_neighborlist && bondlist === nothing) ?
+          CuArray(Int32.(1:N)) : nothing
+
     st = SimulationState(rx, ry, rz, rx_unwrap, ry_unwrap, rz_unwrap, vx, vy, vz, fx, fy, fz,
                          f0x, f0y, f0z,
                          typeid,
@@ -314,7 +333,8 @@ function build_simulation(;N::Int,
                          Epot_accum, Ekin_accum, virial_accum, virial_tensor_accum,
                          0, UInt8(0), nb_tag, srp,
                          FREEZE_NONE, -1, true, nothing, zero(T), nothing, nothing, nothing,
-                         false, nothing, nothing, nothing)
+                         false, nothing, nothing, nothing,
+                         tag, -1, reorder_interval)
 
     if D == 2
         st.box2 = (T(box[1]), T(box[2]))
