@@ -296,6 +296,9 @@ end
 
 function _thermodynamic_data(sim, obs::ThermodynamicObservable)
     st = sim.state::SimulationState
+    if sim.lowlevel_integrator !== nothing
+        SimulationCore._ensure_sample_buffers!(st, sim.lowlevel_integrator)
+    end
     filter = _group_filter(sim, obs.group)
     dim = _state_dimension(st)
     n = _group_count(sim, filter)

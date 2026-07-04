@@ -233,6 +233,9 @@ function _build_workflow_state!(sim, compiled_forces::Union{Nothing,CompiledForc
         :backend => backend,
         :precision => _workflow_precision_symbol(sim.precision),
         :unwrapped_positions => _workflow_needs_unwrapped_positions(sim),
+        # Workflow groups/selections may hold index-based particle lists,
+        # which spatial reordering would silently invalidate.
+        :spatial_reorder => false,
     )
     merge!(kwargs, compiled_forces === nothing ? _default_build_force_kwargs(T) : compiled_forces.build_kwargs)
 

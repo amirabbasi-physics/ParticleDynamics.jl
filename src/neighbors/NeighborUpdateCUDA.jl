@@ -75,6 +75,26 @@ function update_neighbors_inplace!(nbh::NeighborMatrix{T},
                                    box::Tuple{T,T}, step::Int=0) where {T<:AbstractFloat}
     @assert nbh.D == 2
     _bin_particles!(nbh, rx, ry, box)
+    _finish_rebuild!(nbh, rx, ry, box, step)
+    return nbh
+end
+
+function update_neighbors_inplace!(nbh::NeighborMatrix{T},
+                                   rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1};
+                                   box::Tuple{T,T,T}, step::Int=0) where {T<:AbstractFloat}
+    @assert nbh.D == 3
+    _bin_particles!(nbh, rx, ry, rz, box)
+    _finish_rebuild!(nbh, rx, ry, rz, box, step)
+    return nbh
+end
+
+# Rebuild the neighbor rows from an existing binning (`_bin_particles!`) and
+# record the reference coordinates. Split out so callers that permute particle
+# storage between binning and row construction (spatial reordering) can reuse
+# the pipeline.
+function _finish_rebuild!(nbh::NeighborMatrix{T},
+                          rx::CuArray{T,1}, ry::CuArray{T,1},
+                          box::Tuple{T,T}, step::Int) where {T<:AbstractFloat}
     fill!(nbh.counts, Int32(0))
     halfLx = T(0.5)*box[1]; halfLy = T(0.5)*box[2]
     threads, blocks = _launchdims(Int(nbh.N))
@@ -96,11 +116,9 @@ function update_neighbors_inplace!(nbh::NeighborMatrix{T},
     return nbh
 end
 
-function update_neighbors_inplace!(nbh::NeighborMatrix{T},
-                                   rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1};
-                                   box::Tuple{T,T,T}, step::Int=0) where {T<:AbstractFloat}
-    @assert nbh.D == 3
-    _bin_particles!(nbh, rx, ry, rz, box)
+function _finish_rebuild!(nbh::NeighborMatrix{T},
+                          rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
+                          box::Tuple{T,T,T}, step::Int) where {T<:AbstractFloat}
     fill!(nbh.counts, Int32(0))
     threads, blocks = _launchdims(Int(nbh.N))
     halfLx = T(0.5)*box[1]; halfLy = T(0.5)*box[2]; halfLz = T(0.5)*box[3]
@@ -196,7 +214,7 @@ Check whether the maximum displacement since the last rebuild exceeds
 elapsed. `step!` calls this every `NL_CHECK_STRIDE` steps. The heuristic mirrors
 the values tuned in the 2D/3D production scripts (skin between 0.3 and 0.5 σ).
 """
-function update_needed!(nbh::NeighborMatrix{T}, rx::CuArray{T,1}, ry::CuArray{T,1};
+function update_needed!(nbh::CellListNeighborMatrix{T}, rx::CuArray{T,1}, ry::CuArray{T,1};
                         skin::Real, Lx::T, Ly::T, step::Int) where {T<:AbstractFloat}
     threads, blocks = _launchdims(length(rx))
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly
@@ -218,7 +236,7 @@ function update_needed!(nbh::NeighborMatrix{T}, rx::CuArray{T,1}, ry::CuArray{T,
     return rebuild_needed
 end
 
-function update_needed!(nbh::NeighborMatrix{T}, rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1};
+function update_needed!(nbh::CellListNeighborMatrix{T}, rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1};
                         skin::Real, Lx::T, Ly::T, Lz::T, step::Int) where {T<:AbstractFloat}
     threads, blocks = _launchdims(length(rx))
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly; halfLz = T(0.5)*Lz
@@ -246,13 +264,3 @@ function update_needed!(nbh::NeighborMatrix{T}, rx::CuArray{T,1}, ry::CuArray{T,
     return rebuild_needed
 end
 
-function update_needed!(nbh::StencilNeighborMatrix{T}, args...; kwargs...) where {T<:AbstractFloat}
-    return update_needed!(NeighborMatrix{T}(nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
-                                            nbh.cap, zero(T), nbh.skin, zero(T),
-                                            nbh.N, nbh.D, nbh.nx, nbh.ny, nbh.nz, nbh.cell_size,
-                                            nbh.particle_ids_sorted, nbh.cell_ids_sorted,
-                                            nbh.cell_offsets, nbh.cell_of_particle, nbh.packed_keys,
-                                            nbh.rref_x, nbh.rref_y, nbh.rref_z, nbh.dr2,
-                                            nbh.last_build_step, nbh.target_interval),
-                               args...; kwargs...)
-end

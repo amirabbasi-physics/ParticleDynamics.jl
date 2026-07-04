@@ -10,11 +10,10 @@ function _harmrep2_csr_kernel!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
     N = length(rx); if i > N; return; end
     xi = rx[i]; yi = ry[i]
     accx = zero(T); accy = zero(T); eacc = zero(T)
-    base  = _csr_base(i, cap)
     nlist = counts[i]
     σ2 = σ*σ
     @inbounds for t in 0:Int(nlist-1)
-        j = neighbors_flat[base + t + 1]
+        j = neighbors_flat[_ell_index(i, t, N)]
         dx = mic_fast(xi - rx[j], halfLx, Lx)
         dy = mic_fast(yi - ry[j], halfLy, Ly)
         r2 = muladd(dx, dx, dy*dy)
@@ -40,11 +39,10 @@ function _harmrep2_csr_kernel_virial!(rx::CuDeviceVector{T}, ry::CuDeviceVector{
     xi = rx[i]; yi = ry[i]
     accx = zero(T); accy = zero(T); eacc = zero(T)
     vxx = zero(T); vyy = zero(T); vxy = zero(T)
-    base  = _csr_base(i, cap)
     nlist = counts[i]
     σ2 = σ*σ
     @inbounds for t in 0:Int(nlist-1)
-        j = neighbors_flat[base + t + 1]
+        j = neighbors_flat[_ell_index(i, t, N)]
         dx = mic_fast(xi - rx[j], halfLx, Lx)
         dy = mic_fast(yi - ry[j], halfLy, Ly)
         r2 = muladd(dx, dx, dy*dy)
@@ -76,12 +74,11 @@ function _harmrep2_csr_kernel_excl!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}
     N = length(rx); if i > N; return; end
     xi = rx[i]; yi = ry[i]
     accx = zero(T); accy = zero(T); eacc = zero(T)
-    base  = _csr_base(i, cap)
     nlist = counts[i]
     σ2 = σ*σ
     bbase, bnb, b1, b2 = _bond_cache(Int32(i), bindex, bflat, bcounts)
     @inbounds for t in 0:Int(nlist-1)
-        j = neighbors_flat[base + t + 1]
+        j = neighbors_flat[_ell_index(i, t, N)]
         if _is_bonded_cached(j, bbase, bnb, b1, b2, bflat); continue; end
         dx = mic_fast(xi - rx[j], halfLx, Lx)
         dy = mic_fast(yi - ry[j], halfLy, Ly)
@@ -108,12 +105,11 @@ function _harmrep2_csr_kernel_excl_virial!(rx::CuDeviceVector{T}, ry::CuDeviceVe
     xi = rx[i]; yi = ry[i]
     accx = zero(T); accy = zero(T); eacc = zero(T)
     vxx = zero(T); vyy = zero(T); vxy = zero(T)
-    base  = _csr_base(i, cap)
     nlist = counts[i]
     σ2 = σ*σ
     bbase, bnb, b1, b2 = _bond_cache(Int32(i), bindex, bflat, bcounts)
     @inbounds for t in 0:Int(nlist-1)
-        j = neighbors_flat[base + t + 1]
+        j = neighbors_flat[_ell_index(i, t, N)]
         if _is_bonded_cached(j, bbase, bnb, b1, b2, bflat); continue; end
         dx = mic_fast(xi - rx[j], halfLx, Lx)
         dy = mic_fast(yi - ry[j], halfLy, Ly)
@@ -144,12 +140,11 @@ function _harmrep3_csr_kernel_excl!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}
     N = length(rx); if i > N; return; end
     xi = rx[i]; yi = ry[i]; zi = rz[i]
     accx = zero(T); accy = zero(T); accz = zero(T); eacc = zero(T)
-    base  = _csr_base(i, cap)
     nlist = counts[i]
     σ2 = σ*σ
     bbase, bnb, b1, b2 = _bond_cache(Int32(i), bindex, bflat, bcounts)
     @inbounds for t in 0:Int(nlist-1)
-        j = neighbors_flat[base + t + 1]
+        j = neighbors_flat[_ell_index(i, t, N)]
         if _is_bonded_cached(j, bbase, bnb, b1, b2, bflat); continue; end
         dx = mic_fast(xi - rx[j], halfLx, Lx)
         dy = mic_fast(yi - ry[j], halfLy, Ly)
@@ -178,12 +173,11 @@ function _harmrep3_csr_kernel_excl_virial!(rx::CuDeviceVector{T}, ry::CuDeviceVe
     xi = rx[i]; yi = ry[i]; zi = rz[i]
     accx = zero(T); accy = zero(T); accz = zero(T); eacc = zero(T)
     vxx = zero(T); vyy = zero(T); vzz = zero(T); vxy = zero(T); vxz = zero(T); vyz = zero(T)
-    base  = _csr_base(i, cap)
     nlist = counts[i]
     σ2 = σ*σ
     bbase, bnb, b1, b2 = _bond_cache(Int32(i), bindex, bflat, bcounts)
     @inbounds for t in 0:Int(nlist-1)
-        j = neighbors_flat[base + t + 1]
+        j = neighbors_flat[_ell_index(i, t, N)]
         if _is_bonded_cached(j, bbase, bnb, b1, b2, bflat); continue; end
         dx = mic_fast(xi - rx[j], halfLx, Lx)
         dy = mic_fast(yi - ry[j], halfLy, Ly)
@@ -219,12 +213,11 @@ function _harmrep2_csr_noE_kernel_excl!(rx::CuDeviceVector{T}, ry::CuDeviceVecto
     N = length(rx); if i > N; return; end
     xi = rx[i]; yi = ry[i]
     accx = zero(T); accy = zero(T)
-    base  = _csr_base(i, cap)
     nlist = counts[i]
     σ2 = σ*σ
     bbase, bnb, b1, b2 = _bond_cache(Int32(i), bindex, bflat, bcounts)
     @inbounds for t in 0:Int(nlist-1)
-        j = neighbors_flat[base + t + 1]
+        j = neighbors_flat[_ell_index(i, t, N)]
         if _is_bonded_cached(j, bbase, bnb, b1, b2, bflat); continue; end
         dx = mic_fast(xi - rx[j], halfLx, Lx)
         dy = mic_fast(yi - ry[j], halfLy, Ly)
@@ -250,12 +243,11 @@ function _harmrep3_csr_noE_kernel_excl!(rx::CuDeviceVector{T}, ry::CuDeviceVecto
     N = length(rx); if i > N; return; end
     xi = rx[i]; yi = ry[i]; zi = rz[i]
     accx = zero(T); accy = zero(T); accz = zero(T)
-    base  = _csr_base(i, cap)
     nlist = counts[i]
     σ2 = σ*σ
     bbase, bnb, b1, b2 = _bond_cache(Int32(i), bindex, bflat, bcounts)
     @inbounds for t in 0:Int(nlist-1)
-        j = neighbors_flat[base + t + 1]
+        j = neighbors_flat[_ell_index(i, t, N)]
         if _is_bonded_cached(j, bbase, bnb, b1, b2, bflat); continue; end
         dx = mic_fast(xi - rx[j], halfLx, Lx)
         dy = mic_fast(yi - ry[j], halfLy, Ly)
@@ -401,11 +393,10 @@ function _harmrep3_csr_kernel!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz:
     N = length(rx); if i > N; return; end
     xi = rx[i]; yi = ry[i]; zi = rz[i]
     accx = zero(T); accy = zero(T); accz = zero(T); eacc = zero(T)
-    base  = _csr_base(i, cap)
     nlist = counts[i]
     σ2 = σ*σ
     @inbounds for t in 0:Int(nlist-1)
-        j = neighbors_flat[base + t + 1]
+        j = neighbors_flat[_ell_index(i, t, N)]
         dx = mic_fast(xi - rx[j], halfLx, Lx)
         dy = mic_fast(yi - ry[j], halfLy, Ly)
         dz = mic_fast(zi - rz[j], halfLz, Lz)
@@ -434,11 +425,10 @@ function _harmrep3_csr_kernel_virial!(rx::CuDeviceVector{T}, ry::CuDeviceVector{
     xi = rx[i]; yi = ry[i]; zi = rz[i]
     accx = zero(T); accy = zero(T); accz = zero(T); eacc = zero(T)
     vxx = zero(T); vyy = zero(T); vzz = zero(T); vxy = zero(T); vxz = zero(T); vyz = zero(T)
-    base  = _csr_base(i, cap)
     nlist = counts[i]
     σ2 = σ*σ
     @inbounds for t in 0:Int(nlist-1)
-        j = neighbors_flat[base + t + 1]
+        j = neighbors_flat[_ell_index(i, t, N)]
         dx = mic_fast(xi - rx[j], halfLx, Lx)
         dy = mic_fast(yi - ry[j], halfLy, Ly)
         dz = mic_fast(zi - rz[j], halfLz, Lz)
@@ -474,11 +464,10 @@ function _harmrep2_csr_noE_kernel!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
     N = length(rx); if i > N; return; end
     xi = rx[i]; yi = ry[i]
     accx = zero(T); accy = zero(T)
-    base  = _csr_base(i, cap)
     nlist = counts[i]
     σ2 = σ*σ
     @inbounds for t in 0:Int(nlist-1)
-        j = neighbors_flat[base + t + 1]
+        j = neighbors_flat[_ell_index(i, t, N)]
         dx = mic_fast(xi - rx[j], halfLx, Lx)
         dy = mic_fast(yi - ry[j], halfLy, Ly)
         r2 = muladd(dx, dx, dy*dy)
@@ -502,11 +491,10 @@ function _harmrep3_csr_noE_kernel!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
     N = length(rx); if i > N; return; end
     xi = rx[i]; yi = ry[i]; zi = rz[i]
     accx = zero(T); accy = zero(T); accz = zero(T)
-    base  = _csr_base(i, cap)
     nlist = counts[i]
     σ2 = σ*σ
     @inbounds for t in 0:Int(nlist-1)
-        j = neighbors_flat[base + t + 1]
+        j = neighbors_flat[_ell_index(i, t, N)]
         dx = mic_fast(xi - rx[j], halfLx, Lx)
         dy = mic_fast(yi - ry[j], halfLy, Ly)
         dz = mic_fast(zi - rz[j], halfLz, Lz)

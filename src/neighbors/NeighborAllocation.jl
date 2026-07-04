@@ -24,11 +24,10 @@ function _alloc_neighbor_matrix(T::Type{<:AbstractFloat}, N::Int, D::Int,
     fill!(counts, Int32(0))
 
     particle_ids_sorted = CUDA.CuArray{Int32}(undef, N)
-    cell_ids_sorted     = CUDA.CuArray{Int32}(undef, N)
     ncell = Int(nx) * Int(ny) * Int(nz)
     cell_offsets        = CUDA.fill(Int32(1), ncell + 1)
+    cell_counts         = CUDA.zeros(Int32, ncell)
     cell_of_particle    = CUDA.CuArray{Int32}(undef, N)
-    packed_keys         = CUDA.CuArray{UInt64}(undef, N)
 
     rref_x = CUDA.CuArray{T}(undef, N)
     rref_y = CUDA.CuArray{T}(undef, N)
@@ -40,7 +39,7 @@ function _alloc_neighbor_matrix(T::Type{<:AbstractFloat}, N::Int, D::Int,
         cap, cutoffT, skinT, cutoff2,
         Int32(N), Int32(D),
         nx, ny, nz, cell_size,
-        particle_ids_sorted, cell_ids_sorted, cell_offsets, cell_of_particle, packed_keys,
+        particle_ids_sorted, cell_offsets, cell_counts, cell_of_particle,
         rref_x, rref_y, rref_z, dr2, 0, 20
     )
 end
@@ -58,11 +57,10 @@ function _alloc_stencil_matrix(T::Type{<:AbstractFloat}, N::Int, D::Int,
     fill!(counts, Int32(0))
 
     particle_ids_sorted = CUDA.CuArray{Int32}(undef, N)
-    cell_ids_sorted     = CUDA.CuArray{Int32}(undef, N)
     ncell = Int(nx) * Int(ny) * Int(nz)
     cell_offsets        = CUDA.fill(Int32(1), ncell + 1)
+    cell_counts         = CUDA.zeros(Int32, ncell)
     cell_of_particle    = CUDA.CuArray{Int32}(undef, N)
-    packed_keys         = CUDA.CuArray{UInt64}(undef, N)
 
     rlist  = CUDA.CuArray{T}(undef, N)
     rlist2 = CUDA.CuArray{T}(undef, N)
@@ -77,7 +75,7 @@ function _alloc_stencil_matrix(T::Type{<:AbstractFloat}, N::Int, D::Int,
         cap, skinT,
         Int32(N), Int32(D),
         nx, ny, nz, cellT,
-        particle_ids_sorted, cell_ids_sorted, cell_offsets, cell_of_particle, packed_keys,
+        particle_ids_sorted, cell_offsets, cell_counts, cell_of_particle,
         rlist, rlist2,
         rref_x, rref_y, rref_z, dr2, 0, 20
     )
@@ -87,70 +85,54 @@ end
 # Binning helpers
 # ============================================================================
 
-function _bin_particles!(nbh::NeighborMatrix{T}, rx::CuArray{T,1}, ry::CuArray{T,1},
+# Counting-sort by cell id. Shared by dense and stencil matrices: computes
+# `cell_of_particle`, `cell_offsets` (1-based row starts, last entry N+1) and
+# `particle_ids_sorted` without a global sort.
+function _finish_binning!(nbh::CellListNeighborMatrix, N::Int, ncell::Int)
+    fill!(nbh.cell_counts, Int32(0))
+    threads, blocks = _launchdims(N)
+    khist = CUDA.@cuda launch=false _kernel_cell_histogram!(nbh.cell_of_particle, nbh.cell_counts)
+    khist(nbh.cell_of_particle, nbh.cell_counts; threads, blocks)
+
+    offsets_tail = view(nbh.cell_offsets, 2:(ncell + 1))
+    accumulate!(+, offsets_tail, nbh.cell_counts)
+    offsets_tail .+= Int32(1)
+    fill!(view(nbh.cell_offsets, 1:1), Int32(1))
+
+    fill!(nbh.cell_counts, Int32(0))     # reuse as per-cell scatter cursors
+    kscat = CUDA.@cuda launch=false _kernel_scatter_by_cell!(nbh.cell_of_particle, nbh.cell_offsets,
+                                                             nbh.cell_counts, nbh.particle_ids_sorted)
+    kscat(nbh.cell_of_particle, nbh.cell_offsets, nbh.cell_counts, nbh.particle_ids_sorted;
+          threads, blocks)
+    return nothing
+end
+
+function _bin_particles!(nbh::CellListNeighborMatrix{T}, rx::CuArray{T,1}, ry::CuArray{T,1},
                          box::Tuple{T,T}) where {T<:AbstractFloat}
     N = Int(nbh.N)
     inv_cs = one(T) / nbh.cell_size
     threads, blocks = _launchdims(N)
-    kpack = CUDA.@cuda launch=false _kernel_compute_packed2!(rx, ry,
-        T(box[1]), T(box[2]), inv_cs, nbh.nx, nbh.ny, nbh.packed_keys)
-    kpack(rx, ry, T(box[1]), T(box[2]), inv_cs, nbh.nx, nbh.ny, nbh.packed_keys; threads, blocks)
-
-    CUDA.sort!(nbh.packed_keys)
-
-    kunpack = CUDA.@cuda launch=false _kernel_unpack_sorted!(nbh.packed_keys, nbh.cell_ids_sorted, nbh.particle_ids_sorted, nbh.cell_of_particle)
-    kunpack(nbh.packed_keys, nbh.cell_ids_sorted, nbh.particle_ids_sorted, nbh.cell_of_particle; threads, blocks)
-
-    ncell = Int(nbh.nx) * Int(nbh.ny)
-    t2, b2 = _launchdims(ncell+1)
-    koff = CUDA.@cuda launch=false _kernel_cell_offsets!(nbh.cell_ids_sorted, nbh.cell_offsets, Int32(ncell))
-    koff(nbh.cell_ids_sorted, nbh.cell_offsets, Int32(ncell); threads=t2, blocks=b2)
+    kids = CUDA.@cuda launch=false _kernel_cell_ids2!(rx, ry,
+        T(box[1]), T(box[2]), inv_cs, nbh.nx, nbh.ny, nbh.cell_of_particle)
+    kids(rx, ry, T(box[1]), T(box[2]), inv_cs, nbh.nx, nbh.ny, nbh.cell_of_particle;
+         threads, blocks)
+    _finish_binning!(nbh, N, Int(nbh.nx) * Int(nbh.ny))
     return nothing
 end
 
-function _bin_particles!(nbh::NeighborMatrix{T}, rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
+function _bin_particles!(nbh::CellListNeighborMatrix{T}, rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
                          box::Tuple{T,T,T}) where {T<:AbstractFloat}
     N = Int(nbh.N)
     inv_cs = one(T) / nbh.cell_size
     threads, blocks = _launchdims(N)
-    kpack = CUDA.@cuda launch=false _kernel_compute_packed3!(rx, ry, rz,
+    kids = CUDA.@cuda launch=false _kernel_cell_ids3!(rx, ry, rz,
         T(box[1]), T(box[2]), T(box[3]), inv_cs,
-        nbh.nx, nbh.ny, nbh.nz, nbh.packed_keys)
-    kpack(rx, ry, rz, T(box[1]), T(box[2]), T(box[3]),
-          inv_cs, nbh.nx, nbh.ny, nbh.nz, nbh.packed_keys; threads, blocks)
-
-    CUDA.sort!(nbh.packed_keys)
-
-    kunpack = CUDA.@cuda launch=false _kernel_unpack_sorted!(nbh.packed_keys, nbh.cell_ids_sorted, nbh.particle_ids_sorted, nbh.cell_of_particle)
-    kunpack(nbh.packed_keys, nbh.cell_ids_sorted, nbh.particle_ids_sorted, nbh.cell_of_particle; threads, blocks)
-
-    ncell = Int(nbh.nx) * Int(nbh.ny) * Int(nbh.nz)
-    t2, b2 = _launchdims(ncell+1)
-    koff = CUDA.@cuda launch=false _kernel_cell_offsets!(nbh.cell_ids_sorted, nbh.cell_offsets, Int32(ncell))
-    koff(nbh.cell_ids_sorted, nbh.cell_offsets, Int32(ncell); threads=t2, blocks=b2)
+        nbh.nx, nbh.ny, nbh.nz, nbh.cell_of_particle)
+    kids(rx, ry, rz, T(box[1]), T(box[2]), T(box[3]), inv_cs,
+         nbh.nx, nbh.ny, nbh.nz, nbh.cell_of_particle; threads, blocks)
+    _finish_binning!(nbh, N, Int(nbh.nx) * Int(nbh.ny) * Int(nbh.nz))
     return nothing
 end
-
-# reuse for stencil matrices
-_bin_particles!(nbh::StencilNeighborMatrix{T}, rx::CuArray{T,1}, ry::CuArray{T,1}, box::Tuple{T,T}) where {T<:AbstractFloat} =
-    _bin_particles!(NeighborMatrix{T}(nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
-                                      nbh.cap, zero(T), nbh.skin, zero(T),
-                                      nbh.N, nbh.D, nbh.nx, nbh.ny, nbh.nz, nbh.cell_size,
-                                      nbh.particle_ids_sorted, nbh.cell_ids_sorted, nbh.cell_offsets,
-                                      nbh.cell_of_particle, nbh.packed_keys,
-                                      nbh.rref_x, nbh.rref_y, nbh.rref_z, nbh.dr2,
-                                      nbh.last_build_step, nbh.target_interval),
-                   rx, ry, box)
-
-_bin_particles!(nbh::StencilNeighborMatrix{T}, rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1}, box::Tuple{T,T,T}) where {T<:AbstractFloat} =
-    _bin_particles!(NeighborMatrix{T}(nbh.neighbors_index, nbh.neighbors_flat, nbh.counts,
-                                      nbh.cap, zero(T), nbh.skin, zero(T),
-                                      nbh.N, nbh.D, nbh.nx, nbh.ny, nbh.nz, nbh.cell_size,
-                                      nbh.particle_ids_sorted, nbh.cell_ids_sorted, nbh.cell_offsets,
-                                      nbh.cell_of_particle, nbh.packed_keys,
-                                      nbh.rref_x, nbh.rref_y, nbh.rref_z, nbh.dr2,
-                                      nbh.last_build_step, nbh.target_interval),
-                   rx, ry, rz, box)
 
 # ============================================================================
 # Public build routines

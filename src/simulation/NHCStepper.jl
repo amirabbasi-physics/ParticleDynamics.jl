@@ -387,28 +387,135 @@ function _nhc_apply_half_kick!(st::SimulationState{T},
     return nothing
 end
 
+# Single-wrap periodic drift. Positions live in [-L/2, L/2); one timestep of
+# any stable MD moves a particle much less than L/2, so at most one wrap per
+# coordinate is needed. This avoids the floor+divide of the general wrap.
+function _det_drift2_kernel!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
+                             vx::CuDeviceVector{T}, vy::CuDeviceVector{T},
+                             dt::T, Lx::T, Ly::T, halfLx::T, halfLy::T) where {T<:AbstractFloat}
+    i = (blockIdx().x-1)*blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    @inbounds begin
+        xi = muladd(dt, vx[i], rx[i])
+        yi = muladd(dt, vy[i], ry[i])
+        xi -= (xi >= halfLx) * Lx; xi += (xi < -halfLx) * Lx
+        yi -= (yi >= halfLy) * Ly; yi += (yi < -halfLy) * Ly
+        rx[i] = xi; ry[i] = yi
+    end
+    return
+end
+
+function _det_drift2_unwrap_kernel!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
+                                    rxu::CuDeviceVector{T}, ryu::CuDeviceVector{T},
+                                    vx::CuDeviceVector{T}, vy::CuDeviceVector{T},
+                                    dt::T, Lx::T, Ly::T, halfLx::T, halfLy::T) where {T<:AbstractFloat}
+    i = (blockIdx().x-1)*blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    @inbounds begin
+        dpx = dt * vx[i]
+        dpy = dt * vy[i]
+        rxu[i] += dpx
+        ryu[i] += dpy
+        xi = rx[i] + dpx
+        yi = ry[i] + dpy
+        xi -= (xi >= halfLx) * Lx; xi += (xi < -halfLx) * Lx
+        yi -= (yi >= halfLy) * Ly; yi += (yi < -halfLy) * Ly
+        rx[i] = xi; ry[i] = yi
+    end
+    return
+end
+
+function _det_drift3_kernel!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
+                             vx::CuDeviceVector{T}, vy::CuDeviceVector{T}, vz::CuDeviceVector{T},
+                             dt::T, Lx::T, Ly::T, Lz::T,
+                             halfLx::T, halfLy::T, halfLz::T) where {T<:AbstractFloat}
+    i = (blockIdx().x-1)*blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    @inbounds begin
+        xi = muladd(dt, vx[i], rx[i])
+        yi = muladd(dt, vy[i], ry[i])
+        zi = muladd(dt, vz[i], rz[i])
+        xi -= (xi >= halfLx) * Lx; xi += (xi < -halfLx) * Lx
+        yi -= (yi >= halfLy) * Ly; yi += (yi < -halfLy) * Ly
+        zi -= (zi >= halfLz) * Lz; zi += (zi < -halfLz) * Lz
+        rx[i] = xi; ry[i] = yi; rz[i] = zi
+    end
+    return
+end
+
+function _det_drift3_unwrap_kernel!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
+                                    rxu::CuDeviceVector{T}, ryu::CuDeviceVector{T}, rzu::CuDeviceVector{T},
+                                    vx::CuDeviceVector{T}, vy::CuDeviceVector{T}, vz::CuDeviceVector{T},
+                                    dt::T, Lx::T, Ly::T, Lz::T,
+                                    halfLx::T, halfLy::T, halfLz::T) where {T<:AbstractFloat}
+    i = (blockIdx().x-1)*blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    @inbounds begin
+        dpx = dt * vx[i]
+        dpy = dt * vy[i]
+        dpz = dt * vz[i]
+        rxu[i] += dpx
+        ryu[i] += dpy
+        rzu[i] += dpz
+        xi = rx[i] + dpx
+        yi = ry[i] + dpy
+        zi = rz[i] + dpz
+        xi -= (xi >= halfLx) * Lx; xi += (xi < -halfLx) * Lx
+        yi -= (yi >= halfLy) * Ly; yi += (yi < -halfLy) * Ly
+        zi -= (zi >= halfLz) * Lz; zi += (zi < -halfLz) * Lz
+        rx[i] = xi; ry[i] = yi; rz[i] = zi
+    end
+    return
+end
+
 """
     _deterministic_drift_positions!(st, dt)
 
-Advance positions by one full deterministic drift under periodic boundaries.
-Implemented through the existing BAOAB A-kernel using `2dt` so the effective
-drift is exactly `dt`.
+Advance positions by one full deterministic drift under periodic boundaries,
+maintaining the unwrapped coordinates when they are enabled.
 """
 function _deterministic_drift_positions!(st::SimulationState{T}, dt::T) where {T<:AbstractFloat}
-    drift_dt = T(2) * dt
+    N = length(st.rx)
+    N == 0 && return nothing
+    threads = min(256, N)
+    blocks = cld(N, threads)
     if _is_3d(st)
-        LangevinIntegrators.baoab_A_3d!(st.rx, st.ry, st.rz,
-                                        st.vx, st.vy, st.vz,
-                                        drift_dt, st.box3::Definitions.Box3;
-                                        unwrapped_x=st.rx_unwrap,
-                                        unwrapped_y=st.ry_unwrap,
-                                        unwrapped_z=st.rz_unwrap)
+        Lx, Ly, Lz = st.box3::Definitions.Box3{T}
+        halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly; halfLz = T(0.5)*Lz
+        rz = st.rz::CuArray{T,1}
+        vz = st.vz::CuArray{T,1}
+        if st.rx_unwrap === nothing
+            k = CUDA.@cuda launch=false _det_drift3_kernel!(st.rx, st.ry, rz,
+                                                            st.vx, st.vy, vz,
+                                                            dt, Lx, Ly, Lz, halfLx, halfLy, halfLz)
+            k(st.rx, st.ry, rz, st.vx, st.vy, vz,
+              dt, Lx, Ly, Lz, halfLx, halfLy, halfLz; threads, blocks)
+        else
+            rxu = st.rx_unwrap::CuArray{T,1}
+            ryu = st.ry_unwrap::CuArray{T,1}
+            rzu = st.rz_unwrap::CuArray{T,1}
+            k = CUDA.@cuda launch=false _det_drift3_unwrap_kernel!(st.rx, st.ry, rz,
+                                                                   rxu, ryu, rzu,
+                                                                   st.vx, st.vy, vz,
+                                                                   dt, Lx, Ly, Lz, halfLx, halfLy, halfLz)
+            k(st.rx, st.ry, rz, rxu, ryu, rzu, st.vx, st.vy, vz,
+              dt, Lx, Ly, Lz, halfLx, halfLy, halfLz; threads, blocks)
+        end
     else
-        LangevinIntegrators.baoab_A_2d!(st.rx, st.ry,
-                                        st.vx, st.vy,
-                                        drift_dt, st.box2::Definitions.Box2;
-                                        unwrapped_x=st.rx_unwrap,
-                                        unwrapped_y=st.ry_unwrap)
+        Lx, Ly = st.box2::Definitions.Box2{T}
+        halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly
+        if st.rx_unwrap === nothing
+            k = CUDA.@cuda launch=false _det_drift2_kernel!(st.rx, st.ry, st.vx, st.vy,
+                                                            dt, Lx, Ly, halfLx, halfLy)
+            k(st.rx, st.ry, st.vx, st.vy, dt, Lx, Ly, halfLx, halfLy; threads, blocks)
+        else
+            rxu = st.rx_unwrap::CuArray{T,1}
+            ryu = st.ry_unwrap::CuArray{T,1}
+            k = CUDA.@cuda launch=false _det_drift2_unwrap_kernel!(st.rx, st.ry, rxu, ryu,
+                                                                   st.vx, st.vy,
+                                                                   dt, Lx, Ly, halfLx, halfLy)
+            k(st.rx, st.ry, rxu, ryu, st.vx, st.vy, dt, Lx, Ly, halfLx, halfLy; threads, blocks)
+        end
     end
     return nothing
 end

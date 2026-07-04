@@ -48,6 +48,8 @@
     @test Array(st_nve.ry) ≈ Array(st_vv.ry) atol=1e-12 rtol=1e-12
     @test Array(st_nve.vx) ≈ Array(st_vv.vx) atol=1e-12 rtol=1e-12
     @test Array(st_nve.vy) ≈ Array(st_vv.vy) atol=1e-12 rtol=1e-12
+    # NVE maintains `Ekin` lazily; it is refreshed at sampling time.
+    SimulationCore._refresh_kinetic_buffer!(st_nve)
     @test Array(st_nve.Ekin) ≈ Array(st_vv.Ekin) atol=1e-12 rtol=1e-12
     @test Array(st_nve.Epot) ≈ Array(st_vv.Epot) atol=1e-12 rtol=1e-12
     @test state_allfinite(st_nve)

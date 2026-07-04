@@ -10,11 +10,10 @@ function _wca2_csr_kernel_pairs!(
     N = length(rx); if i > N; return; end
     xi = rx[i]; yi = ry[i]
     accx = zero(T); accy = zero(T); eacc = zero(T)
-    base  = _csr_base(i, cap)
     nlist = counts[i]
     ti = typeid[i]
     @inbounds for t in 0:Int(nlist-1)
-        j = neighbors_flat[base + t + 1]
+        j = neighbors_flat[_ell_index(i, t, N)]
         dx = mic_fast(xi - rx[j], halfLx, Lx)
         dy = mic_fast(yi - ry[j], halfLy, Ly)
         r2 = muladd(dx, dx, dy*dy)
@@ -51,11 +50,10 @@ function _wca2_csr_kernel_pairs_virial!(
     xi = rx[i]; yi = ry[i]
     accx = zero(T); accy = zero(T); eacc = zero(T)
     vxx = zero(T); vyy = zero(T); vxy = zero(T)
-    base  = _csr_base(i, cap)
     nlist = counts[i]
     ti = typeid[i]
     @inbounds for t in 0:Int(nlist-1)
-        j = neighbors_flat[base + t + 1]
+        j = neighbors_flat[_ell_index(i, t, N)]
         dx = mic_fast(xi - rx[j], halfLx, Lx)
         dy = mic_fast(yi - ry[j], halfLy, Ly)
         r2 = muladd(dx, dx, dy*dy)
@@ -96,11 +94,10 @@ function _wca3_csr_kernel_pairs!(
     N = length(rx); if i > N; return; end
     xi = rx[i]; yi = ry[i]; zi = rz[i]
     accx = zero(T); accy = zero(T); accz = zero(T); eacc = zero(T)
-    base  = _csr_base(i, cap)
     nlist = counts[i]
     ti = typeid[i]
     @inbounds for t in 0:Int(nlist-1)
-        j = neighbors_flat[base + t + 1]
+        j = neighbors_flat[_ell_index(i, t, N)]
         dx = mic_fast(xi - rx[j], halfLx, Lx)
         dy = mic_fast(yi - ry[j], halfLy, Ly)
         dz = mic_fast(zi - rz[j], halfLz, Lz)
@@ -139,11 +136,10 @@ function _wca3_csr_kernel_pairs_virial!(
     xi = rx[i]; yi = ry[i]; zi = rz[i]
     accx = zero(T); accy = zero(T); accz = zero(T); eacc = zero(T)
     vxx = zero(T); vyy = zero(T); vzz = zero(T); vxy = zero(T); vxz = zero(T); vyz = zero(T)
-    base  = _csr_base(i, cap)
     nlist = counts[i]
     ti = typeid[i]
     @inbounds for t in 0:Int(nlist-1)
-        j = neighbors_flat[base + t + 1]
+        j = neighbors_flat[_ell_index(i, t, N)]
         dx = mic_fast(xi - rx[j], halfLx, Lx)
         dy = mic_fast(yi - ry[j], halfLy, Ly)
         dz = mic_fast(zi - rz[j], halfLz, Lz)
@@ -189,11 +185,10 @@ function _wca2_csr_noE_kernel_pairs!(
     N = length(rx); if i > N; return; end
     xi = rx[i]; yi = ry[i]
     accx = zero(T); accy = zero(T)
-    base  = _csr_base(i, cap)
     nlist = counts[i]
     ti = typeid[i]
     @inbounds for t in 0:Int(nlist-1)
-        j = neighbors_flat[base + t + 1]
+        j = neighbors_flat[_ell_index(i, t, N)]
         dx = mic_fast(xi - rx[j], halfLx, Lx)
         dy = mic_fast(yi - ry[j], halfLy, Ly)
         r2 = muladd(dx, dx, dy*dy)
@@ -227,11 +222,10 @@ function _wca3_csr_noE_kernel_pairs!(
     N = length(rx); if i > N; return; end
     xi = rx[i]; yi = ry[i]; zi = rz[i]
     accx = zero(T); accy = zero(T); accz = zero(T)
-    base  = _csr_base(i, cap)
     nlist = counts[i]
     ti = typeid[i]
     @inbounds for t in 0:Int(nlist-1)
-        j = neighbors_flat[base + t + 1]
+        j = neighbors_flat[_ell_index(i, t, N)]
         dx = mic_fast(xi - rx[j], halfLx, Lx)
         dy = mic_fast(yi - ry[j], halfLy, Ly)
         dz = mic_fast(zi - rz[j], halfLz, Lz)
@@ -269,12 +263,11 @@ function _wca2_csr_kernel_pairs_excl!(
     ii = Int32(i)
     xi = rx[i]; yi = ry[i]
     accx = zero(T); accy = zero(T); eacc = zero(T)
-    base = _csr_base(i, cap)
     nlist = counts[i]
     bbase, bnb, b1, b2 = _bond_cache(ii, bindex, bflat, bcounts)
     ti = typeid[i]
     @inbounds for t in 0:Int(nlist - 1)
-        j = neighbors_flat[base + t + 1]
+        j = neighbors_flat[_ell_index(i, t, N)]
         _is_bonded_cached(j, bbase, bnb, b1, b2, bflat) && continue
         dx = mic_fast(xi - rx[j], halfLx, Lx)
         dy = mic_fast(yi - ry[j], halfLy, Ly)
@@ -314,12 +307,11 @@ function _wca2_csr_kernel_pairs_excl_virial!(
     xi = rx[i]; yi = ry[i]
     accx = zero(T); accy = zero(T); eacc = zero(T)
     vxx = zero(T); vyy = zero(T); vxy = zero(T)
-    base = _csr_base(i, cap)
     nlist = counts[i]
     bbase, bnb, b1, b2 = _bond_cache(ii, bindex, bflat, bcounts)
     ti = typeid[i]
     @inbounds for t in 0:Int(nlist - 1)
-        j = neighbors_flat[base + t + 1]
+        j = neighbors_flat[_ell_index(i, t, N)]
         _is_bonded_cached(j, bbase, bnb, b1, b2, bflat) && continue
         dx = mic_fast(xi - rx[j], halfLx, Lx)
         dy = mic_fast(yi - ry[j], halfLy, Ly)
@@ -363,12 +355,11 @@ function _wca3_csr_kernel_pairs_excl!(
     ii = Int32(i)
     xi = rx[i]; yi = ry[i]; zi = rz[i]
     accx = zero(T); accy = zero(T); accz = zero(T); eacc = zero(T)
-    base = _csr_base(i, cap)
     nlist = counts[i]
     bbase, bnb, b1, b2 = _bond_cache(ii, bindex, bflat, bcounts)
     ti = typeid[i]
     @inbounds for t in 0:Int(nlist - 1)
-        j = neighbors_flat[base + t + 1]
+        j = neighbors_flat[_ell_index(i, t, N)]
         _is_bonded_cached(j, bbase, bnb, b1, b2, bflat) && continue
         dx = mic_fast(xi - rx[j], halfLx, Lx)
         dy = mic_fast(yi - ry[j], halfLy, Ly)
@@ -410,12 +401,11 @@ function _wca3_csr_kernel_pairs_excl_virial!(
     xi = rx[i]; yi = ry[i]; zi = rz[i]
     accx = zero(T); accy = zero(T); accz = zero(T); eacc = zero(T)
     vxx = zero(T); vyy = zero(T); vzz = zero(T); vxy = zero(T); vxz = zero(T); vyz = zero(T)
-    base = _csr_base(i, cap)
     nlist = counts[i]
     bbase, bnb, b1, b2 = _bond_cache(ii, bindex, bflat, bcounts)
     ti = typeid[i]
     @inbounds for t in 0:Int(nlist - 1)
-        j = neighbors_flat[base + t + 1]
+        j = neighbors_flat[_ell_index(i, t, N)]
         _is_bonded_cached(j, bbase, bnb, b1, b2, bflat) && continue
         dx = mic_fast(xi - rx[j], halfLx, Lx)
         dy = mic_fast(yi - ry[j], halfLy, Ly)
@@ -464,12 +454,11 @@ function _wca2_csr_noE_kernel_pairs_excl!(
     ii = Int32(i)
     xi = rx[i]; yi = ry[i]
     accx = zero(T); accy = zero(T)
-    base = _csr_base(i, cap)
     nlist = counts[i]
     bbase, bnb, b1, b2 = _bond_cache(ii, bindex, bflat, bcounts)
     ti = typeid[i]
     @inbounds for t in 0:Int(nlist - 1)
-        j = neighbors_flat[base + t + 1]
+        j = neighbors_flat[_ell_index(i, t, N)]
         _is_bonded_cached(j, bbase, bnb, b1, b2, bflat) && continue
         dx = mic_fast(xi - rx[j], halfLx, Lx)
         dy = mic_fast(yi - ry[j], halfLy, Ly)
@@ -506,12 +495,11 @@ function _wca3_csr_noE_kernel_pairs_excl!(
     ii = Int32(i)
     xi = rx[i]; yi = ry[i]; zi = rz[i]
     accx = zero(T); accy = zero(T); accz = zero(T)
-    base = _csr_base(i, cap)
     nlist = counts[i]
     bbase, bnb, b1, b2 = _bond_cache(ii, bindex, bflat, bcounts)
     ti = typeid[i]
     @inbounds for t in 0:Int(nlist - 1)
-        j = neighbors_flat[base + t + 1]
+        j = neighbors_flat[_ell_index(i, t, N)]
         _is_bonded_cached(j, bbase, bnb, b1, b2, bflat) && continue
         dx = mic_fast(xi - rx[j], halfLx, Lx)
         dy = mic_fast(yi - ry[j], halfLy, Ly)
