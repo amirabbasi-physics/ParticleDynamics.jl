@@ -129,6 +129,10 @@ mutable struct SimulationState{T<:AbstractFloat}
     # steps, so reordering at every rebuild would waste the gather cost.
     last_reorder_step::Int
     reorder_interval::Int
+    # External potential provider (opt-in): when set (non-nothing), it replaces
+    # every internal force term in `evaluate_forces_into_f!`. Typed `Any` on
+    # purpose — it is dispatched once per force evaluation, never in kernels.
+    external_potential::Any
 end
 
 @inline backend(st::SimulationState) = storage_backend(st.rx)

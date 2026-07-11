@@ -52,3 +52,11 @@ cuda-memcheck.log
 !/examples/3D_polymer_melt.jl
 !/examples/SingleT_2D_MD_CSVR.jl
 !/examples/TwoT_LJ2D_LD.jl
+!/examples/3D_KG_melt_showcase.jl
+!/examples/mace/
+!/examples/mace/**
+/examples/mace/Manifest.toml
+/examples/mace/validation/*.npz
+/examples/mace/validation/*.csv
+/examples/mace/validation/*.gsd
+/examples/mace/validation/*.txt

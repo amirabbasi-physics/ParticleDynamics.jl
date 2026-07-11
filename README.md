@@ -126,6 +126,35 @@ control over GPU buffers and stepping:
 Use that surface when you need custom orchestration, kernel debugging, or very
 fine-grained control that the workflow facade intentionally hides.
 
+## Machine-learned potentials (MACE)
+
+The engine can route all force evaluation through an external provider — the
+seam that connects it to machine-learned interatomic potentials. A provider
+implements one method and attaches to a state:
+
+```julia
+struct MyPotential <: AbstractExternalPotential end
+ParticleDynamics.external_forces!(pot::MyPotential, st, compute_energy) = ...
+
+attach_external_potential!(st, MyPotential())
+step!(st, nve(st; dt), dt)   # all integrators now use the provider
+```
+
+[`examples/mace/`](examples/mace) ships a working `MACEPotential` provider
+that drives **MACE foundation models** (MACE-MP-0 for materials, MACE-OFF
+for organic systems; mace-torch via PythonCall) with the engine's native
+integrators — enabling simulations of molecular systems (silicon, liquid
+water, organic molecules) with no classical force-field terms. Forces are
+validated against the ASE reference implementation to ~1e-14 eV/Å, with NVE
+trajectory equivalence to ASE velocity Verlet at the 1e-5 Å level over
+hundreds of steps. See [`examples/mace/README.md`](examples/mace/README.md)
+for environment setup, the validation suite, and a liquid-water structure
+showcase.
+
+Limitations: external potentials replace *all* internal force terms, require
+a bond-free state and `spatial_reorder=false`, and do not provide a virial
+(pressure observables are unsupported while attached).
+
 ## Examples
 
 Normal examples in [`examples/`](examples) use the high-level workflow API.
@@ -166,6 +195,9 @@ julia --project -e 'using Pkg; Pkg.instantiate(); Pkg.test()'
 - CUDA is the main supported backend.
 - Angles, dihedrals, impropers, electrostatics, and broader force-field terms
   are future work unless explicitly implemented in the current low-level engine.
+  For molecular systems, the machine-learned potential path (see
+  "Machine-learned potentials" above) sidesteps these terms entirely: the
+  MLIP carries the intramolecular chemistry.
 - `ForceField` is a future-compatible container, but compiled support is still
   limited to the force families already backed by the existing kernels.
 - Bitwise-identical trajectories are not guaranteed across GPUs or toolchains;
