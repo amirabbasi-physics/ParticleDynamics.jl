@@ -246,7 +246,7 @@ function _writer_diameter(sim, writer::GSDWriter)
     elseif haskey(sim.system.metadata, :diameter)
         return sim.system.metadata[:diameter]
     else
-        return one(eltype(sim.state.rx))
+        return nothing
     end
 end
 
