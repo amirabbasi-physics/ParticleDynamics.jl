@@ -322,7 +322,7 @@ Write one frame to an already-open GSD file (HOOMD schema).
 
 Usage (2D):
     h = Writers.gsd_open("traj.gsd")
-    Writers.write_gsd_frame!(h, state; diameter=1.0, types_names=["A"], step=state.step)
+    Writers.write_gsd_frame!(h, state; types_names=["A"], step=state.step)
     Writers.gsd_close(h)
 
 Usage (3D) is identical; z-components are written when present. Set
@@ -335,8 +335,46 @@ using the package's native component order:
 
 Virial buffers are refreshed by force evaluations with `compute_energy=true`;
 the writer dumps whatever is currently stored in `st.virial_tensor`.
+
+By default, particle masses are copied from the simulation state and particle
+diameters are inferred from recognized element symbols in `types_names` using
+covalent diameters. Unknown type names use diameter 1.0. A scalar, per-type
+vector, or per-particle vector can be supplied for `diameter`, `mass`, and
+`charge`; `charge=nothing` omits the charge chunk.
 """
-function write_gsd_frame!(h, st; diameter=1.0, types_names=["A"], step::Int=0,
+const _ELEMENT_COVALENT_DIAMETER = Dict{String,Float64}(
+    "H" => 0.62, "He" => 0.56, "Li" => 2.56, "Be" => 1.92,
+    "B" => 1.68, "C" => 1.52, "N" => 1.42, "O" => 1.32,
+    "F" => 1.14, "Ne" => 1.16, "Na" => 3.32, "Mg" => 2.82,
+    "Al" => 2.42, "Si" => 2.22, "P" => 2.14, "S" => 2.10,
+    "Cl" => 2.04, "Ar" => 2.12, "K" => 4.06, "Ca" => 3.52,
+    "Fe" => 2.64, "Ni" => 2.48, "Cu" => 2.64, "Zn" => 2.44,
+    "Br" => 2.40, "Ag" => 2.90, "I" => 2.78, "Au" => 2.72,
+    "Hg" => 2.64, "Pb" => 2.92,
+)
+
+function _particle_property_values(value, typeid::Vector{Int32}, types_names,
+                                   N::Int, ::Type{T}; default_by_type=nothing) where {T}
+    if value === nothing
+        default_by_type === nothing && return nothing
+        per_type = T[get(default_by_type, String(name), 1.0) for name in types_names]
+        return T[per_type[id] for id in typeid]
+    elseif value isa Number
+        return fill(T(value), N)
+    elseif value isa AbstractVector
+        vals = T.(collect(value))
+        if length(vals) == N
+            return vals
+        elseif length(vals) == length(types_names)
+            return T[vals[id] for id in typeid]
+        end
+        throw(ArgumentError("property vector length $(length(vals)) must equal N=$N or number of types=$(length(types_names))"))
+    end
+    throw(ArgumentError("unsupported particle property type $(typeof(value))"))
+end
+
+function write_gsd_frame!(h, st; diameter=nothing, mass=nothing, charge=nothing,
+                          types_names=["A"], step::Int=0,
                           write_forces::Bool=false, write_unwrapped::Bool=false,
                           write_virial::Bool=false, sync_on_write::Bool=false)
     T = eltype(st.rx)
@@ -394,16 +432,21 @@ function write_gsd_frame!(h, st; diameter=1.0, types_names=["A"], step::Int=0,
     GSDFiles.write_particles_N!(h, N)
     GSDFiles.write_particles_types!(h, Vector{String}(types_names))
     GSDFiles.write_particles_typeid!(h, tid_0based)
-    local diam::Vector{T}
-    if diameter isa Number
-        diam = fill(T(diameter), N)
-    elseif diameter isa AbstractVector
-        @assert length(diameter) == N "diameter vector length $(length(diameter)) must equal N=$(N)"
-        diam = T.(collect(diameter))
-    else
-        error("Unsupported diameter type: $(typeof(diameter))")
-    end
+    diam = _particle_property_values(diameter, tid_host, types_names, N, T;
+                                     default_by_type=_ELEMENT_COVALENT_DIAMETER)
     GSDFiles.write_particles_diameter!(h, diam)
+    if mass === nothing
+        masses = if hasproperty(st, :mass_particle) && st.mass_particle !== nothing
+            T.(Array(u(st.mass_particle)))
+        else
+            fill(T(st.mass), N)
+        end
+    else
+        masses = _particle_property_values(mass, tid_host, types_names, N, T)
+    end
+    GSDFiles.write_particles_mass!(h, masses)
+    charges = _particle_property_values(charge, tid_host, types_names, N, T)
+    charges === nothing || GSDFiles.write_particles_charge!(h, charges)
     GSDFiles.write_particles_position!(h, T.(posM))
     if write_velocities
         GSDFiles.write_particles_velocity!(h, T.(velM))

@@ -37,6 +37,28 @@ using GSDFiles
     end
 
     mktempdir() do tmp
+        path = joinpath(tmp, "chemical_properties.gsd")
+        st = build_tiny3d(
+            N=8, T=Float32, box=(20f0, 20f0, 20f0), cutoff=2.5f0,
+            skin=0.3f0, cap=Int32(32), neigh_interval=5,
+            use_neighborlist=true, nonbonded=:wca, gamma=1f0, temperature=0.2f0,
+        )
+        st.typeid .= CuArray(Int32[1, 2, 2, 1, 2, 2, 1, 2])
+
+        ParticleDynamics.gsd_open(path) do h
+            ParticleDynamics.write_gsd_frame!(h, st;
+                types_names=["O", "H"], charge=Float32[-0.8, 0.4], step=1)
+        end
+
+        frame = ParticleDynamics.read_gsd_frame!(path)
+        @test frame.particle_properties[:diameter] ≈
+              Float32[1.32, 0.62, 0.62, 1.32, 0.62, 0.62, 1.32, 0.62]
+        @test frame.particle_properties[:mass] ≈ fill(Float32(st.mass), 8)
+        @test frame.particle_properties[:charge] ≈
+              Float32[-0.8, 0.4, 0.4, -0.8, 0.4, 0.4, -0.8, 0.4]
+    end
+
+    mktempdir() do tmp
         path = joinpath(tmp, "tiny_traj_append.gsd")
 
         st = build_tiny2d(
