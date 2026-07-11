@@ -1,9 +1,10 @@
 # Kremer-Grest polymer melt showcase (classical GPU path).
 #
 # 100 chains x 32 beads at bead density 0.85 (LJ units): random-walk chains,
-# soft-repulsive push-off, then FENE (k=30, R0=1.5) + WCA production with
-# BAOAB Langevin at T=1. Reports chain conformation statistics against the
-# Kremer-Grest reference values (J. Chem. Phys. 92, 5057 (1990)):
+# soft-repulsive push-off, then harmonic bonds (k=800, r0=0.97 — the standard
+# harmonic variant of the Kremer-Grest model) + WCA production with BAOAB
+# Langevin at T=1. Reports chain conformation statistics against the KG
+# reference values (J. Chem. Phys. 92, 5057 (1990)):
 # <l> ~ 0.97, Ree^2/Rg^2 ~ 6.3, C_inf = Ree^2/((N-1) l^2) ~ 1.7-1.8.
 #
 # Outputs in examples/kg_out/: kg_observables.csv, kg_bonds.csv, kg_melt.gsd
@@ -27,7 +28,7 @@ const BOND = 0.97
 const TEMP = 1.0
 const GAMMA = 1.0
 const DT_PUSH = 1.0e-4
-const DT = 0.005
+const DT = 0.004                    # bond frequency sqrt(2k/m)=40 -> w*dt=0.16
 const PUSH_STEPS = 20_000
 const EQ_STEPS = 200_000
 const PROD_STEPS = 500_000
@@ -55,24 +56,62 @@ bonds = Tuple{Int32,Int32}[]
 for c in 0:NCH-1, b in 1:NB-1
     push!(bonds, (Int32(c * NB + b), Int32(c * NB + b + 1)))
 end
-fene = ParticleDynamics.fene_bond(k=30.0, r0=1.5)
+# The engine excludes nonbonded forces on bonded pairs and its FENE is the
+# bare attractive form, so canonical FENE+WCA bonds would collapse. Use the
+# standard harmonic-bond KG variant instead: k=800, r0=0.97 reproduces the
+# FENE+WCA bond stiffness (fluctuation width ~0.035 sigma).
+bond = ParticleDynamics.harmonic_bond(k=800.0, r0=BOND)
 
-build(kind; dt, unwrap=false) = build_simulation(;
+build(kind; dt, unwrap=false, srp=nothing) = build_simulation(;
     N=N, box=(L, L, L), cutoff=2.0^(1 / 6), skin=0.4, cap=Int32(96),
     neigh_interval=10, use_neighborlist=true, spatial_reorder=false,
     epsilon=1.0, sigma=1.0, gamma=GAMMA, temperature=TEMP,
-    bonds=bonds, bonding=fene, nonbonded=kind,
+    bonds=bonds, bonding=bond, nonbonded=kind, softrep_params=srp,
     mass=1.0, precision=:f64, dt=dt, unwrapped_positions=unwrap)
 
-# --- stage 1: soft-repulsive push-off (bounded potential removes overlaps) ---
-st = build(:softrep; dt=DT_PUSH)
+function max_bond_length()
+    hx = Array(st.rx); hy = Array(st.ry); hz = Array(st.rz)
+    m = 0.0
+    for (a, b) in bonds
+        m = max(m, sqrt(mimg(hx[a] - hx[b])^2 + mimg(hy[a] - hy[b])^2 + mimg(hz[a] - hz[b])^2))
+    end
+    return m
+end
+
+# damped run at fixed dt; a fresh spec per rung keeps the BAOAB coefficients
+# consistent with the timestep
+function damped_steps!(nsteps, dt; gamma=2.0)
+    sp = SimulationCore.baoab(st; gamma=gamma, temperature=TEMP, dt=dt)
+    for _ in 1:nsteps
+        SimulationCore.step!(st, sp, dt; compute_energy=false)
+    end
+end
+
+function min_pair_distance()
+    hx = Array(st.rx); hy = Array(st.ry); hz = Array(st.rz)
+    m = Inf
+    @inbounds for a in 1:N-1, b in a+1:N
+        d2 = mimg(hx[a] - hx[b])^2 + mimg(hy[a] - hy[b])^2 + mimg(hz[a] - hz[b])^2
+        d2 < m && (m = d2)
+    end
+    return sqrt(m)
+end
+
+# --- stage 1: soft-repulsive push-off (bounded potential removes overlaps).
+# Random-walk starts have deep core overlaps: ramp the soft-core strength so
+# every pair is pushed beyond the WCA-safe distance before switching. ---
+st = build(:softrep; dt=DT_PUSH, srp=ParticleDynamics.SoftRepulsiveParams(10.0, 1.0))
 copyto!(st.rx, rx); copyto!(st.ry, ry); copyto!(st.rz, rz)
 ParticleDynamics.sync_unwrapped!(st)
-spec = SimulationCore.baoab(st; gamma=2.0, temperature=TEMP, dt=DT_PUSH)
-for i in 1:PUSH_STEPS
-    SimulationCore.step!(st, spec, DT_PUSH; compute_energy=false)
+damped_steps!(5_000, 1.0e-5)
+for eps_push in (10.0, 50.0, 200.0)
+    st.softrep = ParticleDynamics.SoftRepulsiveParams(eps_push, 1.0)
+    damped_steps!(PUSH_STEPS, DT_PUSH)
+    @printf("push-off eps=%5.0f: min pair dist = %.3f, max bond = %.3f\n",
+            eps_push, min_pair_distance(), max_bond_length())
 end
-println("push-off done")
+mb = max_bond_length()
+mb < 1.4 || error("push-off left overstretched bonds (max $(mb)); aborting")
 
 # --- stage 2: WCA + FENE melt ---
 px = Array(st.rx); py = Array(st.ry); pz = Array(st.rz)
@@ -85,6 +124,17 @@ copyto!(st.vy, σv .* randn(rng, N) |> v -> v .- sum(v) / N)
 copyto!(st.vz, σv .* randn(rng, N) |> v -> v .- sum(v) / N)
 copyto!(st.typeid, Int32[mod(div(i - 1, NB), 6) + 1 for i in 1:N])
 
+# WCA switch-on: residual near-contacts produce huge forces, so start at a
+# very small timestep under strong friction and ramp both toward production
+for (nsteps, dtr, g) in ((10_000, 1.0e-5, 10.0), (10_000, 1.0e-4, 5.0),
+                         (10_000, 5.0e-4, 2.0), (10_000, 2.0e-3, 1.0))
+    damped_steps!(nsteps, dtr; gamma=g)
+end
+mb = max_bond_length()
+println("WCA warm-up done, max bond = ", round(mb, digits=3))
+mb < 1.4 || error("WCA warm-up left overstretched bonds (max $(mb)); aborting")
+ParticleDynamics.sync_unwrapped!(st)
+
 spec = SimulationCore.baoab(st; gamma=GAMMA, temperature=TEMP, dt=DT)
 t0 = time()
 for i in 1:EQ_STEPS
@@ -93,14 +143,24 @@ for i in 1:EQ_STEPS
 end
 
 # --- production with conformation + MSD sampling ---
-chain_stats(ux, uy, uz) = begin
+# Conformations from chain-walk reconstruction: accumulate minimum-image bond
+# vectors along each chain. Immune to box-straddling unwrap offsets.
+function chain_stats(hx, hy, hz)
     ree2 = 0.0; rg2 = 0.0
+    cxs = zeros(NB); cys = zeros(NB); czs = zeros(NB)
     for c in 0:NCH-1
-        i1 = c * NB + 1; i2 = (c + 1) * NB
-        ree2 += (ux[i2] - ux[i1])^2 + (uy[i2] - uy[i1])^2 + (uz[i2] - uz[i1])^2
-        cx = sum(@view ux[i1:i2]) / NB; cy = sum(@view uy[i1:i2]) / NB; cz = sum(@view uz[i1:i2]) / NB
-        for j in i1:i2
-            rg2 += ((ux[j] - cx)^2 + (uy[j] - cy)^2 + (uz[j] - cz)^2) / NB
+        i1 = c * NB + 1
+        cxs[1] = 0.0; cys[1] = 0.0; czs[1] = 0.0
+        for b in 2:NB
+            j = i1 + b - 1
+            cxs[b] = cxs[b-1] + mimg(hx[j] - hx[j-1])
+            cys[b] = cys[b-1] + mimg(hy[j] - hy[j-1])
+            czs[b] = czs[b-1] + mimg(hz[j] - hz[j-1])
+        end
+        ree2 += cxs[NB]^2 + cys[NB]^2 + czs[NB]^2
+        mx = sum(cxs) / NB; my = sum(cys) / NB; mz = sum(czs) / NB
+        for b in 1:NB
+            rg2 += ((cxs[b] - mx)^2 + (cys[b] - my)^2 + (czs[b] - mz)^2) / NB
         end
     end
     return ree2 / NCH, rg2 / NCH
@@ -116,7 +176,7 @@ for i in 1:PROD_STEPS
     SimulationCore.step!(st, spec, DT; compute_energy=false)
     if i % SAMPLE_EVERY == 0
         ux = Array(st.rx_unwrap); uy = Array(st.ry_unwrap); uz = Array(st.rz_unwrap)
-        ree2, rg2 = chain_stats(ux, uy, uz)
+        ree2, rg2 = chain_stats(Array(st.rx), Array(st.ry), Array(st.rz))
         global ree_acc += ree2; global rg_acc += rg2; global nsmp += 1
         g1 = sum(@. (ux - ux0)^2 + (uy - uy0)^2 + (uz - uz0)^2) / N
         g3 = 0.0
