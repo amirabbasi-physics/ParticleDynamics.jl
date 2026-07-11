@@ -96,7 +96,8 @@ function _compute_final_nonbonded3!(st::SimulationState{T}, compute_energy::Bool
 end
 
 @inline _nonbonded_exclusions(st::SimulationState) =
-    st.bonds === nothing ? NonBondedInteractions.NoExclusions() : NonBondedInteractions.BondExclusions(st.bonds)
+    (st.bonds === nothing || !st.exclude_bonded) ? NonBondedInteractions.NoExclusions() :
+                                                   NonBondedInteractions.BondExclusions(st.bonds)
 
 function _nonbonded_interaction(st::SimulationState{T}) where {T<:AbstractFloat}
     if st.nb_kind == NB_KIND_LJ

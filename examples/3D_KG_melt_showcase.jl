@@ -1,8 +1,8 @@
 # Kremer-Grest polymer melt showcase (classical GPU path).
 #
 # 100 chains x 32 beads at bead density 0.85 (LJ units): random-walk chains,
-# soft-repulsive push-off, then harmonic bonds (k=800, r0=0.97 — the standard
-# harmonic variant of the Kremer-Grest model) + WCA production with BAOAB
+# soft-repulsive push-off, then canonical FENE (k=30, R0=1.5) + WCA production
+# (WCA acts on bonded pairs too, via exclude_bonded_pairs=false) with BAOAB
 # Langevin at T=1. Reports chain conformation statistics against the KG
 # reference values (J. Chem. Phys. 92, 5057 (1990)):
 # <l> ~ 0.97, Ree^2/Rg^2 ~ 6.3, C_inf = Ree^2/((N-1) l^2) ~ 1.7-1.8.
@@ -28,7 +28,7 @@ const BOND = 0.97
 const TEMP = 1.0
 const GAMMA = 1.0
 const DT_PUSH = 1.0e-4
-const DT = 0.004                    # bond frequency sqrt(2k/m)=40 -> w*dt=0.16
+const DT = 0.005                    # canonical KG timestep (FENE+WCA bonds)
 const PUSH_STEPS = 20_000
 const EQ_STEPS = 200_000
 const PROD_STEPS = 500_000
@@ -56,17 +56,18 @@ bonds = Tuple{Int32,Int32}[]
 for c in 0:NCH-1, b in 1:NB-1
     push!(bonds, (Int32(c * NB + b), Int32(c * NB + b + 1)))
 end
-# The engine excludes nonbonded forces on bonded pairs and its FENE is the
-# bare attractive form, so canonical FENE+WCA bonds would collapse. Use the
-# standard harmonic-bond KG variant instead: k=800, r0=0.97 reproduces the
-# FENE+WCA bond stiffness (fluctuation width ~0.035 sigma).
-bond = ParticleDynamics.harmonic_bond(k=800.0, r0=BOND)
+# Canonical Kremer-Grest bonds: bare FENE (k=30, R0=1.5) plus the WCA pair
+# potential acting on bonded pairs too — enabled by exclude_bonded_pairs=false
+# below. (With the default exclusions the bare FENE has no repulsive core and
+# bonds collapse.)
+bond = ParticleDynamics.fene_bond(k=30.0, r0=1.5)
 
 build(kind; dt, unwrap=false, srp=nothing) = build_simulation(;
     N=N, box=(L, L, L), cutoff=2.0^(1 / 6), skin=0.4, cap=Int32(96),
     neigh_interval=10, use_neighborlist=true, spatial_reorder=false,
     epsilon=1.0, sigma=1.0, gamma=GAMMA, temperature=TEMP,
     bonds=bonds, bonding=bond, nonbonded=kind, softrep_params=srp,
+    exclude_bonded_pairs=false,
     mass=1.0, precision=:f64, dt=dt, unwrapped_positions=unwrap)
 
 function max_bond_length()
@@ -104,14 +105,21 @@ st = build(:softrep; dt=DT_PUSH, srp=ParticleDynamics.SoftRepulsiveParams(10.0, 
 copyto!(st.rx, rx); copyto!(st.ry, ry); copyto!(st.rz, rz)
 ParticleDynamics.sync_unwrapped!(st)
 damped_steps!(5_000, 1.0e-5)
-for eps_push in (10.0, 50.0, 200.0)
-    st.softrep = ParticleDynamics.SoftRepulsiveParams(eps_push, 1.0)
-    damped_steps!(PUSH_STEPS, DT_PUSH)
-    @printf("push-off eps=%5.0f: min pair dist = %.3f, max bond = %.3f\n",
-            eps_push, min_pair_distance(), max_bond_length())
+# ramp strength AND range: inflating the soft core (sigma up to 1.15) drives
+# residual contacts beyond the WCA-safe distance before the switch
+for (eps_push, sig_push, dtp) in ((10.0, 1.0, 1.0e-4), (50.0, 1.05, 1.0e-4),
+                                  (200.0, 1.10, 1.0e-4), (500.0, 1.15, 5.0e-5))
+    st.softrep = ParticleDynamics.SoftRepulsiveParams(eps_push, sig_push)
+    damped_steps!(PUSH_STEPS, dtp)
+    @printf("push-off eps=%5.0f sig=%.2f: min pair dist = %.3f, max bond = %.3f\n",
+            eps_push, sig_push, min_pair_distance(), max_bond_length())
 end
 mb = max_bond_length()
 mb < 1.4 || error("push-off left overstretched bonds (max $(mb)); aborting")
+# WCA pair energy at r=0.80 (~44 eps) is still containable by FENE (~69 eps
+# to R0); anything closer can snap bonds on switch-on
+mpd = min_pair_distance()
+mpd >= 0.80 || error("push-off left deep contacts (min pair $(mpd) < 0.80); aborting")
 
 # --- stage 2: WCA + FENE melt ---
 px = Array(st.rx); py = Array(st.ry); pz = Array(st.rz)
@@ -167,7 +175,10 @@ function chain_stats(hx, hy, hz)
 end
 
 h = gsd_open(joinpath(outdir, "kg_melt.gsd"))
-types6 = ["A", "B", "C", "D", "E", "F"]
+# type names must not collide with element symbols ("B", "C", "F", ...):
+# visualizers assign element radii to matching names. Uniform diameter=1 (LJ
+# bead size) is written explicitly for the same reason.
+types6 = ["bead1", "bead2", "bead3", "bead4", "bead5", "bead6"]
 ux0 = Array(st.rx_unwrap); uy0 = Array(st.ry_unwrap); uz0 = Array(st.rz_unwrap)
 obs = open(joinpath(outdir, "kg_observables.csv"), "w")
 println(obs, "t_LJ,Ree2,Rg2,g1_bead_MSD,g3_com_MSD")
@@ -188,7 +199,7 @@ for i in 1:PROD_STEPS
         end
         println(obs, i * DT, ",", ree2, ",", rg2, ",", g1, ",", g3 / NCH)
     end
-    i % FRAME_EVERY == 0 && write_gsd_frame!(h, st; types_names=types6, step=i)
+    i % FRAME_EVERY == 0 && write_gsd_frame!(h, st; types_names=types6, diameter=1.0, step=i)
     i % 100_000 == 0 && (@printf("prod %7d/%d (%.0f steps/s)\n", i, PROD_STEPS, i / (time() - t0)); flush(stdout))
 end
 close(obs); gsd_close(h)
