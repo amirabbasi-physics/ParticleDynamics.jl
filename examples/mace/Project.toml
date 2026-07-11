@@ -1,0 +1,5 @@
+[deps]
+CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
+GSDFiles = "64a8acd3-9415-46af-9ee4-f25c25bec2f1"
+ParticleDynamics = "12ca460a-85bb-48c4-9960-620229cee2bc"
+PythonCall = "6099a3de-0909-46bc-b1f4-468b9a2dfc0d"

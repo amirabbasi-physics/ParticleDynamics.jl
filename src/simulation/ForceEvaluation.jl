@@ -184,6 +184,10 @@ active force slot (`f`).
 function evaluate_forces_into_f!(st::SimulationState{T},
                                  compute_energy::Bool;
                                  freeze_spring::Bool=false) where {T<:AbstractFloat}
+    if st.external_potential !== nothing
+        external_forces!(st.external_potential, st, compute_energy)
+        return nothing
+    end
     if _is_3d(st)
         _compute_final_nonbonded3!(st, compute_energy)
         _finalize_force_eval3!(st, compute_energy, freeze_spring)

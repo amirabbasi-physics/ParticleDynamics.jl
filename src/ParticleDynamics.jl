@@ -84,6 +84,7 @@ using .SimulationCore: SimulationState, build_simulation, step!, step_graph!, sy
 using .SimulationCore: collect_step_observables, reset_bath_exchange_accumulators!
 using .SimulationCore: IntegratorSpec, VVSpec, BAOABSpec, BAOASpec, GSMSpec, BrownianSpec, EMSpec, NVESpec, NHCParams, NHCSpec, CSVRParams, CSVRSpec
 using .SimulationCore: velocityverlet, baoab, baoa, gsm, eulerheun, eulermaruyama, nve, nosehooverchain, csvr
+using .SimulationCore: AbstractExternalPotential, external_forces!, attach_external_potential!, detach_external_potential!
 using .Writers: InMemoryLogger, CSVWriter, XYZWriter,
     write_xyz!, write_observables_csv!, gsd_open, gsd_close, write_gsd_frame!, read_gsd_frame!
 using .BondedForces: BondList, build_bondlist
@@ -124,6 +125,7 @@ export Filters, BondedForces, ParticleGroups, Thermostats, SimulationCore,
        AbstractIntegratorSpec,
        IntegratorSpec, VVSpec, BAOABSpec, BAOASpec, GSMSpec, BrownianSpec, EMSpec, NVESpec, NHCParams, NHCSpec, CSVRParams, CSVRSpec,
        velocityverlet, baoab, baoa, gsm, eulerheun, eulermaruyama, nve, nosehooverchain, csvr,
+       AbstractExternalPotential, external_forces!, attach_external_potential!, detach_external_potential!,
        # Writers
        InMemoryLogger, CSVWriter, XYZWriter,
        write_xyz!, write_observables_csv!, gsd_open, gsd_close, write_gsd_frame!, read_gsd_frame!,

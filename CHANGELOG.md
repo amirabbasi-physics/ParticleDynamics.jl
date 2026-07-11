@@ -4,6 +4,30 @@ All notable user-visible changes to this project will be documented in this file
 
 ## Unreleased
 
+### Features
+
+- GSD output now writes particle masses automatically and infers covalent
+  diameters for recognized chemical element type names (for example `"O"`
+  and `"H"`). Scalar, per-type, and per-particle overrides are supported for
+  diameter, mass, and charge; unknown type names retain the 1.0 fallback.
+- **External potential providers (MLIP hook).** New opt-in seam that routes
+  all force evaluation through a user-supplied provider:
+  `AbstractExternalPotential`, `external_forces!`,
+  `attach_external_potential!`, `detach_external_potential!` (exported from
+  `SimulationCore` and re-exported at top level). While attached, the
+  provider replaces every internal force term (nonbonded and bonded) for all
+  integrators — NVE, NHC, CSVR, and the stochastic families — since they all
+  evaluate forces through `evaluate_forces_into_f!`. Requires a bond-free
+  state and `spatial_reorder=false`. External potentials do not provide a
+  virial, so pressure observables are unsupported while attached.
+- **MACE foundation-model support** (`examples/mace/`): a `MACEPotential`
+  provider drives MACE-MP-0 / MACE-OFF potentials (mace-torch via
+  PythonCall) with the engine's native integrators. Validated against the
+  ASE reference implementation: forces match to ~1e-14 eV/Å (Si216), and a
+  199-step NVE trajectory matches ASE velocity Verlet to 4.3e-5 Å. See
+  `examples/mace/README.md` for setup, validation results, and a liquid-water
+  (MACE-OFF) structure showcase.
+
 ### Performance
 
 - NVE half-kicks now run in the state's native precision and no longer

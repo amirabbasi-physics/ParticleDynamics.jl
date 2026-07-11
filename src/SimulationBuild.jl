@@ -334,7 +334,8 @@ function build_simulation(;N::Int,
                          0, UInt8(0), nb_tag, srp,
                          FREEZE_NONE, -1, true, nothing, zero(T), nothing, nothing, nothing,
                          false, nothing, nothing, nothing,
-                         tag, -1, reorder_interval)
+                         tag, -1, reorder_interval,
+                         nothing)
 
     if D == 2
         st.box2 = (T(box[1]), T(box[2]))

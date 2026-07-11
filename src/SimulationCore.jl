@@ -40,6 +40,7 @@ export collect_step_observables
 export reset_bath_exchange_accumulators!
 export IntegratorSpec, VVSpec, BAOABSpec, BAOASpec, GSMSpec, BrownianSpec, EMSpec, NVESpec, NHCParams, NHCSpec, CSVRParams, CSVRSpec
 export velocityverlet, baoab, baoa, gsm, eulerheun, eulermaruyama, nve, nosehooverchain, csvr
+export AbstractExternalPotential, external_forces!, attach_external_potential!, detach_external_potential!
 
 include("SimulationState.jl")
 
@@ -292,6 +293,7 @@ include("SimulationBuild.jl")
 include("simulation/Virial.jl")
 include("simulation/EnergyAccumulation.jl")
 include("simulation/SteppingEngine.jl")
+include("simulation/ExternalPotential.jl")
 include("simulation/ForceEvaluation.jl")
 include("simulation/NeighborRebuild.jl")
 
