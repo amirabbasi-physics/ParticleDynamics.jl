@@ -133,6 +133,10 @@ mutable struct SimulationState{T<:AbstractFloat}
     # every internal force term in `evaluate_forces_into_f!`. Typed `Any` on
     # purpose — it is dispatched once per force evaluation, never in kernels.
     external_potential::Any
+    # When false, bonded pairs also feel the nonbonded potential (e.g. the
+    # canonical Kremer-Grest FENE+WCA bond). Default true: bonded pairs are
+    # excluded from nonbonded interactions.
+    exclude_bonded::Bool
 end
 
 @inline backend(st::SimulationState) = storage_backend(st.rx)

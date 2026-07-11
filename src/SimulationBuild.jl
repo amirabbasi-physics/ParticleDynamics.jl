@@ -164,7 +164,8 @@ function build_simulation(;N::Int,
                            precision::Symbol = :f32,
                            unwrapped_positions::Bool = false,
                            spatial_reorder::Bool = true,
-                           reorder_interval::Int = 500)
+                           reorder_interval::Int = 500,
+                           exclude_bonded_pairs::Bool = true)
 
     backend_impl = Backends.normalize_backend(backend)
     Backends.ensure_available(backend_impl)
@@ -335,7 +336,7 @@ function build_simulation(;N::Int,
                          FREEZE_NONE, -1, true, nothing, zero(T), nothing, nothing, nothing,
                          false, nothing, nothing, nothing,
                          tag, -1, reorder_interval,
-                         nothing)
+                         nothing, exclude_bonded_pairs)
 
     if D == 2
         st.box2 = (T(box[1]), T(box[2]))

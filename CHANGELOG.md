@@ -28,6 +28,11 @@ All notable user-visible changes to this project will be documented in this file
   `examples/mace/README.md` for setup, validation results, and a liquid-water
   (MACE-OFF) structure showcase.
 
+- **`build_simulation(...; exclude_bonded_pairs=false)`** lets bonded pairs
+  feel the nonbonded potential, enabling canonical Kremer-Grest FENE+WCA
+  bonds (the bare FENE bond has no repulsive core, so with the default
+  exclusions polymer bonds would collapse). Default behavior is unchanged.
+
 ### Performance
 
 - NVE half-kicks now run in the state's native precision and no longer
