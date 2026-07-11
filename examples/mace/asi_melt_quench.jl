@@ -78,7 +78,15 @@ vz = σv .* randn(rng, N); vz .-= sum(vz) / N
 copyto!(st.vx, vx); copyto!(st.vy, vy); copyto!(st.vz, vz)
 copyto!(st.typeid, fill(Int32(1), N))
 
-pot = MACEPotential(Z, (L, L, L); variant=:mp, model="small", device="cuda")
+# explicit checkpoint path survives cluster nodes with redirected caches /
+# no internet; override with MACE_MP_MODEL if stored elsewhere
+mp_model = get(ENV, "MACE_MP_MODEL",
+               "/net/storage/abbaa90/mace_models/20231210mace128L0_energy_epoch249model")
+if !isfile(mp_model)
+    mp_model = expanduser("~/.cache/mace/20231210mace128L0_energy_epoch249model")
+    isfile(mp_model) || (mp_model = "small")   # last resort: auto-download
+end
+pot = MACEPotential(Z, (L, L, L); variant=:mp, model=mp_model, device="cuda")
 ParticleDynamics.attach_external_potential!(st, pot)
 
 temperature_K() = begin

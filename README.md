@@ -158,6 +158,11 @@ a bond-free state and `spatial_reorder=false`, and do not provide a virial
 ## Examples
 
 Normal examples in [`examples/`](examples) use the high-level workflow API.
+[`examples/3D_KG_melt_showcase.jl`](examples/3D_KG_melt_showcase.jl) runs a
+Kremer-Grest polymer melt end to end (random-walk chains, soft-core push-off,
+WCA switch-on ladder, production with conformation statistics): 100 chains x 32
+beads at bead density 0.85 reproduce the KG reference values (<l> = 0.967,
+Ree^2/Rg^2 = 5.98, C_inf = 1.67) and write a chain-colored GSD trajectory.
 Helper files beginning with `_` are support code and are not meant to be run
 directly.
 
