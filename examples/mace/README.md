@@ -71,6 +71,27 @@ production energy drift: 4.2e-8 relative over 20,000 steps. Plot:
 `water_movie_gsd.jl` continues from the saved final state and writes a
 HOOMD-schema GSD trajectory for visualization in OVITO.
 
+## Showcase: amorphous silicon by melt–quench
+
+`asi_melt_quench.jl` — a five-stage thermostatted workflow (CSVR by default,
+Nosé–Hoover chain via `nhc` argument): crystalline Si216 → melt at 3000 K →
+liquid at 1800 K → 30 K/ps quench → 300 K anneal → NVE production. The
+thermostat target is ramped live during the quench; a GSD movie of the full
+vitrification is written alongside.
+
+Results (CSVR, MACE-MP-0 small, float64) against experimental a-Si
+(Laaziri et al., PRL 82, 3460 (1999)):
+
+| observable | this run | experiment |
+|---|---|---|
+| first-neighbor peak | 2.368 Å | ~2.35 Å |
+| mean coordination (r < 2.85 Å) | 4.08 | 3.9–4.1 |
+| bond-angle distribution | 108.6° ± 14.9° | ~109.5°, width grows with quench rate |
+
+Plots: `validation/asi_rdf.png` (crystal/liquid/glass g(r)),
+`validation/asi_thermo.png` (thermostat ramp trace),
+`validation/asi_angles.png` (angle distribution).
+
 ## Driver benchmark
 
 `mlip_benchmark.jl` compares ParticleDynamics and ASE while holding the MACE
