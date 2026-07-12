@@ -222,7 +222,7 @@ np.savez(joinpath(@__DIR__, "validation", "asi_final_state_$(TAG).npz"),
          numbers=np.asarray(Z), L=L)
 
 ipk = argmax(ga)
-@printf("\nAMORPHOUS SILICON RESULTS (Si%d, MACE-MP-0 small, NHC melt-quench)\n", N)
+@printf("\nAMORPHOUS SILICON RESULTS (Si%d, MACE-MP-0 small, $(uppercase(TAG)) melt-quench)\n", N)
 @printf("amorphous g(r) first peak: %.2f at r = %.3f Å  (exp. a-Si ~2.35 Å)\n",
         ga[ipk], (ipk - 0.5) * DR)
 @printf("mean coordination (r < %.2f Å): %.2f  (exp. ~3.9-4.1)\n", RCUT_NN, sum(cn) / N)
