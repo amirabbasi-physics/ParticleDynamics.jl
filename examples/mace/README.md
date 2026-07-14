@@ -71,6 +71,16 @@ production energy drift: 4.2e-8 relative over 20,000 steps. Plot:
 `water_movie_gsd.jl` continues from the saved final state and writes a
 HOOMD-schema GSD trajectory for visualization in OVITO.
 
+`py_water_partials.py` computes all three partials (g_OO, g_OH, g_HH) from
+that trajectory, separating inter- from intramolecular contributions —
+neutron diffraction reports the intermolecular partials, while the O–H bond
+(0.98 Å) and same-molecule H–H (1.53 Å) correlations appear directly because
+the molecules are fully flexible. Against the 25 °C neutron curves of Tromp
+et al., J. Chem. Phys. 101, 6210 (1994): hydrogen-bond peak in g_OH at
+1.83 Å (neutron ~1.9 Å), g_OH second peak 3.33 Å (3.3 Å), first
+intermolecular g_HH peak 2.33 Å (~2.3 Å). Outputs:
+`validation/water_partial_rdfs.{csv,png}`.
+
 ## Showcase: amorphous silicon by melt–quench
 
 `asi_melt_quench.jl` — a five-stage thermostatted workflow (CSVR by default,
