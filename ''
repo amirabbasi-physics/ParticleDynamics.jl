@@ -1,3 +1,0 @@
-[2026-06-15T17:33:21+02:00] waiting for verification run to finish
-[2026-06-15T17:33:21+02:00] starting full NVE benchmark
-/usr/bin/bash: line 12: exec: $full_cmd: not found
