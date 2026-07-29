@@ -4,6 +4,10 @@
 
 # ParticleDynamics.jl
 
+[![Documentation](https://img.shields.io/badge/docs-dev-blue.svg)](https://amirabbasi-physics.github.io/ParticleDynamics.jl/dev/)
+[![CI](https://github.com/amirabbasi-physics/ParticleDynamics.jl/actions/workflows/ci-cpu.yml/badge.svg)](https://github.com/amirabbasi-physics/ParticleDynamics.jl/actions/workflows/ci-cpu.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 `ParticleDynamics.jl` is a GPU-first Julia package for non-equilibrium particle
 simulations on `CUDA.jl`. It provides a high-level workflow API for building a
 particle system, attaching forces and methods, sampling observables, writing
@@ -30,7 +34,7 @@ There is no production CPU simulation backend yet.
 
 ```julia
 using Pkg
-Pkg.add(url="<git-url-to-ParticleDynamics.jl>")
+Pkg.add(url="https://github.com/amirabbasi-physics/ParticleDynamics.jl")
 ```
 
 ### Develop locally
@@ -179,6 +183,9 @@ NEQSIM_SMOKE_HEAVY=1 julia --project scripts/examples_smoke.jl
 ```
 
 ## Documentation
+
+Hosted documentation:
+[amirabbasi-physics.github.io/ParticleDynamics.jl](https://amirabbasi-physics.github.io/ParticleDynamics.jl/dev/)
 
 Build docs locally:
 
