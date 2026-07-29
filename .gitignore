@@ -49,10 +49,12 @@ cuda-memcheck.log
 !/examples/2D_polymer_bonded.jl
 !/examples/3D_BD.jl
 !/examples/3D_LJ_NVE.jl
+!/examples/3D_KG_melt_showcase.jl
 !/examples/3D_polymer_melt.jl
 !/examples/SingleT_2D_MD_CSVR.jl
 !/examples/TwoT_LJ2D_LD.jl
-!/examples/3D_KG_melt_showcase.jl
+!/examples/kg_fresnel_movie.py
+!/examples/kg_fresnel_environment.yml
 !/examples/mace/
 !/examples/mace/**
 /examples/mace/Manifest.toml

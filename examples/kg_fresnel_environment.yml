@@ -1,0 +1,11 @@
+name: particledynamics-kg-fresnel
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - fresnel=0.13.8
+  - gsd>=3
+  - matplotlib>=3.8
+  - numpy>=1.26
+  - pillow>=10
+  - ffmpeg>=6
