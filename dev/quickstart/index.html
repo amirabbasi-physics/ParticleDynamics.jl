@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Quickstart · ParticleDynamics.jl</title><meta name="title" content="Quickstart · ParticleDynamics.jl"/><meta property="og:title" content="Quickstart · ParticleDynamics.jl"/><meta property="twitter:title" content="Quickstart · ParticleDynamics.jl"/><meta name="description" content="Documentation for ParticleDynamics.jl."/><meta property="og:description" content="Documentation for ParticleDynamics.jl."/><meta property="twitter:description" content="Documentation for ParticleDynamics.jl."/><script data-outdated-warner src="../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL=".."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../assets/documenter.js"></script><script src="../search_index.js"></script><script src="../siteinfo.js"></script><script src="../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../assets/themeswap.js"></script></head><body><div id="documenter"><nav class="docs-sidebar"><div class="docs-package-name"><span class="docs-autofit"><a href="../">ParticleDynamics.jl</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../">Home</a></li><li class="is-active"><a class="tocitem" href>Quickstart</a><ul class="internal"><li><a class="tocitem" href="#Conceptual-model"><span>Conceptual model</span></a></li><li><a class="tocitem" href="#Minimal-workflow"><span>Minimal workflow</span></a></li><li><a class="tocitem" href="#NVE-production-after-equilibration"><span>NVE production after equilibration</span></a></li><li><a class="tocitem" href="#Groups-apply-methods-and-observables"><span>Groups apply methods and observables</span></a></li><li><a class="tocitem" href="#Output-is-scheduled,-not-hand-written"><span>Output is scheduled, not hand-written</span></a></li><li><a class="tocitem" href="#Low-level-expert-API"><span>Low-level expert API</span></a></li><li><a class="tocitem" href="#Current-limitations"><span>Current limitations</span></a></li></ul></li><li><span class="tocitem">Manual</span><ul><li><a class="tocitem" href="../manual/getting_started/">Low-Level API</a></li><li><a class="tocitem" href="../manual/simulation_state/">Simulation State</a></li><li><a class="tocitem" href="../manual/integrators/">Integrators</a></li><li><a class="tocitem" href="../manual/forces/">Forces</a></li><li><a class="tocitem" href="../manual/groups_filters/">Groups and Filters</a></li><li><a class="tocitem" href="../manual/thermostats/">Thermostats</a></li><li><a class="tocitem" href="../manual/observables/">Observables</a></li><li><a class="tocitem" href="../manual/io/">I/O</a></li><li><a class="tocitem" href="../manual/restarts/">Restarts</a></li></ul></li><li><span class="tocitem">Legacy Notes</span><ul><li><a class="tocitem" href="../legacy/collision_rate/">Collision Rate Notes</a></li></ul></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li class="is-active"><a href>Quickstart</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Quickstart</a></li></ul></nav><div class="docs-right"><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Quickstart"><a class="docs-heading-anchor" href="#Quickstart">Quickstart</a><a id="Quickstart-1"></a><a class="docs-heading-anchor-permalink" href="#Quickstart" title="Permalink"></a></h1><p>This page shows the recommended public workflow API. It is the interface normal examples and user scripts should use.</p><p><code>ParticleDynamics.jl</code> is currently CUDA-first, so the workflow still builds a GPU-resident low-level simulation under the hood. The workflow layer exists to hide manual <code>build_simulation(...)</code>, manual stepping loops, manual GSD open/close calls, and manual observable plumbing.</p><h2 id="Conceptual-model"><a class="docs-heading-anchor" href="#Conceptual-model">Conceptual model</a><a id="Conceptual-model-1"></a><a class="docs-heading-anchor-permalink" href="#Conceptual-model" title="Permalink"></a></h2><ul><li><code>ParticleSystem</code>: positions, box, types, masses, velocities, topology</li><li><code>Group</code> / <code>Groups</code>: particle selections</li><li><code>Force</code>: physical interactions</li><li><code>Integrator</code>: <code>dt</code>, scheme, forces, methods, thermostats</li><li><code>Observable</code>: sampled quantities</li><li><code>Writer</code>: scheduled output</li><li><code>Stage</code>: a named block of running</li><li><code>Simulation</code>: assembled workflow object</li></ul><h2 id="Minimal-workflow"><a class="docs-heading-anchor" href="#Minimal-workflow">Minimal workflow</a><a id="Minimal-workflow-1"></a><a class="docs-heading-anchor-permalink" href="#Minimal-workflow" title="Permalink"></a></h2><pre><code class="language-julia hljs">using ParticleDynamics
+
+N = 128
+cfg = hex_random_2d(N, 1.0f0, 0.25f0; T=Float32)
+
+system = ParticleSystem(
+    cfg;
+    types=[:A],
+    typeids=fill(Int32(1), N),
+    masses=Dict(:A =&gt; 1.0f0),
+)
+
+all = Group(:all, AllSelection())
+groups = Groups(all)
+
+force = WCA(
+    epsilon=10.0f0,
+    sigma=1.0f0,
+    cutoff=Float32(2^(1 / 6)),
+    pairs=:all,
+)
+
+integrator = Integrator(
+    dt=2.0f-4,
+    scheme=VelocityVerlet(),
+    forces=[force],
+    methods=[Langevin(all; gamma=50.0f0, kT=1.0f0)],
+)
+
+thermo = ThermodynamicObservable(all; name=:thermo)
+
+sim = Simulation(
+    system;
+    groups=groups,
+    integrator=integrator,
+    observables=[thermo],
+    writers=[
+        TableWriter(
+            &quot;obs.csv&quot;;
+            every=50,
+            observables=[thermo =&gt; [:temperature, :kinetic_energy, :potential_energy]],
+            mode=:replace,
+        ),
+        GSDWriter(&quot;traj.gsd&quot;; every=200, group=all, write_start=true, mode=:replace),
+    ],
+    precision=Float32,
+    seed=0xC9A319,
+)
+
+run!(sim, Stage(:warmup, steps=200; dt=1.0f-4, neighbor_rebuild_interval=1))
+reset_observables!(sim)
+reset_step!(sim, 0)
+run!(sim, Stage(:production, steps=1_000))</code></pre><h2 id="NVE-production-after-equilibration"><a class="docs-heading-anchor" href="#NVE-production-after-equilibration">NVE production after equilibration</a><a id="NVE-production-after-equilibration-1"></a><a class="docs-heading-anchor-permalink" href="#NVE-production-after-equilibration" title="Permalink"></a></h2><p>Pure NVE on the workflow API is expressed as <code>ConstantVolume(group)</code> with no thermostat. A common pattern is to equilibrate with a thermostat, then swap the integrator and re-prepare before production:</p><pre><code class="language-julia hljs">all = Group(:all, AllSelection())
+
+sim = Simulation(
+    system;
+    groups=Groups(all),
+    integrator=Integrator(
+        dt=2.0f-4,
+        forces=[force],
+        methods=[ConstantVolume(all; thermostat=CSVR(kT=1.0f0, tau=0.1f0))],
+    ),
+)
+
+run!(sim, Stage(:equil, steps=5_000))
+
+sim.integrator = Integrator(
+    dt=2.0f-4,
+    forces=[force],
+    methods=[ConstantVolume(all)],
+)
+prepare!(sim)
+reset_observables!(sim)
+reset_step!(sim, 0)
+run!(sim, Stage(:production, steps=20_000))</code></pre><p><code>examples/3D_LJ_NVE.jl</code> is stricter than this pattern: it runs pure NVE from step 0 and sets the initial velocities explicitly on the <code>ParticleSystem</code>.</p><h2 id="Groups-apply-methods-and-observables"><a class="docs-heading-anchor" href="#Groups-apply-methods-and-observables">Groups apply methods and observables</a><a id="Groups-apply-methods-and-observables-1"></a><a class="docs-heading-anchor-permalink" href="#Groups-apply-methods-and-observables" title="Permalink"></a></h2><p>Groups are currently particle selections. They are designed so the same high-level vocabulary can later grow to bonds, angles, or other topology domains without changing how users think about selection.</p><pre><code class="language-julia hljs">cold = Group(:cold, TypeSelection(:C))
+hot = Group(:hot, TypeSelection(:H))
+groups = Groups(cold, hot, Group(:all, AllSelection()))</code></pre><p>Methods and observables attach to those groups:</p><pre><code class="language-julia hljs">Integrator(
+    dt=2.0f-4,
+    scheme=VelocityVerlet(),
+    forces=[force],
+    methods=[
+        Langevin(cold; gamma=50.0f0, kT=5.0f0),
+        Langevin(hot; gamma=50.0f0, kT=100.0f0),
+    ],
+)</code></pre><h2 id="Output-is-scheduled,-not-hand-written"><a class="docs-heading-anchor" href="#Output-is-scheduled,-not-hand-written">Output is scheduled, not hand-written</a><a id="Output-is-scheduled,-not-hand-written-1"></a><a class="docs-heading-anchor-permalink" href="#Output-is-scheduled,-not-hand-written" title="Permalink"></a></h2><p>Writers own file management and run on schedules:</p><ul><li><code>Every(n)</code></li><li><code>AtSteps([0, 100, 1_000])</code></li><li><code>Between(first, last; every=...)</code></li></ul><p>This keeps examples free of manual <code>gsd_open</code>, <code>gsd_close</code>, <code>write_gsd_frame!</code>, manual CSV header logic, and direct <code>collect_step_observables(...)</code> calls.</p><h2 id="Low-level-expert-API"><a class="docs-heading-anchor" href="#Low-level-expert-API">Low-level expert API</a><a id="Low-level-expert-API-1"></a><a class="docs-heading-anchor-permalink" href="#Low-level-expert-API" title="Permalink"></a></h2><p>The older expert API is still supported:</p><ul><li><code>build_simulation</code></li><li><code>step!</code></li><li><code>step_graph!</code></li><li><code>nve</code>, <code>velocityverlet</code>, <code>baoab</code>, <code>baoa</code>, <code>gsm</code>, <code>eulerheun</code>, <code>eulermaruyama</code>, <code>nosehooverchain</code>, <code>csvr</code></li><li><code>ParticleDynamics.SimulationCore</code></li></ul><p>Use that surface if you need direct control over the GPU-resident <code>SimulationState</code>, debugging of stepping internals, or custom orchestration that the workflow layer intentionally does not expose.</p><h2 id="Current-limitations"><a class="docs-heading-anchor" href="#Current-limitations">Current limitations</a><a id="Current-limitations-1"></a><a class="docs-heading-anchor-permalink" href="#Current-limitations" title="Permalink"></a></h2><ul><li>CUDA is the main supported backend.</li><li>Angles, dihedrals, impropers, electrostatics, and similar force-field features are future-ready in the vocabulary but not generally implemented.</li><li><code>ForceField</code> is a stable container concept, but compiled support is limited to the existing low-level kernels and wrappers.</li></ul></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../">« Home</a><a class="docs-footer-nextpage" href="../manual/getting_started/">Low-Level API »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.17.0 on <span class="colophon-date" title="Wednesday 29 July 2026 10:52">Wednesday 29 July 2026</span>. Using Julia version 1.12.6.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
