@@ -32,8 +32,5 @@ jobs:
       - name: Run full GPU test suite
         run: julia --project -e 'using Pkg; Pkg.test()'
 
-      - name: Build docs
-        run: julia --project=docs -e 'using Pkg; Pkg.instantiate(); include("docs/make.jl")'
-
       - name: Run example smoke subset
         run: julia --project scripts/examples_smoke.jl
