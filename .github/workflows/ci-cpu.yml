@@ -9,6 +9,8 @@ jobs:
   cpu-checks:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout
@@ -31,5 +33,7 @@ jobs:
       - name: Run tests (GPU suite skips cleanly without CUDA)
         run: julia --project -e 'using Pkg; Pkg.test()'
 
-      - name: Build docs (non-executing pages)
+      - name: Build and deploy docs
         run: julia --project=docs -e 'using Pkg; Pkg.instantiate(); include("docs/make.jl")'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

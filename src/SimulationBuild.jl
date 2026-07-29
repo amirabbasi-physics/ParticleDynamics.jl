@@ -1,63 +1,6 @@
 # =========================
 #   Build simulation
 # =========================
-"""
-    build_simulation(; N, box, cutoff=1, skin=0.4, cap=Int32(96),
-                      neigh_interval=20, use_neighborlist=true,
-                      epsilon=1, sigma=1, gamma=1, temperature=1,
-                      noise_corr_time=nothing, dt=0.001,
-                      mass=1, bonds=nothing, bonding=nothing,
-                      nonbonded=:lj, softrep_params=nothing, backend=:cuda,
-                      precision=:f32, unwrapped_positions::Bool=false,
-                      spatial_reorder::Bool=true, reorder_interval::Int=500)
-
-Construct a [`SimulationState`](@ref) with GPU-resident SoA arrays and a
-neighbor list configured for the requested potential. All inputs are keyword
-arguments so that scripts can copy known-good parameter sets directly from the
-`examples/` directory without ambiguity.
-
-Key behaviors:
-- The simulation dimensionality (2D vs 3D) is inferred from the length of
-  `box`. Positions/velocities/forces allocate the corresponding CuArrays.
-- For `nonbonded = :wca` the neighbor cutoff is forced to the physical WCA
-  value `r_c = 2^(1/6) σ` even if a larger `cutoff` was passed, guaranteeing
-  that kernels reuse the validated parameter sets from the packaged examples.
-- `temperature` accepts either a scalar or length-`N` vector and is used to
-  initialize velocities. Stochastic integrator parameters are constructed
-  later via explicit specs such as [`velocityverlet`](@ref) and
-  [`eulermaruyama`](@ref).
-- `mass` accepts either a scalar or a length-`N` vector. Initial velocities are
-  drawn from a Maxwell–Boltzmann distribution with width `sqrt(kT / m)` for
-  particles with positive mass, then centered to remove center-of-mass drift.
-- When `unwrapped_positions=true`, additional `rx_unwrap`/`ry_unwrap`/`rz_unwrap`
-  buffers track continuous positions across periodic boundaries.
-- With `spatial_reorder=true` (the default) and a dense cell list, NVE runs
-  periodically permute all per-particle arrays into cell-sorted order (at most
-  once per `reorder_interval` steps, at a neighbor rebuild). This keeps
-  storage order aligned with space, which is essential for force-kernel memory
-  locality at large `N`. `st.tag[k]` records the build-time id of the particle
-  in slot `k`, and GSD/restart output is written in build-time order. Pass
-  `spatial_reorder=false` if external code indexes into the state arrays by
-  fixed particle number (e.g. `Filters.Indices`); typeid-based selections
-  remain valid because `typeid` is permuted consistently.
-
-Example (mirrors `examples/2D_example.jl`, scaled down to N=4096 for testing):
-
-```julia
-st = build_simulation(N=4096, box=(250f0, 250f0),
-                      cutoff=Float32(2^(1/6)), skin=Float32(2^(1/6))/2,
-                      cap=Int32(250), neigh_interval=50,
-                      epsilon=1f4, sigma=1f0,
-                      gamma=615f0, temperature=10f0,
-                      dt=1f-5, nonbonded=:wca, precision=:f32)
-vv = velocityverlet(st; gamma=615f0, temperature=10f0, dt=1f-5)
-step!(st, vv, 1f-5; compute_energy=false)
-```
-
-Returns a fully initialized `SimulationState`. Stochastic controls such as
-`noise_corr_time` now belong to the explicit integrator spec rather than the
-core simulation state.
-"""
 function _normalize_build_masses(backend::Backends.AbstractBackend,
                                  ::Type{T},
                                  N::Int,
@@ -142,6 +85,63 @@ function _remove_com_drift!(::Backends.AbstractBackend,
     return nothing
 end
 
+"""
+    build_simulation(; N, box, cutoff=1, skin=0.4, cap=Int32(96),
+                      neigh_interval=20, use_neighborlist=true,
+                      epsilon=1, sigma=1, gamma=1, temperature=1,
+                      noise_corr_time=nothing, dt=0.001,
+                      mass=1, bonds=nothing, bonding=nothing,
+                      nonbonded=:lj, softrep_params=nothing, backend=:cuda,
+                      precision=:f32, unwrapped_positions::Bool=false,
+                      spatial_reorder::Bool=true, reorder_interval::Int=500)
+
+Construct a [`SimulationState`](@ref) with GPU-resident SoA arrays and a
+neighbor list configured for the requested potential. All inputs are keyword
+arguments so that scripts can copy known-good parameter sets directly from the
+`examples/` directory without ambiguity.
+
+Key behaviors:
+- The simulation dimensionality (2D vs 3D) is inferred from the length of
+  `box`. Positions/velocities/forces allocate the corresponding CuArrays.
+- For `nonbonded = :wca` the neighbor cutoff is forced to the physical WCA
+  value `r_c = 2^(1/6) σ` even if a larger `cutoff` was passed, guaranteeing
+  that kernels reuse the validated parameter sets from the packaged examples.
+- `temperature` accepts either a scalar or length-`N` vector and is used to
+  initialize velocities. Stochastic integrator parameters are constructed
+  later via explicit specs such as [`velocityverlet`](@ref) and
+  [`eulermaruyama`](@ref).
+- `mass` accepts either a scalar or a length-`N` vector. Initial velocities are
+  drawn from a Maxwell–Boltzmann distribution with width `sqrt(kT / m)` for
+  particles with positive mass, then centered to remove center-of-mass drift.
+- When `unwrapped_positions=true`, additional `rx_unwrap`/`ry_unwrap`/`rz_unwrap`
+  buffers track continuous positions across periodic boundaries.
+- With `spatial_reorder=true` (the default) and a dense cell list, NVE runs
+  periodically permute all per-particle arrays into cell-sorted order (at most
+  once per `reorder_interval` steps, at a neighbor rebuild). This keeps
+  storage order aligned with space, which is essential for force-kernel memory
+  locality at large `N`. `st.tag[k]` records the build-time id of the particle
+  in slot `k`, and GSD/restart output is written in build-time order. Pass
+  `spatial_reorder=false` if external code indexes into the state arrays by
+  fixed particle number (e.g. `Filters.Indices`); typeid-based selections
+  remain valid because `typeid` is permuted consistently.
+
+Example (mirrors `examples/2D_example.jl`, scaled down to N=4096 for testing):
+
+```julia
+st = build_simulation(N=4096, box=(250f0, 250f0),
+                      cutoff=Float32(2^(1/6)), skin=Float32(2^(1/6))/2,
+                      cap=Int32(250), neigh_interval=50,
+                      epsilon=1f4, sigma=1f0,
+                      gamma=615f0, temperature=10f0,
+                      dt=1f-5, nonbonded=:wca, precision=:f32)
+vv = velocityverlet(st; gamma=615f0, temperature=10f0, dt=1f-5)
+step!(st, vv, 1f-5; compute_energy=false)
+```
+
+Returns a fully initialized `SimulationState`. Stochastic controls such as
+`noise_corr_time` now belong to the explicit integrator spec rather than the
+core simulation state.
+"""
 function build_simulation(;N::Int,
                            box,
                            cutoff::Real=1.0,

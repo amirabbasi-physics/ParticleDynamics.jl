@@ -6,7 +6,7 @@ DocMeta.setdocmeta!(ParticleDynamics, :DocTestSetup, :(using ParticleDynamics); 
 makedocs(
     modules=[ParticleDynamics],
     sitename="ParticleDynamics.jl",
-    format=Documenter.HTML(prettyurls=false, edit_link=nothing),
+    format=Documenter.HTML(prettyurls=get(ENV, "CI", nothing) == "true", edit_link=nothing),
     checkdocs=:none,
     doctest=false,
     remotes=nothing,
@@ -28,4 +28,9 @@ makedocs(
             "Collision Rate Notes" => "legacy/collision_rate.md",
         ],
     ],
+)
+
+deploydocs(
+    repo="github.com/amirabbasi-physics/ParticleDynamics.jl",
+    devbranch="master",
 )

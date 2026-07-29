@@ -373,6 +373,23 @@ function _particle_property_values(value, typeid::Vector{Int32}, types_names,
     throw(ArgumentError("unsupported particle property type $(typeof(value))"))
 end
 
+"""
+    write_gsd_frame!(h, st; diameter=nothing, mass=nothing, charge=nothing,
+                      types_names=["A"], step=0,
+                      write_forces=false, write_unwrapped=false,
+                      write_virial=false, sync_on_write=false)
+
+Write one frame of `st` to the open GSD handle `h` at the given `step`.
+
+Positions, and (unless the last integrator step was position-only) velocities,
+are always written. `diameter`, `mass`, and `charge` accept `nothing` (use GSD
+defaults), a scalar, or a per-particle-or-per-type vector (expanded from
+per-type values via `types_names`).
+Set `write_forces`, `write_unwrapped`, or `write_virial` to additionally store
+forces, unwrapped positions (requires `unwrapped_positions=true` in
+[`build_simulation`](@ref)), or the virial tensor. Output is written in
+build-time particle order regardless of any internal spatial reordering.
+"""
 function write_gsd_frame!(h, st; diameter=nothing, mass=nothing, charge=nothing,
                           types_names=["A"], step::Int=0,
                           write_forces::Bool=false, write_unwrapped::Bool=false,
