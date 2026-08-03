@@ -8,7 +8,7 @@
 [![CI](https://github.com/amirabbasi-physics/ParticleDynamics.jl/actions/workflows/ci-cpu.yml/badge.svg)](https://github.com/amirabbasi-physics/ParticleDynamics.jl/actions/workflows/ci-cpu.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-`ParticleDynamics.jl` is a GPU-first Julia package for non-equilibrium particle
+`ParticleDynamics.jl` is a GPU-native Julia package for non-equilibrium particle
 simulations on `CUDA.jl`. It provides a high-level workflow API for building a
 particle system, attaching forces and methods, sampling observables, writing
 outputs, and running staged simulations without hand-written timestep loops.
