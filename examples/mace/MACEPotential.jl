@@ -26,16 +26,18 @@ struct MACEPotential <: ParticleDynamics.AbstractExternalPotential
 end
 
 """
-    MACEPotential(numbers, box_lengths; variant=:mp, model="small", device="cuda")
+    MACEPotential(numbers, box_lengths; variant=:mp, model="small",
+                  device="cuda", dtype="float64")
 
 Build a MACE provider for `N = length(numbers)` atoms with atomic numbers
 `numbers` in an orthorhombic periodic box `box_lengths = (Lx, Ly, Lz)` (Å).
 `variant=:mp` loads MACE-MP-0 (materials), `variant=:off` loads MACE-OFF
-(organic molecules/liquids). Float64 throughout.
+(organic molecules/liquids). `dtype` selects the model precision
+(`"float64"` or `"float32"`); the engine-side buffers stay Float64 either way.
 """
 function MACEPotential(numbers::AbstractVector{<:Integer}, box_lengths;
                        variant::Symbol=:mp, model::String="small",
-                       device::String="cuda")
+                       device::String="cuda", dtype::String="float64")
     np = pyimport("numpy")
     ase = pyimport("ase")
     mc = pyimport("mace.calculators")
@@ -44,8 +46,8 @@ function MACEPotential(numbers::AbstractVector{<:Integer}, box_lengths;
     atoms = ase.Atoms(; numbers=np.asarray(collect(Int, numbers)),
                       positions=np.zeros((N, 3)), cell=cell, pbc=true)
     calc = variant === :mp ?
-        mc.mace_mp(; model=model, device=device, default_dtype="float64") :
-        mc.mace_off(; model=model, device=device, default_dtype="float64")
+        mc.mace_mp(; model=model, device=device, default_dtype=dtype) :
+        mc.mace_off(; model=model, device=device, default_dtype=dtype)
     atoms.calc = calc
     return MACEPotential(atoms, np, zeros(N), zeros(N), zeros(N), zeros(N, 3), N)
 end

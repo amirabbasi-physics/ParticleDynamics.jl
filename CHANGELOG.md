@@ -27,6 +27,21 @@ All notable user-visible changes to this project will be documented in this file
   199-step NVE trajectory matches ASE velocity Verlet to 4.3e-5 Å. See
   `examples/mace/README.md` for setup, validation results, and a liquid-water
   (MACE-OFF) structure showcase.
+- **Orb foundation-model support** (`examples/orb/`): an `OrbPotential`
+  provider drives Orb-v3 potentials (orb-models via PythonCall) through the
+  same external-potential interface as `MACEPotential`, covering the
+  `conservative` (forces from an energy gradient) and `direct` (forces
+  predicted independently, no conserved energy) families and the
+  charge/spin-conditioned `omol` models. Forces through the engine path match
+  an independent ASE call to 4.1e-15 eV/Å in float64. With two foundation
+  models behind one interface, `examples/orb/` also carries a benzene-crystal
+  head-to-head against experimental and CCSD(T) reference data: lattice
+  energy, equilibrium volume from an energy–volume scan, bond geometry,
+  vibrational spectrum, NVE energy conservation, and matched-precision
+  throughput — plus a side-by-side Fresnel movie of a heating ramp with live
+  throughput and accuracy readouts. `MACEPotential` gained a `dtype` keyword
+  (default `"float64"`, existing behavior unchanged) so both providers can be
+  timed at matched precision.
 
 - **`build_simulation(...; exclude_bonded_pairs=false)`** lets bonded pairs
   feel the nonbonded potential, enabling canonical Kremer-Grest FENE+WCA
