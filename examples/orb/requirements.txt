@@ -1,0 +1,43 @@
+# Python environment for the Orb + MACE head-to-head (RTX 3090, CUDA 12.8).
+# Both model families live in one venv on purpose: a head-to-head is only fair
+# if the two drivers share the same torch build, CUDA kernels and GPU.
+#
+# Setup:
+#   python3 -m venv ~/.venvs/pd-mace                  # >= 3.12 (orb-models requirement)
+#   ~/.venvs/pd-mace/bin/pip install torch --index-url https://download.pytorch.org/whl/cu128
+#   ~/.venvs/pd-mace/bin/pip install mace-torch ase
+#   ~/.venvs/pd-mace/bin/pip install "dm-tree==0.1.10" "cached-path>=1.7.1" \
+#       "nvalchemi-toolkit-ops[torch]>=0.3.1,<0.4"
+#   ~/.venvs/pd-mace/bin/pip install --no-deps "orb-models==0.6.2"
+#
+# Two deliberate deviations from a plain `pip install orb-models`:
+#
+#   * orb-models pins dm-tree==0.1.8, which has no cp313 wheel and needs bazel
+#     to build. 0.1.10 provides the same `tree.map_structure` API and has
+#     wheels; hence the explicit pin plus --no-deps.
+#   * orb-models 0.7.0 removed its own ASE calculator in favour of torch-sim.
+#     0.6.2 still ships `orb_models.forcefield.inference.calculator.ORBCalculator`,
+#     which is what OrbPotential.jl uses, so that version is pinned.
+#
+# Installing orb-models this way does not move torch, numpy, ase or scipy, so
+# the existing MACE validation suite in examples/mace is unaffected.
+
+# --- core ---
+torch==2.11.0+cu128
+numpy==2.5.1
+scipy==1.18.0
+ase==3.29.0
+
+# --- MACE ---
+mace-torch==0.3.16
+e3nn==0.4.4
+torch-ema==0.3
+torchmetrics==1.9.0
+
+# --- Orb ---
+orb-models==0.6.2
+dm-tree==0.1.10
+nvalchemi-toolkit-ops==0.3.1
+warp-lang==1.15.0
+cached-path==1.8.10
+huggingface_hub==1.25.1

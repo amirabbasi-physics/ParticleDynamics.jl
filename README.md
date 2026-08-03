@@ -130,7 +130,7 @@ control over GPU buffers and stepping:
 Use that surface when you need custom orchestration, kernel debugging, or very
 fine-grained control that the workflow facade intentionally hides.
 
-## Machine-learned potentials (MACE)
+## Machine-learned potentials (MACE, Orb)
 
 The engine can route all force evaluation through an external provider — the
 seam that connects it to machine-learned interatomic potentials. A provider
@@ -154,6 +154,16 @@ trajectory equivalence to ASE velocity Verlet at the 1e-5 Å level over
 hundreds of steps. See [`examples/mace/README.md`](examples/mace/README.md)
 for environment setup, the validation suite, and a liquid-water structure
 showcase.
+
+[`examples/orb/`](examples/orb) adds a second backend, `OrbPotential`, driving
+**Orb-v3 foundation models** (Orbital Materials) behind the same interface,
+including the distinction between Orb's `conservative` models (forces as an
+energy gradient) and its faster `direct` models (forces predicted
+independently, so NVE energy is not conserved). Two independent foundation
+models behind one interface turn the engine into a comparison instrument: a
+benzene-crystal head-to-head against experimental and CCSD(T) reference data —
+lattice energy, equilibrium volume, bond geometry, vibrational spectrum, and
+throughput — is in [`examples/orb/README.md`](examples/orb/README.md).
 
 Limitations: external potentials replace *all* internal force terms, require
 a bond-free state and `spatial_reorder=false`, and do not provide a virial
