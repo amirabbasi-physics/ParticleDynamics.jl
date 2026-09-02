@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="Particle_Dynamics.png" alt="ParticleDynamics.jl logo" width="360">
+  <img src="ParticleDynamics.png" alt="ParticleDynamics.jl logo" width="360">
 </p>
 
 # ParticleDynamics.jl
