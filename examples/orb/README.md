@@ -398,6 +398,49 @@ Output: `validation/benzene_head_to_head.mp4` (3200×1800, 8 s at 25 fps with
 `--stride 2`). Trajectories, diagnostics and the movie are generated artifacts
 and stay out of git; only the figures and the input CIF are tracked.
 
+## How large a system can this actually drive?
+
+`py_scaling_study.py` replicates the 64-molecule water box into k×k×k supercells
+and times single-point force calls until each model runs out of memory. Because
+the engine adds only ~2% over a bare force call, the model call *is* the step.
+
+RTX 3090 (23.5 GB), float32, cost per atom taken from the linear regime:
+
+| model | largest run | µs/atom | memory/atom | ns/day at that size |
+|---|---:|---:|---:|---:|
+| MACE-OFF23-small | 12 288 atoms (4 096 H₂O) | 43 | ~0.95 MB | 0.081 |
+| Orb-v3-cons-inf-omat | 1 536 atoms (512 H₂O) | 178 | ~5 MB | 0.158 |
+| Orb-v3-cons-20-omat | 12 288 atoms (4 096 H₂O) | 43 | ~1.2 MB | 0.081 |
+| **Orb-v3-direct-20-omat** | **65 856 atoms (21 952 H₂O)** | **19** | **~0.18 MB** | 0.035 |
+
+Three things follow.
+
+**Cost and memory are both linear in N**, as they should be for message passing
+with a fixed cutoff. Orb-direct-20 holds 19.96 → 18.85 → 18.93 µs/atom across a
+13x span in system size; MACE holds 43.2 → 42.7 µs/atom. Below ~5 000 atoms the
+GPU is underutilised and the per-atom cost is inflated, so small-system timings
+must not be extrapolated downward in cost.
+
+**Memory is the binding constraint, and it is dominated by the force route.** The
+same Orb architecture needs ~1.2 MB/atom with conservative forces and
+~0.18 MB/atom with direct forces — a ~6.5x saving, because a direct model never
+builds the autograd graph needed to differentiate an energy. That single choice
+is the difference between stopping at 24 000 atoms and reaching 65 856.
+
+**Throughput, not memory, is what makes large-scale MLIP MD pointless here.**
+Even the cheapest variant at 65 856 atoms manages 0.035 ns/day — 29 days per
+nanosecond. At 12 288 atoms with MACE it is 12 days per nanosecond. These models
+are affordable for picoseconds of dynamics on 10³–10⁴ atoms, which is enough for
+structure and spectra (the 64-molecule showcase above already reproduces g_OO to
+~2%), and unaffordable for anything requiring sampling.
+
+Extrapolating to 30 000 water molecules (98 304 atoms): Orb-direct-20 would need
+~18 GB of activations and ~1.9 s/step (~43 days/ns); MACE-OFF-small would need
+~90 GB and ~4.2 s/step. The first needs roughly a 32–40 GB card, the second an
+80 GB one at minimum. Note the trap: the only variant that gets close is the
+`direct` one, which does not conserve energy (see above) — so the variant that
+scales is the one you cannot use for constant-energy dynamics.
+
 ## Limitations
 
 Inherited from the external-potential contract, and unchanged by this work:
