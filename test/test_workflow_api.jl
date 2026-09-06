@@ -63,7 +63,9 @@ end
 
 @testset "Workflow Simulation prepares pair tables and free-particle workflows" begin
     T = Float64
-    cfg = hex_random_2d(8, 1.0, 0.25; T=T)
+    # This tests preparation, not density-dependent physics. Keep the box large
+    # enough for three cells at the largest pair cutoff plus buffer.
+    cfg = hex_random_2d(8, 1.0, 0.05; T=T)
     typeids = Int32[1, 2, 1, 2, 1, 2, 1, 2]
     system = ParticleSystem(cfg; types=[:small, :large], typeids=typeids)
     _, _, all_particles, groups = _workflow_api_groups()

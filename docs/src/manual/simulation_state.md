@@ -26,6 +26,33 @@ The current implementation remains GPU-first: state arrays are `CuArray` based,
 and the execution path remains CUDA-specific even though build-time backend
 selection is now routed through the storage layer.
 
+## Neighbor initialization and capacity
+
+The low-level constructor allocates a dense neighbor container but leaves
+`st.nbh.valid == false` until positions have been assigned and a rebuild
+succeeds. The first simulation force evaluation/step builds the list; callers
+using standalone force kernels must first call
+`NeighborLists.update_neighbors_inplace!(st.nbh, st.rx, st.ry; box=st.box2)`
+(include `st.rz` and use `st.box3` in 3D). Workflow preparation initializes the
+coordinates and builds the list automatically.
+
+Dense and stencil rows use **slot-major ELL** storage: zero-based neighbor slot
+`t` for one-based particle `i` is stored at `t*N + i`. The `neighbors_index`
+field remains for compatibility but is not an ELL row offset. Bond adjacency
+uses a separate CSR representation.
+
+`cap` is a hard capacity. A build that needs more space throws
+`NeighborLists.NeighborCapacityError` and leaves the list invalid, with
+`required_capacity` recording the largest required row. Incomplete lists are
+rejected by force and collision entry points. Rebuild a new container with
+sufficient capacity, or correct the configuration and rebuild successfully.
+Rows are never silently truncated. Direct mutation of internal buffers does
+not maintain these invariants and is unsupported.
+
+`valid` records successful construction and capacity checking, not freshness
+after arbitrary coordinate changes. Low-level callers that move particles
+must still rebuild or use the neighbor displacement-check protocol.
+
 ## Minimal pattern
 
 ```julia

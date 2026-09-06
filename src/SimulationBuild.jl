@@ -134,11 +134,15 @@ st = build_simulation(N=4096, box=(250f0, 250f0),
                       epsilon=1f4, sigma=1f0,
                       gamma=615f0, temperature=10f0,
                       dt=1f-5, nonbonded=:wca, precision=:f32)
+copyto!(st.rx, Float32[3 * mod(i - 1, 64) - 95 for i in 1:4096])
+copyto!(st.ry, Float32[3 * ((i - 1) ÷ 64) - 95 for i in 1:4096])
 vv = velocityverlet(st; gamma=615f0, temperature=10f0, dt=1f-5)
 step!(st, vv, 1f-5; compute_energy=false)
 ```
 
-Returns a fully initialized `SimulationState`. Stochastic controls such as
+Returns an allocated `SimulationState`. Assign particle coordinates before the
+first step; the initial dense neighbor build is deferred until the first force
+evaluation or explicit neighbor update. Stochastic controls such as
 `noise_corr_time` now belong to the explicit integrator spec rather than the
 core simulation state.
 """
@@ -167,6 +171,7 @@ function build_simulation(;N::Int,
                            reorder_interval::Int = 500,
                            exclude_bonded_pairs::Bool = true)
 
+    0 < N < typemax(Int32) || throw(ArgumentError("Simulation particle count must satisfy 0 < N < typemax(Int32)."))
     backend_impl = Backends.normalize_backend(backend)
     Backends.ensure_available(backend_impl)
     # Backend selection is currently a build/storage boundary only.
@@ -245,11 +250,10 @@ function build_simulation(;N::Int,
     typeid = Backends.fill_vector(backend_impl, Int32(1), N)
 
     if use_neighborlist
-        if D == 2
-            nbh = NeighborLists.build_neighbors_dense!(rx, ry; box=(T(box[1]), T(box[2])), cutoff=nb_cutoff, cap, skin=T(skin))
-        else
-            nbh = NeighborLists.build_neighbors_dense!(rx, ry, rz; box=(T(box[1]), T(box[2]), T(box[3])), cutoff=nb_cutoff, cap, skin=T(skin))
-        end
+        # Coordinates are filled by the caller/workflow after allocation. Building
+        # against zeros here is quadratic and can overflow before initialization.
+        # First force evaluation (or explicit update) builds the actual rows.
+        nbh = NeighborLists._alloc_neighbor_matrix(T, N, D, T.(box), nb_cutoff, T(skin), cap)
     else
         if D == 2
             nbh = NeighborLists.build_neighbors_allpairs!(rx, ry; box=(T(box[1]), T(box[2])), cutoff=nb_cutoff, cap, skin=T(skin))

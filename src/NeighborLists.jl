@@ -10,8 +10,9 @@ Neighbor list builders and query utilities used by the force kernels.
 - [`AllPairsNeighborMatrix`](@ref) — sentinel representing O(N²) evaluation
   (`examples/2D_allpairs_quicktest.jl`).
 
-All stores use a CSR-style `(neighbors_index, neighbors_flat, counts)` layout
-so that kernels can iterate neighbors without branches.
+Dense and stencil lists use slot-major ELL storage: slot `t` (zero based) of
+particle `i` (one based) is at `t*N + i` in `neighbors_flat`. Bond adjacency
+is a separate CSR structure. The all-pairs sentinel stores no neighbor rows.
 """
 module NeighborLists
 
@@ -22,7 +23,8 @@ export AbstractNeighborMatrix,
        build_neighbors_dense!, build_neighbors_stencil!,
        build_neighbors_stencil_by_types!,
        update_neighbors_inplace!, update_needed!,
-       build_neighbors_allpairs!, AllPairsNeighborMatrix
+       build_neighbors_allpairs!, AllPairsNeighborMatrix,
+       NeighborCapacityError
 
 include("neighbors/NeighborTypes.jl")
 include("neighbors/AllPairsNeighbors.jl")

@@ -353,7 +353,7 @@ end
 Accumulate Lennard-Jones forces and per-particle potential energies into the
 structure-of-arrays buffers. Dispatches on the neighbor matrix:
 
-- `NeighborMatrix` / `StencilNeighborMatrix`: iterate CSR rows built with
+- `NeighborMatrix` / `StencilNeighborMatrix`: iterate ELL rows built with
   `build_neighbors_dense!` or `build_neighbors_stencil!`.
 - `AllPairsNeighborMatrix`: evaluate every pair (used in
   `examples/2D_allpairs_quicktest.jl` when validating kernels).

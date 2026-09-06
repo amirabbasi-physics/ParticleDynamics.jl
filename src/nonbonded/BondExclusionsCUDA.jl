@@ -1,5 +1,5 @@
 # ───────────────────────────────────────────────────────────────────────────────
-# CSR kernels with bonded exclusions
+# Bond lookup helpers for the CSR bond adjacency (not the ELL neighbor list).
 # ───────────────────────────────────────────────────────────────────────────────
 
 @inline function _is_bonded(i::Int32, j::Int32,

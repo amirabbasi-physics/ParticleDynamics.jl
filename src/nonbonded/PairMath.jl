@@ -34,11 +34,6 @@ end
     return threads, cld(N, threads)
 end
 
-# Neighbor rows are stored slot-major ("transposed ELL"): slot `t` (0-based)
-# of particle `i` (1-based) lives at `t*N + i`, so warp lanes reading the same
-# slot for adjacent particles access consecutive memory (coalesced).
-@inline _ell_index(i::Integer, t::Integer, N::Integer) = Int64(t) * Int64(N) + Int64(i)
-
 # Lennard-Jones, returns force components and pair energy
 @inline function lj_pair_2d(dx::T, dy::T, r2::T, ϵ::T, σ::T) where {T<:AbstractFloat}
     invr2 = one(T) / r2

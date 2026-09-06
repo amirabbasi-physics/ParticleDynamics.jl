@@ -1,3 +1,9 @@
+function _validate_neighbor_arrays(nb::CellListNeighborMatrix, coords...)
+    length(coords) == nb.D && all(x -> length(x) == nb.N, coords) ||
+        throw(DimensionMismatch("Position components must match the neighbor list particle count and dimension."))
+    return nothing
+end
+
 # ============================================================================
 # Update kernels
 # ============================================================================
@@ -65,7 +71,7 @@ end
 """
     update_neighbors_inplace!(nbh, rx, ry[, rz]; box, step=0)
 
-Re-bin particles into cells, rebuild the CSR neighbor rows, and record the
+Re-bin particles into cells, rebuild the ELL neighbor rows, and record the
 reference coordinates used by [`update_needed!`](@ref). Called by `step!`
 whenever the accumulated displacement exceeds `skin/2` or when the user forces
 an update (e.g. after randomizing the configuration).
@@ -73,7 +79,8 @@ an update (e.g. after randomizing the configuration).
 function update_neighbors_inplace!(nbh::NeighborMatrix{T},
                                    rx::CuArray{T,1}, ry::CuArray{T,1};
                                    box::Tuple{T,T}, step::Int=0) where {T<:AbstractFloat}
-    @assert nbh.D == 2
+    _validate_neighbor_arrays(nbh, rx, ry)
+    nbh.valid = false
     _bin_particles!(nbh, rx, ry, box)
     _finish_rebuild!(nbh, rx, ry, box, step)
     return nbh
@@ -82,7 +89,8 @@ end
 function update_neighbors_inplace!(nbh::NeighborMatrix{T},
                                    rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1};
                                    box::Tuple{T,T,T}, step::Int=0) where {T<:AbstractFloat}
-    @assert nbh.D == 3
+    _validate_neighbor_arrays(nbh, rx, ry, rz)
+    nbh.valid = false
     _bin_particles!(nbh, rx, ry, rz, box)
     _finish_rebuild!(nbh, rx, ry, rz, box, step)
     return nbh
@@ -95,6 +103,7 @@ end
 function _finish_rebuild!(nbh::NeighborMatrix{T},
                           rx::CuArray{T,1}, ry::CuArray{T,1},
                           box::Tuple{T,T}, step::Int) where {T<:AbstractFloat}
+    nbh.valid = false
     fill!(nbh.counts, Int32(0))
     halfLx = T(0.5)*box[1]; halfLy = T(0.5)*box[2]
     threads, blocks = _launchdims(Int(nbh.N))
@@ -110,15 +119,18 @@ function _finish_rebuild!(nbh::NeighborMatrix{T},
          box[1], box[2], halfLx, halfLy,
          nbh.nx, nbh.ny, rl2, nbh.cap; threads, blocks)
 
+    _check_neighbor_capacity!(nbh)
     kcopy = CUDA.@cuda launch=false _kernel_copy_refs_2d!(rx, ry, nbh.rref_x, nbh.rref_y)
     kcopy(rx, ry, nbh.rref_x, nbh.rref_y; threads, blocks)
     nbh.last_build_step = step
+    nbh.valid = true
     return nbh
 end
 
 function _finish_rebuild!(nbh::NeighborMatrix{T},
                           rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
                           box::Tuple{T,T,T}, step::Int) where {T<:AbstractFloat}
+    nbh.valid = false
     fill!(nbh.counts, Int32(0))
     threads, blocks = _launchdims(Int(nbh.N))
     halfLx = T(0.5)*box[1]; halfLy = T(0.5)*box[2]; halfLz = T(0.5)*box[3]
@@ -139,17 +151,21 @@ function _finish_rebuild!(nbh::NeighborMatrix{T},
     if nbh.rref_z === nothing
         nbh.rref_z = CUDA.CuArray{T}(undef, Int(nbh.N))
     end
+    _check_neighbor_capacity!(nbh)
     kcopy = CUDA.@cuda launch=false _kernel_copy_refs_3d!(rx, ry, rz, nbh.rref_x, nbh.rref_y, nbh.rref_z::CuArray{T,1})
     kcopy(rx, ry, rz, nbh.rref_x, nbh.rref_y, nbh.rref_z::CuArray{T,1}; threads, blocks)
     nbh.last_build_step = step
+    nbh.valid = true
     return nbh
 end
 
 function update_neighbors_inplace!(nbh::StencilNeighborMatrix{T},
                                    rx::CuArray{T,1}, ry::CuArray{T,1};
                                    box::Tuple{T,T}, step::Int=0) where {T<:AbstractFloat}
-    @assert nbh.D == 2
+    _validate_neighbor_arrays(nbh, rx, ry)
+    nbh.valid = false
     _bin_particles!(nbh, rx, ry, box)
+    nbh.valid = false
     fill!(nbh.counts, Int32(0))
     threads, blocks = _launchdims(Int(nbh.N))
     halfLx = T(0.5)*box[1]; halfLy = T(0.5)*box[2]
@@ -166,17 +182,21 @@ function update_neighbors_inplace!(nbh::StencilNeighborMatrix{T},
          box[1], box[2], halfLx, halfLy,
          nbh.nx, nbh.ny, nbh.cell_size, nbh.cap; threads, blocks)
 
+    _check_neighbor_capacity!(nbh)
     kcopy = CUDA.@cuda launch=false _kernel_copy_refs_2d!(rx, ry, nbh.rref_x, nbh.rref_y)
     kcopy(rx, ry, nbh.rref_x, nbh.rref_y; threads, blocks)
     nbh.last_build_step = step
+    nbh.valid = true
     return nbh
 end
 
 function update_neighbors_inplace!(nbh::StencilNeighborMatrix{T},
                                    rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1};
                                    box::Tuple{T,T,T}, step::Int=0) where {T<:AbstractFloat}
-    @assert nbh.D == 3
+    _validate_neighbor_arrays(nbh, rx, ry, rz)
+    nbh.valid = false
     _bin_particles!(nbh, rx, ry, rz, box)
+    nbh.valid = false
     fill!(nbh.counts, Int32(0))
     threads, blocks = _launchdims(Int(nbh.N))
     halfLx = T(0.5)*box[1]; halfLy = T(0.5)*box[2]; halfLz = T(0.5)*box[3]
@@ -196,9 +216,11 @@ function update_neighbors_inplace!(nbh::StencilNeighborMatrix{T},
     if nbh.rref_z === nothing
         nbh.rref_z = CUDA.CuArray{T}(undef, Int(nbh.N))
     end
+    _check_neighbor_capacity!(nbh)
     kcopy = CUDA.@cuda launch=false _kernel_copy_refs_3d!(rx, ry, rz, nbh.rref_x, nbh.rref_y, nbh.rref_z::CuArray{T,1})
     kcopy(rx, ry, rz, nbh.rref_x, nbh.rref_y, nbh.rref_z::CuArray{T,1}; threads, blocks)
     nbh.last_build_step = step
+    nbh.valid = true
     return nbh
 end
 
@@ -216,6 +238,7 @@ the values tuned in the 2D/3D production scripts (skin between 0.3 and 0.5 σ).
 """
 function update_needed!(nbh::CellListNeighborMatrix{T}, rx::CuArray{T,1}, ry::CuArray{T,1};
                         skin::Real, Lx::T, Ly::T, step::Int) where {T<:AbstractFloat}
+    nbh.valid || return true
     threads, blocks = _launchdims(length(rx))
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly
     k = CUDA.@cuda launch=false _kernel_accum_dr2_2d!(rx, ry, nbh.rref_x, nbh.rref_y, nbh.dr2,
@@ -238,6 +261,7 @@ end
 
 function update_needed!(nbh::CellListNeighborMatrix{T}, rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1};
                         skin::Real, Lx::T, Ly::T, Lz::T, step::Int) where {T<:AbstractFloat}
+    nbh.valid || return true
     threads, blocks = _launchdims(length(rx))
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly; halfLz = T(0.5)*Lz
     k = CUDA.@cuda launch=false _kernel_accum_dr2_3d!(rx, ry, rz,

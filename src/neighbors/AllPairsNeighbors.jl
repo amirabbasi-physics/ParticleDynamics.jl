@@ -18,6 +18,8 @@ struct AllPairsNeighborMatrix{T<:AbstractFloat} <: AbstractNeighborMatrix
     D::Int32
 end
 
+@inline require_valid_neighbors(::AllPairsNeighborMatrix) = nothing
+
 """
     build_neighbors_allpairs!(rx, ry[ , rz]; box, cutoff, cap, skin)
 

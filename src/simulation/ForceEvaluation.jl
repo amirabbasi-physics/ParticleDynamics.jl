@@ -189,6 +189,17 @@ function evaluate_forces_into_f!(st::SimulationState{T},
         external_forces!(st.external_potential, st, compute_energy)
         return nothing
     end
+    # build_simulation allocates an unbuilt list until real coordinates exist.
+    # A failed capacity check also leaves the list invalid and must never be
+    # followed by an unchecked force read.
+    if st.nbh isa NeighborLists.CellListNeighborMatrix && !st.nbh.valid
+        if _is_3d(st)
+            NeighborLists.update_neighbors_inplace!(st.nbh, st.rx, st.ry, st.rz; box=st.box3, step=st.step)
+        else
+            NeighborLists.update_neighbors_inplace!(st.nbh, st.rx, st.ry; box=st.box2, step=st.step)
+        end
+        _collisions_reinit_on_rebuild!(st)
+    end
     if _is_3d(st)
         _compute_final_nonbonded3!(st, compute_energy)
         _finalize_force_eval3!(st, compute_energy, freeze_spring)

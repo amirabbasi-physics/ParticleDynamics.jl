@@ -1,7 +1,7 @@
-# No-energy (no Epot) CSR variants
+# No-energy (no Epot) ELL variants
 # ───────────────────────────────────────────────────────────────────────────────
 
-function _lj2_csr_noE_kernel!(
+function _lj2_ell_noE_kernel!(
     rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
     fx::CuDeviceVector{T}, fy::CuDeviceVector{T},
     neighbors_index::CuDeviceVector{Int32},
@@ -38,7 +38,7 @@ function _lj2_csr_noE_kernel!(
     return
 end
 
-function _lj3_csr_noE_kernel!(
+function _lj3_ell_noE_kernel!(
     rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
     fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, fz::CuDeviceVector{T},
     neighbors_index::CuDeviceVector{Int32},
@@ -81,6 +81,7 @@ function lj_forces_soa_noE!(rx::CuArray{T,1}, ry::CuArray{T,1},
                             fx::CuArray{T,1}, fy::CuArray{T,1},
                             nbh::NeighborLists.NeighborMatrix{T},
                             box::Definitions.Box2{T}, params::Definitions.LJParams{T}) where {T<:AbstractFloat}
+    NeighborLists.require_valid_neighbors(nbh)
     N = length(rx)
     threads = (N < 50_000) ? 64 : ((N < 200_000) ? 128 : 256)
     blocks  = cld(N, threads)
@@ -89,7 +90,7 @@ function lj_forces_soa_noE!(rx::CuArray{T,1}, ry::CuArray{T,1},
     Lx = box[1]; Ly = box[2]
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly
 
-    k = CUDA.@cuda launch=false _lj2_csr_noE_kernel!(
+    k = CUDA.@cuda launch=false _lj2_ell_noE_kernel!(
         rx, ry, fx, fy,
         nbh.neighbors_index, nbh.neighbors_flat, nbh.counts, nbh.cap,
         Lx, Ly, halfLx, halfLy,
@@ -106,6 +107,7 @@ function lj_forces_soa_noE!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1}
                             fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1},
                             nbh::NeighborLists.NeighborMatrix{T},
                             box::Definitions.Box3{T}, params::Definitions.LJParams{T}) where {T<:AbstractFloat}
+    NeighborLists.require_valid_neighbors(nbh)
     N = length(rx)
     threads = (N < 50_000) ? 64 : ((N < 200_000) ? 128 : 256)
     blocks  = cld(N, threads)
@@ -114,7 +116,7 @@ function lj_forces_soa_noE!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1}
     Lx = box[1]; Ly = box[2]; Lz = box[3]
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly; halfLz = T(0.5)*Lz
 
-    k = CUDA.@cuda launch=false _lj3_csr_noE_kernel!(
+    k = CUDA.@cuda launch=false _lj3_ell_noE_kernel!(
         rx, ry, rz, fx, fy, fz,
         nbh.neighbors_index, nbh.neighbors_flat, nbh.counts, nbh.cap,
         Lx, Ly, Lz, halfLx, halfLy, halfLz,
@@ -127,11 +129,12 @@ function lj_forces_soa_noE!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1}
     return nothing
 end
 
-# Overloads for stencil neighbor lists (reuse the same CSR kernels)
+# Overloads for stencil neighbor lists (reuse the same ELL kernels)
 function lj_forces_soa_noE!(rx::CuArray{T,1}, ry::CuArray{T,1},
                             fx::CuArray{T,1}, fy::CuArray{T,1},
                             nbh::NeighborLists.StencilNeighborMatrix{T},
                             box::Definitions.Box2{T}, params::Definitions.LJParams{T}) where {T<:AbstractFloat}
+    NeighborLists.require_valid_neighbors(nbh)
     N = length(rx)
     threads = (N < 50_000) ? 64 : ((N < 200_000) ? 128 : 256)
     blocks  = cld(N, threads)
@@ -140,7 +143,7 @@ function lj_forces_soa_noE!(rx::CuArray{T,1}, ry::CuArray{T,1},
     Lx = box[1]; Ly = box[2]
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly
 
-    k = CUDA.@cuda launch=false _lj2_csr_noE_kernel!(
+    k = CUDA.@cuda launch=false _lj2_ell_noE_kernel!(
         rx, ry, fx, fy,
         nbh.neighbors_index, nbh.neighbors_flat, nbh.counts, nbh.cap,
         Lx, Ly, halfLx, halfLy,
@@ -157,6 +160,7 @@ function lj_forces_soa_noE!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1}
                             fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1},
                             nbh::NeighborLists.StencilNeighborMatrix{T},
                             box::Definitions.Box3{T}, params::Definitions.LJParams{T}) where {T<:AbstractFloat}
+    NeighborLists.require_valid_neighbors(nbh)
     N = length(rx)
     threads = (N < 50_000) ? 64 : ((N < 200_000) ? 128 : 256)
     blocks  = cld(N, threads)
@@ -165,7 +169,7 @@ function lj_forces_soa_noE!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1}
     Lx = box[1]; Ly = box[2]; Lz = box[3]
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly; halfLz = T(0.5)*Lz
 
-    k = CUDA.@cuda launch=false _lj3_csr_noE_kernel!(
+    k = CUDA.@cuda launch=false _lj3_ell_noE_kernel!(
         rx, ry, rz, fx, fy, fz,
         nbh.neighbors_index, nbh.neighbors_flat, nbh.counts, nbh.cap,
         Lx, Ly, Lz, halfLx, halfLy, halfLz,
@@ -180,10 +184,10 @@ end
 
 
 # ───────────────────────────────────────────────────────────────────────────────
-# New (fast) CSR kernels — for NeighborLists.NeighborMatrix (your “newer” NL)
+# New (fast) ELL kernels — for NeighborLists.NeighborMatrix (your “newer” NL)
 # ───────────────────────────────────────────────────────────────────────────────
 
-function _lj2_csr_kernel!(
+function _lj2_ell_kernel!(
     rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
     fx::CuDeviceVector{T}, fy::CuDeviceVector{T},
     Epot::CuDeviceVector{T},
@@ -217,7 +221,7 @@ function _lj2_csr_kernel!(
     return
 end
 
-function _lj2_csr_kernel_virial!(
+function _lj2_ell_kernel_virial!(
     rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
     fx::CuDeviceVector{T}, fy::CuDeviceVector{T},
     Epot::CuDeviceVector{T}, V::CuDeviceMatrix{T},
@@ -251,7 +255,7 @@ function _lj2_csr_kernel_virial!(
     return
 end
 
-function _lj3_csr_kernel!(
+function _lj3_ell_kernel!(
     rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
     fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, fz::CuDeviceVector{T},
     Epot::CuDeviceVector{T},
@@ -286,7 +290,7 @@ function _lj3_csr_kernel!(
     return
 end
 
-function _lj3_csr_kernel_virial!(
+function _lj3_ell_kernel_virial!(
     rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
     fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, fz::CuDeviceVector{T},
     Epot::CuDeviceVector{T}, V::CuDeviceMatrix{T},
@@ -323,7 +327,7 @@ function _lj3_csr_kernel_virial!(
     return
 end
 
-function _lj2_csr_kernel_excl!(
+function _lj2_ell_kernel_excl!(
     rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
     fx::CuDeviceVector{T}, fy::CuDeviceVector{T},
     Epot::CuDeviceVector{T},
@@ -360,7 +364,7 @@ function _lj2_csr_kernel_excl!(
     return
 end
 
-function _lj2_csr_kernel_excl_virial!(
+function _lj2_ell_kernel_excl_virial!(
     rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
     fx::CuDeviceVector{T}, fy::CuDeviceVector{T},
     Epot::CuDeviceVector{T}, V::CuDeviceMatrix{T},
@@ -396,7 +400,7 @@ function _lj2_csr_kernel_excl_virial!(
     return
 end
 
-function _lj3_csr_kernel_excl!(
+function _lj3_ell_kernel_excl!(
     rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
     fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, fz::CuDeviceVector{T},
     Epot::CuDeviceVector{T},
@@ -433,7 +437,7 @@ function _lj3_csr_kernel_excl!(
     return
 end
 
-function _lj3_csr_kernel_excl_virial!(
+function _lj3_ell_kernel_excl_virial!(
     rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
     fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, fz::CuDeviceVector{T},
     Epot::CuDeviceVector{T}, V::CuDeviceMatrix{T},
@@ -472,7 +476,7 @@ function _lj3_csr_kernel_excl_virial!(
     return
 end
 
-function _lj2_csr_noE_kernel_excl!(
+function _lj2_ell_noE_kernel_excl!(
     rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
     fx::CuDeviceVector{T}, fy::CuDeviceVector{T},
     neighbors_index::CuDeviceVector{Int32},
@@ -507,7 +511,7 @@ function _lj2_csr_noE_kernel_excl!(
     return
 end
 
-function _lj3_csr_noE_kernel_excl!(
+function _lj3_ell_noE_kernel_excl!(
     rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
     fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, fz::CuDeviceVector{T},
     neighbors_index::CuDeviceVector{Int32},
@@ -610,12 +614,13 @@ end
 # Public API (dispatch to the correct path automatically)
 # ───────────────────────────────────────────────────────────────────────────────
 
-# ---- 2D, CSR (NeighborLists.NeighborMatrix)
+# ---- 2D, ELL (NeighborLists.NeighborMatrix)
 function lj_forces_soa!(rx::CuArray{T,1}, ry::CuArray{T,1},
                         fx::CuArray{T,1}, fy::CuArray{T,1},
                         Epot::CuArray{T,1},
                         nbh::NeighborLists.NeighborMatrix{T},
                         box::Definitions.Box2{T}, params::Definitions.LJParams{T}) where {T<:AbstractFloat}
+    NeighborLists.require_valid_neighbors(nbh)
     N = length(rx)
     threads = (N < 100_000) ? 128 : 256
     blocks  = cld(N, threads)
@@ -624,7 +629,7 @@ function lj_forces_soa!(rx::CuArray{T,1}, ry::CuArray{T,1},
     Lx = T(box[1]); Ly = T(box[2])
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly
 
-    k = CUDA.@cuda launch=false _lj2_csr_kernel!(
+    k = CUDA.@cuda launch=false _lj2_ell_kernel!(
         rx, ry, fx, fy, Epot,
         nbh.neighbors_index, nbh.neighbors_flat, nbh.counts, nbh.cap,
         Lx, Ly, halfLx, halfLy,
@@ -642,13 +647,14 @@ function lj_forces_soa!(rx::CuArray{T,1}, ry::CuArray{T,1},
                         Epot::CuArray{T,1}, V::CuArray{T,2},
                         nbh::NeighborLists.NeighborMatrix{T},
                         box::Definitions.Box2{T}, params::Definitions.LJParams{T}) where {T<:AbstractFloat}
+    NeighborLists.require_valid_neighbors(nbh)
     N = length(rx)
     threads = (N < 100_000) ? 128 : 256
     blocks  = cld(N, threads)
     cutoff2 = params.rcut * params.rcut
     Lx = T(box[1]); Ly = T(box[2])
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly
-    k = CUDA.@cuda launch=false _lj2_csr_kernel_virial!(
+    k = CUDA.@cuda launch=false _lj2_ell_kernel_virial!(
         rx, ry, fx, fy, Epot, V,
         nbh.neighbors_index, nbh.neighbors_flat, nbh.counts, nbh.cap,
         Lx, Ly, halfLx, halfLy,
@@ -661,12 +667,13 @@ function lj_forces_soa!(rx::CuArray{T,1}, ry::CuArray{T,1},
     return nothing
 end
 
-# ---- 3D, CSR (NeighborLists.NeighborMatrix)
+# ---- 3D, ELL (NeighborLists.NeighborMatrix)
 function lj_forces_soa!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
                         fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1},
                         Epot::CuArray{T,1},
                         nbh::NeighborLists.NeighborMatrix{T},
                         box::Definitions.Box3{T}, params::Definitions.LJParams{T}) where {T<:AbstractFloat}
+    NeighborLists.require_valid_neighbors(nbh)
     N = length(rx)
     threads = (N < 100_000) ? 128 : 256
     blocks  = cld(N, threads)
@@ -675,7 +682,7 @@ function lj_forces_soa!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
     Lx = T(box[1]); Ly = T(box[2]); Lz = T(box[3])
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly; halfLz = T(0.5)*Lz
 
-    k = CUDA.@cuda launch=false _lj3_csr_kernel!(
+    k = CUDA.@cuda launch=false _lj3_ell_kernel!(
         rx, ry, rz, fx, fy, fz, Epot,
         nbh.neighbors_index, nbh.neighbors_flat, nbh.counts, nbh.cap,
         Lx, Ly, Lz, halfLx, halfLy, halfLz,
@@ -693,13 +700,14 @@ function lj_forces_soa!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
                         Epot::CuArray{T,1}, V::CuArray{T,2},
                         nbh::NeighborLists.NeighborMatrix{T},
                         box::Definitions.Box3{T}, params::Definitions.LJParams{T}) where {T<:AbstractFloat}
+    NeighborLists.require_valid_neighbors(nbh)
     N = length(rx)
     threads = (N < 100_000) ? 128 : 256
     blocks  = cld(N, threads)
     cutoff2 = params.rcut * params.rcut
     Lx = T(box[1]); Ly = T(box[2]); Lz = T(box[3])
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly; halfLz = T(0.5)*Lz
-    k = CUDA.@cuda launch=false _lj3_csr_kernel_virial!(
+    k = CUDA.@cuda launch=false _lj3_ell_kernel_virial!(
         rx, ry, rz, fx, fy, fz, Epot, V,
         nbh.neighbors_index, nbh.neighbors_flat, nbh.counts, nbh.cap,
         Lx, Ly, Lz, halfLx, halfLy, halfLz,
@@ -712,12 +720,13 @@ function lj_forces_soa!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
     return nothing
 end
 
-# Overloads for stencil neighbor lists (CSR paths)
+# Overloads for stencil neighbor lists (ELL paths)
 function lj_forces_soa!(rx::CuArray{T,1}, ry::CuArray{T,1},
                         fx::CuArray{T,1}, fy::CuArray{T,1},
                         Epot::CuArray{T,1},
                         nbh::NeighborLists.StencilNeighborMatrix,
                         box::Definitions.Box2{T}, params::Definitions.LJParams{T}) where {T<:AbstractFloat}
+    NeighborLists.require_valid_neighbors(nbh)
     N = length(rx)
     threads = (N < 100_000) ? 128 : 256
     blocks  = cld(N, threads)
@@ -726,7 +735,7 @@ function lj_forces_soa!(rx::CuArray{T,1}, ry::CuArray{T,1},
     Lx = T(box[1]); Ly = T(box[2])
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly
 
-    k = CUDA.@cuda launch=false _lj2_csr_kernel!(
+    k = CUDA.@cuda launch=false _lj2_ell_kernel!(
         rx, ry, fx, fy, Epot,
         nbh.neighbors_index, nbh.neighbors_flat, nbh.counts, nbh.cap,
         Lx, Ly, halfLx, halfLy,
@@ -744,13 +753,14 @@ function lj_forces_soa!(rx::CuArray{T,1}, ry::CuArray{T,1},
                         Epot::CuArray{T,1}, V::CuArray{T,2},
                         nbh::NeighborLists.StencilNeighborMatrix,
                         box::Definitions.Box2{T}, params::Definitions.LJParams{T}) where {T<:AbstractFloat}
+    NeighborLists.require_valid_neighbors(nbh)
     N = length(rx)
     threads = (N < 100_000) ? 128 : 256
     blocks  = cld(N, threads)
     cutoff2 = params.rcut * params.rcut
     Lx = T(box[1]); Ly = T(box[2])
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly
-    k = CUDA.@cuda launch=false _lj2_csr_kernel_virial!(
+    k = CUDA.@cuda launch=false _lj2_ell_kernel_virial!(
         rx, ry, fx, fy, Epot, V,
         nbh.neighbors_index, nbh.neighbors_flat, nbh.counts, nbh.cap,
         Lx, Ly, halfLx, halfLy,
@@ -768,6 +778,7 @@ function lj_forces_soa!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
                         Epot::CuArray{T,1},
                         nbh::NeighborLists.StencilNeighborMatrix,
                         box::Definitions.Box3{T}, params::Definitions.LJParams{T}) where {T<:AbstractFloat}
+    NeighborLists.require_valid_neighbors(nbh)
     N = length(rx)
     threads = (N < 100_000) ? 128 : 256
     blocks  = cld(N, threads)
@@ -776,7 +787,7 @@ function lj_forces_soa!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
     Lx = T(box[1]); Ly = T(box[2]); Lz = T(box[3])
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly; halfLz = T(0.5)*Lz
 
-    k = CUDA.@cuda launch=false _lj3_csr_kernel!(
+    k = CUDA.@cuda launch=false _lj3_ell_kernel!(
         rx, ry, rz, fx, fy, fz, Epot,
         nbh.neighbors_index, nbh.neighbors_flat, nbh.counts, nbh.cap,
         Lx, Ly, Lz, halfLx, halfLy, halfLz,
@@ -794,13 +805,14 @@ function lj_forces_soa!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
                         Epot::CuArray{T,1}, V::CuArray{T,2},
                         nbh::NeighborLists.StencilNeighborMatrix,
                         box::Definitions.Box3{T}, params::Definitions.LJParams{T}) where {T<:AbstractFloat}
+    NeighborLists.require_valid_neighbors(nbh)
     N = length(rx)
     threads = (N < 100_000) ? 128 : 256
     blocks  = cld(N, threads)
     cutoff2 = params.rcut * params.rcut
     Lx = T(box[1]); Ly = T(box[2]); Lz = T(box[3])
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly; halfLz = T(0.5)*Lz
-    k = CUDA.@cuda launch=false _lj3_csr_kernel_virial!(
+    k = CUDA.@cuda launch=false _lj3_ell_kernel_virial!(
         rx, ry, rz, fx, fy, fz, Epot, V,
         nbh.neighbors_index, nbh.neighbors_flat, nbh.counts, nbh.cap,
         Lx, Ly, Lz, halfLx, halfLy, halfLz,
@@ -820,6 +832,7 @@ function lj_forces_soa_excl!(rx::CuArray{T,1}, ry::CuArray{T,1},
                              nbh::NeighborLists.NeighborMatrix{T},
                              bonds::BondedForces.BondList,
                              box::Definitions.Box2{T}, params::Definitions.LJParams{T}) where {T<:AbstractFloat}
+    NeighborLists.require_valid_neighbors(nbh)
     N = length(rx)
     threads = (N < 100_000) ? 128 : 256
     blocks  = cld(N, threads)
@@ -828,7 +841,7 @@ function lj_forces_soa_excl!(rx::CuArray{T,1}, ry::CuArray{T,1},
     Lx = T(box[1]); Ly = T(box[2])
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly
 
-    k = CUDA.@cuda launch=false _lj2_csr_kernel_excl!(
+    k = CUDA.@cuda launch=false _lj2_ell_kernel_excl!(
         rx, ry, fx, fy, Epot,
         nbh.neighbors_index, nbh.neighbors_flat, nbh.counts, nbh.cap,
         bonds.index, bonds.flat, bonds.counts,
@@ -849,13 +862,14 @@ function lj_forces_soa_excl!(rx::CuArray{T,1}, ry::CuArray{T,1},
                              nbh::NeighborLists.NeighborMatrix{T},
                              bonds::BondedForces.BondList,
                              box::Definitions.Box2{T}, params::Definitions.LJParams{T}) where {T<:AbstractFloat}
+    NeighborLists.require_valid_neighbors(nbh)
     N = length(rx)
     threads = (N < 100_000) ? 128 : 256
     blocks  = cld(N, threads)
     cutoff2 = params.rcut * params.rcut
     Lx = T(box[1]); Ly = T(box[2])
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly
-    k = CUDA.@cuda launch=false _lj2_csr_kernel_excl_virial!(
+    k = CUDA.@cuda launch=false _lj2_ell_kernel_excl_virial!(
         rx, ry, fx, fy, Epot, V,
         nbh.neighbors_index, nbh.neighbors_flat, nbh.counts, nbh.cap,
         bonds.index, bonds.flat, bonds.counts,
@@ -876,6 +890,7 @@ function lj_forces_soa_excl!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1
                              nbh::NeighborLists.NeighborMatrix{T},
                              bonds::BondedForces.BondList,
                              box::Definitions.Box3{T}, params::Definitions.LJParams{T}) where {T<:AbstractFloat}
+    NeighborLists.require_valid_neighbors(nbh)
     N = length(rx)
     threads = (N < 100_000) ? 128 : 256
     blocks  = cld(N, threads)
@@ -884,7 +899,7 @@ function lj_forces_soa_excl!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1
     Lx = T(box[1]); Ly = T(box[2]); Lz = T(box[3])
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly; halfLz = T(0.5)*Lz
 
-    k = CUDA.@cuda launch=false _lj3_csr_kernel_excl!(
+    k = CUDA.@cuda launch=false _lj3_ell_kernel_excl!(
         rx, ry, rz, fx, fy, fz, Epot,
         nbh.neighbors_index, nbh.neighbors_flat, nbh.counts, nbh.cap,
         bonds.index, bonds.flat, bonds.counts,
@@ -905,13 +920,14 @@ function lj_forces_soa_excl!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1
                              nbh::NeighborLists.NeighborMatrix{T},
                              bonds::BondedForces.BondList,
                              box::Definitions.Box3{T}, params::Definitions.LJParams{T}) where {T<:AbstractFloat}
+    NeighborLists.require_valid_neighbors(nbh)
     N = length(rx)
     threads = (N < 100_000) ? 128 : 256
     blocks  = cld(N, threads)
     cutoff2 = params.rcut * params.rcut
     Lx = T(box[1]); Ly = T(box[2]); Lz = T(box[3])
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly; halfLz = T(0.5)*Lz
-    k = CUDA.@cuda launch=false _lj3_csr_kernel_excl_virial!(
+    k = CUDA.@cuda launch=false _lj3_ell_kernel_excl_virial!(
         rx, ry, rz, fx, fy, fz, Epot, V,
         nbh.neighbors_index, nbh.neighbors_flat, nbh.counts, nbh.cap,
         bonds.index, bonds.flat, bonds.counts,
@@ -933,13 +949,14 @@ function lj_forces_soa_excl!(rx::CuArray{T,1}, ry::CuArray{T,1},
                              nbh::NeighborLists.StencilNeighborMatrix,
                              bonds::BondedForces.BondList,
                              box::Definitions.Box2{T}, params::Definitions.LJParams{T}) where {T<:AbstractFloat}
+    NeighborLists.require_valid_neighbors(nbh)
     N = length(rx)
     threads = (N < 100_000) ? 128 : 256
     blocks  = cld(N, threads)
     cutoff2 = params.rcut * params.rcut
     Lx = T(box[1]); Ly = T(box[2])
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly
-    k = CUDA.@cuda launch=false _lj2_csr_kernel_excl!(
+    k = CUDA.@cuda launch=false _lj2_ell_kernel_excl!(
         rx, ry, fx, fy, Epot,
         nbh.neighbors_index, nbh.neighbors_flat, nbh.counts, nbh.cap,
         bonds.index, bonds.flat, bonds.counts,
@@ -960,13 +977,14 @@ function lj_forces_soa_excl!(rx::CuArray{T,1}, ry::CuArray{T,1},
                              nbh::NeighborLists.StencilNeighborMatrix,
                              bonds::BondedForces.BondList,
                              box::Definitions.Box2{T}, params::Definitions.LJParams{T}) where {T<:AbstractFloat}
+    NeighborLists.require_valid_neighbors(nbh)
     N = length(rx)
     threads = (N < 100_000) ? 128 : 256
     blocks  = cld(N, threads)
     cutoff2 = params.rcut * params.rcut
     Lx = T(box[1]); Ly = T(box[2])
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly
-    k = CUDA.@cuda launch=false _lj2_csr_kernel_excl_virial!(
+    k = CUDA.@cuda launch=false _lj2_ell_kernel_excl_virial!(
         rx, ry, fx, fy, Epot, V,
         nbh.neighbors_index, nbh.neighbors_flat, nbh.counts, nbh.cap,
         bonds.index, bonds.flat, bonds.counts,
@@ -987,13 +1005,14 @@ function lj_forces_soa_excl!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1
                              nbh::NeighborLists.StencilNeighborMatrix,
                              bonds::BondedForces.BondList,
                              box::Definitions.Box3{T}, params::Definitions.LJParams{T}) where {T<:AbstractFloat}
+    NeighborLists.require_valid_neighbors(nbh)
     N = length(rx)
     threads = (N < 100_000) ? 128 : 256
     blocks  = cld(N, threads)
     cutoff2 = params.rcut * params.rcut
     Lx = T(box[1]); Ly = T(box[2]); Lz = T(box[3])
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly; halfLz = T(0.5)*Lz
-    k = CUDA.@cuda launch=false _lj3_csr_kernel_excl!(
+    k = CUDA.@cuda launch=false _lj3_ell_kernel_excl!(
         rx, ry, rz, fx, fy, fz, Epot,
         nbh.neighbors_index, nbh.neighbors_flat, nbh.counts, nbh.cap,
         bonds.index, bonds.flat, bonds.counts,
@@ -1014,13 +1033,14 @@ function lj_forces_soa_excl!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1
                              nbh::NeighborLists.StencilNeighborMatrix,
                              bonds::BondedForces.BondList,
                              box::Definitions.Box3{T}, params::Definitions.LJParams{T}) where {T<:AbstractFloat}
+    NeighborLists.require_valid_neighbors(nbh)
     N = length(rx)
     threads = (N < 100_000) ? 128 : 256
     blocks  = cld(N, threads)
     cutoff2 = params.rcut * params.rcut
     Lx = T(box[1]); Ly = T(box[2]); Lz = T(box[3])
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly; halfLz = T(0.5)*Lz
-    k = CUDA.@cuda launch=false _lj3_csr_kernel_excl_virial!(
+    k = CUDA.@cuda launch=false _lj3_ell_kernel_excl_virial!(
         rx, ry, rz, fx, fy, fz, Epot, V,
         nbh.neighbors_index, nbh.neighbors_flat, nbh.counts, nbh.cap,
         bonds.index, bonds.flat, bonds.counts,
@@ -1041,13 +1061,14 @@ function lj_forces_soa_noE_excl!(rx::CuArray{T,1}, ry::CuArray{T,1},
                                  nbh::NeighborLists.NeighborMatrix{T},
                                  bonds::BondedForces.BondList,
                                  box::Definitions.Box2{T}, params::Definitions.LJParams{T}) where {T<:AbstractFloat}
+    NeighborLists.require_valid_neighbors(nbh)
     N = length(rx)
     threads = (N < 50_000) ? 64 : ((N < 200_000) ? 128 : 256)
     blocks  = cld(N, threads)
     cutoff2 = params.rcut * params.rcut
     Lx = T(box[1]); Ly = T(box[2])
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly
-    k = CUDA.@cuda launch=false _lj2_csr_noE_kernel_excl!(
+    k = CUDA.@cuda launch=false _lj2_ell_noE_kernel_excl!(
         rx, ry, fx, fy,
         nbh.neighbors_index, nbh.neighbors_flat, nbh.counts, nbh.cap,
         bonds.index, bonds.flat, bonds.counts,
@@ -1067,13 +1088,14 @@ function lj_forces_soa_noE_excl!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray
                                  nbh::NeighborLists.NeighborMatrix{T},
                                  bonds::BondedForces.BondList,
                                  box::Definitions.Box3{T}, params::Definitions.LJParams{T}) where {T<:AbstractFloat}
+    NeighborLists.require_valid_neighbors(nbh)
     N = length(rx)
     threads = (N < 50_000) ? 64 : ((N < 200_000) ? 128 : 256)
     blocks  = cld(N, threads)
     cutoff2 = params.rcut * params.rcut
     Lx = T(box[1]); Ly = T(box[2]); Lz = T(box[3])
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly; halfLz = T(0.5)*Lz
-    k = CUDA.@cuda launch=false _lj3_csr_noE_kernel_excl!(
+    k = CUDA.@cuda launch=false _lj3_ell_noE_kernel_excl!(
         rx, ry, rz, fx, fy, fz,
         nbh.neighbors_index, nbh.neighbors_flat, nbh.counts, nbh.cap,
         bonds.index, bonds.flat, bonds.counts,
@@ -1093,13 +1115,14 @@ function lj_forces_soa_noE_excl!(rx::CuArray{T,1}, ry::CuArray{T,1},
                                  nbh::NeighborLists.StencilNeighborMatrix,
                                  bonds::BondedForces.BondList,
                                  box::Definitions.Box2{T}, params::Definitions.LJParams{T}) where {T<:AbstractFloat}
+    NeighborLists.require_valid_neighbors(nbh)
     N = length(rx)
     threads = (N < 50_000) ? 64 : ((N < 200_000) ? 128 : 256)
     blocks  = cld(N, threads)
     cutoff2 = params.rcut * params.rcut
     Lx = T(box[1]); Ly = T(box[2])
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly
-    k = CUDA.@cuda launch=false _lj2_csr_noE_kernel_excl!(
+    k = CUDA.@cuda launch=false _lj2_ell_noE_kernel_excl!(
         rx, ry, fx, fy,
         nbh.neighbors_index, nbh.neighbors_flat, nbh.counts, nbh.cap,
         bonds.index, bonds.flat, bonds.counts,
@@ -1119,13 +1142,14 @@ function lj_forces_soa_noE_excl!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray
                                  nbh::NeighborLists.StencilNeighborMatrix,
                                  bonds::BondedForces.BondList,
                                  box::Definitions.Box3{T}, params::Definitions.LJParams{T}) where {T<:AbstractFloat}
+    NeighborLists.require_valid_neighbors(nbh)
     N = length(rx)
     threads = (N < 50_000) ? 64 : ((N < 200_000) ? 128 : 256)
     blocks  = cld(N, threads)
     cutoff2 = params.rcut * params.rcut
     Lx = T(box[1]); Ly = T(box[2]); Lz = T(box[3])
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly; halfLz = T(0.5)*Lz
-    k = CUDA.@cuda launch=false _lj3_csr_noE_kernel_excl!(
+    k = CUDA.@cuda launch=false _lj3_ell_noE_kernel_excl!(
         rx, ry, rz, fx, fy, fz,
         nbh.neighbors_index, nbh.neighbors_flat, nbh.counts, nbh.cap,
         bonds.index, bonds.flat, bonds.counts,

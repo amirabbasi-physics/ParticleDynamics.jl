@@ -370,7 +370,11 @@
         noise_scale = 2.0
         mass = 1.0
 
-        N = 512
+        # At these short, correlated lags, averaging three samples does not
+        # replace an independent particle ensemble. For two Gaussian velocity
+        # components the near-zero-lag relative sampling error is ≈1/sqrt(N):
+        # 512 particles gave 4.4%, too close to the 5% accuracy threshold.
+        N = 8192
         burn_steps = 10000
         steps = 60
         sample_stride = 20

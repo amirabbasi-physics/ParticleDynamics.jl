@@ -49,6 +49,11 @@ st = build_simulation(
     precision=:f32,
 )
 
+# Assign a nonoverlapping configuration before the first step. The low-level
+# constructor allocates coordinates and defers building the neighbor list.
+copyto!(st.rx, Float32[2 * mod(i - 1, 8) - 7 for i in 1:N])
+copyto!(st.ry, Float32[2 * ((i - 1) ÷ 8) - 7 for i in 1:N])
+
 # Preferred stepping path: keep an explicit integrator spec and reuse it.
 vv = velocityverlet(st; gamma=50.0f0, temperature=1.0f0, dt=dt)
 for _ in 1:200

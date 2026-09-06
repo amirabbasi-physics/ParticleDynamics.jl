@@ -48,14 +48,24 @@
         set_velocities_3d!(st, vx0, vy0, vz0)
 
         spec = SimulationCore.csvr(st; temperature=1.0f0, tau=0.2f0)
-        for _ in 1:800
+        # Equilibrate for 10 thermostat times. A single final temperature after
+        # only 4 tau still has both relaxation bias and canonical fluctuations.
+        for _ in 1:2000
             SimulationCore.step!(st, spec, dt; compute_energy=false)
         end
 
         dof = 3 * N
-        Tinst = Float64(2f0 * CUDA.sum(st.Ekin) / Float32(dof))
-        @test isfinite(Tinst)
-        @test abs(Tinst - 1.0) < 0.35
+        temperatures = Float64[]
+        # Forty samples separated by tau: canonical variance is 2/dof and
+        # residual correlation gives a mean standard error of about 0.024.
+        for _ in 1:40
+            for _ in 1:200
+                SimulationCore.step!(st, spec, dt; compute_energy=false)
+            end
+            push!(temperatures, Float64(2f0 * CUDA.sum(st.Ekin) / Float32(dof)))
+        end
+        @test all(isfinite, temperatures)
+        @test abs(sum(temperatures) / length(temperatures) - 1.0) < 0.10
     end
 
     @testset "Two-bath filtered temperature control" begin
