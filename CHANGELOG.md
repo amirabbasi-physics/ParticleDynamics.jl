@@ -2,9 +2,25 @@
 
 All notable user-visible changes to this project will be documented in this file.
 
-## Unreleased
+## Unreleased — 0.2.0-DEV
+
+This development version includes validation and internal-layout compatibility
+changes. It has not been tagged or published. `Project.toml` and `CITATION.cff`
+now share this version; dependency compatibility bounds are unchanged.
 
 ### Correctness and maintenance
+
+- Mixed per-particle sigma LJ/WCA forces now honor bonded exclusions and support
+  all-pairs traversal, including force-only, energy, and virial kernels.
+- Stochastic stepping and temperature/OU setters reject timesteps different
+  from the spec's cached timestep before changing physical state or coefficients.
+  Construct a new spec with the intended `dt`; raw parameter constructors must
+  also receive the correct timestep. All steps require finite, positive `dt`.
+- FENE evaluations reject nonfinite or overstretched bonds with `DomainError`
+  before accumulating bonded outputs. Removed the denominator clamp and improved
+  energy accuracy near zero extension. The domain guard adds a GPU kernel and
+  host synchronization to each FENE evaluation. Finite nonnegative `k` and a
+  finite positive representable `R0²` are required.
 
 - Force evaluation checks neighbor displacement after motion and at temporary
   midpoint coordinates, regardless of the step-boundary check interval.

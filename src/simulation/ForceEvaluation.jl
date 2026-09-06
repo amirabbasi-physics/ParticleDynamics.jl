@@ -112,7 +112,7 @@ function _nonbonded_interaction(st::SimulationState{T}) where {T<:AbstractFloat}
             return NonBondedInteractions.NonBondedInteraction(
                 NonBondedInteractions.LennardJonesPotential(),
                 NonBondedInteractions.MixedSigmaCoefficients(st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor),
-                NonBondedInteractions.NoExclusions(),
+                _nonbonded_exclusions(st),
             )
         end
         return NonBondedInteractions.NonBondedInteraction(
@@ -132,7 +132,7 @@ function _nonbonded_interaction(st::SimulationState{T}) where {T<:AbstractFloat}
             return NonBondedInteractions.NonBondedInteraction(
                 NonBondedInteractions.WCAPotential(),
                 NonBondedInteractions.MixedSigmaCoefficients(st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor),
-                NonBondedInteractions.NoExclusions(),
+                _nonbonded_exclusions(st),
             )
         end
         return NonBondedInteractions.NonBondedInteraction(

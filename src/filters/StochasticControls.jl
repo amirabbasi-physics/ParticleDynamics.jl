@@ -88,25 +88,27 @@ end
     set_temperature!(st, spec, dt, T; filter=All())
 
 Set the effective thermostat temperature through the integrator-owned
-`noise_scale` and `gamma` buffers.
+`noise_scale` and `gamma` buffers. `dt` must match the spec's cached timestep.
 """
 function set_temperature!(spec::IntegratorSpec{T}, dt::Real, temperature::Real) where {T<:AbstractFloat}
+    _noise_scale_view(spec) # Preserve the unsupported-integrator diagnostic.
+    SimulationCore._require_stochastic_dt!(spec.params, dt)
     Δt = convert(T, dt)
     Tval = convert(T, temperature)
     noise = _noise_scale_view(spec)
     gamma = _gamma_view(spec)
     @. noise = sqrt(T(2) * gamma * Tval * Δt)
-    _set_dt_view!(spec, Δt)
     _rebuild_single_mode_ou!(spec)
     return spec
 end
 
 function set_temperature!(spec::IntegratorSpec{T}, st::SimulationState, dt::Real, temperature::Real; filter::Filter=All()) where {T<:AbstractFloat}
+    _noise_scale_view(spec) # Preserve the unsupported-integrator diagnostic.
+    SimulationCore._require_stochastic_dt!(spec.params, dt)
     idx = resolve_gpu(filter, st)
     Δt = convert(T, dt)
     Tval = convert(T, temperature)
     _set_noise_from_gamma!(_noise_scale_view(spec), _gamma_view(spec), idx, Δt, Tval)
-    _set_dt_view!(spec, Δt)
     _rebuild_single_mode_ou!(spec)
     return idx
 end
@@ -194,12 +196,13 @@ function set_ou_spectrum!(spec::IntegratorSpec{T},
                           scales::Union{AbstractVector{<:Real},Real};
                           filter::Filter=All(),
                           dt::Real=_dt_view(spec)) where {T<:AbstractFloat}
+    _noise_scale_view(spec) # Preserve the unsupported-integrator diagnostic.
+    SimulationCore._require_stochastic_dt!(spec.params, dt)
     sel = selection(st, filter)
     backend = Backends.storage_backend(st)
     dtT = convert(T, dt)
     tau_vals, scale_vals = SimulationCore._canonical_mode_vectors(T, taus, scales)
     ou = SimulationCore._build_mode_ou(backend, T, sel.device, tau_vals, scale_vals, dtT)
-    _set_dt_view!(spec, dtT)
     _set_corr_time_view!(spec, nothing)
     _set_ou_view!(spec, ou)
     return spec
@@ -303,6 +306,7 @@ function set_temperature!(bp::BrownianIntegrators.BrownianParams{T}, st::Simulat
 end
 
 function set_temperature!(bp::BrownianIntegrators.BrownianParams{T}, st::SimulationState, dt::Real, temperature::Real, sel::Selection) where {T<:AbstractFloat}
+    SimulationCore._require_stochastic_dt!(bp, dt)
     Δt = convert(T, dt)
     Tval = convert(T, temperature)
     _set_noise_from_gamma!(bp.noise_scale, bp.gamma, sel.device, Δt, Tval)
@@ -310,6 +314,7 @@ function set_temperature!(bp::BrownianIntegrators.BrownianParams{T}, st::Simulat
 end
 
 function set_temperature!(bp::BrownianIntegrators.BrownianParams{T}, st::SimulationState, dt::Real, temperature::Real, idx::CuArray{Int32,1}) where {T<:AbstractFloat}
+    SimulationCore._require_stochastic_dt!(bp, dt)
     Δt = convert(T, dt)
     Tval = convert(T, temperature)
     _set_noise_from_gamma!(bp.noise_scale, bp.gamma, idx, Δt, Tval)

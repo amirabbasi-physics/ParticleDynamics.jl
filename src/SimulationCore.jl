@@ -449,7 +449,10 @@ end
 include("simulation/NHCStepper.jl")
 include("simulation/CSVRStepper.jl")
 
+using ..Definitions: _require_stochastic_dt!
+
 function validate_integrator_inputs!(spec::VVSpec{T}, st::SimulationState{T}, dt) where {T<:AbstractFloat}
+    _require_stochastic_dt!(spec.params, dt)
     _require_positive_inertial_mass!(st, string(integrator_name(spec)))
     return nothing
 end
@@ -460,17 +463,20 @@ function validate_integrator_inputs!(spec::NVESpec{T}, st::SimulationState{T}, d
 end
 
 function validate_integrator_inputs!(spec::Union{BAOABSpec,BAOASpec,GSMSpec}, st, dt)
+    _require_stochastic_dt!(spec.params, dt)
     _require_positive_gamma!(spec.params.gamma, string(integrator_name(spec)))
     _require_positive_inertial_mass!(st, string(integrator_name(spec)))
     return nothing
 end
 
 function validate_integrator_inputs!(spec::BrownianSpec, st, dt)
+    _require_stochastic_dt!(spec.params, dt)
     _require_positive_gamma!(spec.params.gamma, "Brownian midpoint")
     return nothing
 end
 
 function validate_integrator_inputs!(spec::EMSpec, st, dt)
+    _require_stochastic_dt!(spec.params, dt)
     _require_positive_gamma!(spec.params.gamma, "Euler-Maruyama")
     return nothing
 end

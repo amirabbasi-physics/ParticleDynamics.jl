@@ -30,7 +30,11 @@ makedocs(
     ],
 )
 
-deploydocs(
-    repo="github.com/amirabbasi-physics/ParticleDynamics.jl",
-    devbranch="master",
-)
+# Local documentation validation only builds. CI retains the existing
+# Documenter deployment policy (including its own branch/PR checks).
+if get(ENV, "CI", "false") == "true"
+    deploydocs(
+        repo="github.com/amirabbasi-physics/ParticleDynamics.jl",
+        devbranch="master",
+    )
+end

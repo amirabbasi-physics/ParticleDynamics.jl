@@ -41,6 +41,35 @@ for _ in 1:100
 end
 ```
 
+## Timestep consistency
+
+`step!` and `step_graph!` require a finite positive timestep. For Langevin and
+Brownian specs, it must equal the timestep supplied to their constructor (after
+conversion to the simulation precision). Noise amplitudes and OU coefficients
+are cached for that timestep. A mismatch throws `ArgumentError` before stepping
+changes state or consumes random numbers. The low-level EM and Langevin
+wrappers that consume cached stochastic parameters enforce the same contract.
+For static forces and virials, use
+`ParticleDynamics.SimulationCore.evaluate_forces_into_f!(st, true)`; zero-duration
+steps are rejected.
+
+```julia
+dt = 0.001f0
+spec = eulermaruyama(st; gamma=1, temperature=1, dt=dt)
+step!(st, spec, dt)
+```
+
+To change the timestep, construct a new spec with all desired friction,
+temperature, and OU settings. This starts a new stochastic workspace; it does
+not preserve the previous OU realization. Temperature and OU setters require
+the existing spec's timestep, including filtered updates. Raw parameter
+constructors that omit `dt` default to one; pass `dt` explicitly when wrapping
+these parameters in a spec or passing them to `step!`.
+
+`Filters.set_friction!` controls friction independently of the noise amplitude.
+To maintain a chosen thermal temperature after changing friction, also call
+`Filters.set_temperature!` for the same particles and the spec's timestep.
+
 ## Notes
 
 - `nve` is the deterministic microcanonical MD path.

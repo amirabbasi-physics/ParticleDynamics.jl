@@ -18,6 +18,15 @@ export IntX, Dim2, Dim3, Box2, Box3,
        BondPotential, HarmonicBond, FENEBond,
        StokesFrictionCoefficient, SphereMass, InertialTime, DiffusiveTime
 export harmonic_bond, fene_bond
+function _require_stochastic_dt!(params, dt)
+    T = typeof(params.dt)
+    dtT = T(dt)
+    isfinite(dtT) && dtT > zero(T) || throw(ArgumentError("dt must be finite and positive"))
+    dtT == params.dt || throw(ArgumentError(
+        "Stochastic coefficients were built for dt=$(params.dt), but dt=$dtT was requested. Construct a new integrator spec with the intended dt."))
+    return nothing
+end
+
 const IntX   = Int32
 
 const Dim2 = 2
@@ -82,7 +91,9 @@ end
 
 Finite-extensible nonlinear elastic parameters, with potential
 `U(r) = -½kR₀² log(1 - (r/R₀)²)`. `examples/2D_polymer_bonded_BP.jl`
-demonstrates `k = 300`, `R0 = 1.5` to prevent bond overstretching.
+demonstrates `k = 300`, `R0 = 1.5`. Force evaluation requires finite `k ≥ 0`,
+a finite positive representable `R0²`, and finite bond lengths `r < R0`.
+Overstretched bonds throw `DomainError`; force and energy are never clamped.
 """
 struct FENEParams{T}
     k::T

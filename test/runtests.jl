@@ -46,6 +46,7 @@ using .ParamsFromExamples
         include("test_neighbors.jl")
         include("test_neighbor_integrity.jl")
         include("test_force_lifecycle.jl")
+        include("test_model_consistency.jl")
         include("test_integrators_langevin.jl")
         include("test_integrators_brownian.jl")
         include("test_integrators_nve.jl")

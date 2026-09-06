@@ -169,7 +169,7 @@
     expected_cold = sqrt.(2f0 .* gamma_host[cold_sel.host] .* 0.5f0 .* dt)
     @test all(abs.(ns[cold_sel.host] .- expected_cold) .< 1f-6)
 
-    bp = BrownianIntegrators.BrownianParams(vv.params.gamma, vv.params.noise_scale, vv.params.corr_time)
+    bp = BrownianIntegrators.BrownianParams(vv.params.gamma, vv.params.noise_scale, vv.params.corr_time, dt)
     Filters.set_friction!(bp, st, cold_filter, 3.0f0)
     gamma_host = Array(bp.gamma)
     @test all(abs.(gamma_host[cold_sel.host] .- 3.0f0) .< 1f-6)
