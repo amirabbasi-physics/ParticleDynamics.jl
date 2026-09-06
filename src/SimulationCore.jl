@@ -35,7 +35,7 @@ const FREEZE_NONE   = UInt8(0)
 const FREEZE_HOLD   = UInt8(1)
 const FREEZE_SPRING = UInt8(2)
 
-export SimulationState, build_simulation, step!, step_graph!, sync_unwrapped!, accumulate_virial!, virial_components, virial_tensor
+export SimulationState, build_simulation, step!, step_graph!, sync_unwrapped!, invalidate_forces!, accumulate_virial!, virial_components, virial_tensor
 export collect_step_observables
 export reset_bath_exchange_accumulators!
 export IntegratorSpec, VVSpec, BAOABSpec, BAOASpec, GSMSpec, BrownianSpec, EMSpec, NVESpec, NHCParams, NHCSpec, CSVRParams, CSVRSpec

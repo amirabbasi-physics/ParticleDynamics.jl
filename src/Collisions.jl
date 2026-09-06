@@ -533,6 +533,7 @@ function disable_collision_counting!(st)
     st.coll_prev = nothing
     st.coll_counts = nothing
     st.coll_bins = nothing
+    st.coll_ref_x = st.coll_ref_y = st.coll_ref_z = nothing
     return st
 end
 
@@ -580,51 +581,70 @@ end
 
 # Hooks called from Simulation.step! -----------------------------------------
 
+function _snapshot_collision_positions!(st)
+    if st.coll_ref_x === nothing
+        st.coll_ref_x = similar(st.rx)
+        st.coll_ref_y = similar(st.ry)
+        st.coll_ref_z = st.rz === nothing ? nothing : similar(st.rz)
+    end
+    copyto!(st.coll_ref_x, st.rx)
+    copyto!(st.coll_ref_y, st.ry)
+    st.rz === nothing || copyto!(st.coll_ref_z, st.rz)
+    return nothing
+end
+
 """
 Called when the neighbor list is rebuilt. Resizes and reinitializes
-`coll_prev` to reflect current contacts, and avoids spurious entries.
+`coll_prev` to reflect current contacts by default. Internal force-time rebuilds
+use `preserve_history=true` to reconstruct rows from the last sampled physical
+coordinates, retaining entry events even when a previously absent pair enters.
 """
-function _collisions_reinit_on_rebuild!(st)
+function _collisions_reinit_on_rebuild!(st; preserve_history::Bool=false)
     T = eltype(st.rx)
     if !st.coll_enabled; return; end
     nb = _collision_neighbor_matrix(st.nbh)
+    if !preserve_history || st.coll_ref_x === nothing
+        _snapshot_collision_positions!(st)
+    end
+    rx, ry, rz = st.coll_ref_x, st.coll_ref_y, st.coll_ref_z
     # Ensure coll_prev matches neighbors_flat length
     if (st.coll_prev === nothing) || (length(st.coll_prev) != length(nb.neighbors_flat))
         st.coll_prev = CUDA.fill(UInt8(0), length(nb.neighbors_flat))
     else
         fill!(st.coll_prev, 0)
     end
-    # Initialize to current contact state; prefer per-pair rcut if available
-    N = length(st.rx)
+    # Initialize new rows at the last sampled physical contact coordinates.
+    N = length(rx)
     threads = min(256, N)
     blocks = cld(N, threads)
-    if st.rz === nothing
+    if rz === nothing
         Lx = st.box2[1]; Ly = st.box2[2]
         if st.rcut_pair === nothing
             cutoff2 = T(st.pair_lj.rcut) * T(st.pair_lj.rcut)
-            k = CUDA.@cuda launch=false _init_prev2!(st.rx, st.ry, nb.neighbors_index, nb.neighbors_flat, nb.counts, st.coll_prev, cutoff2, Lx, Ly)
-            k(st.rx, st.ry, nb.neighbors_index, nb.neighbors_flat, nb.counts, st.coll_prev, cutoff2, Lx, Ly; threads, blocks)
+            k = CUDA.@cuda launch=false _init_prev2!(rx, ry, nb.neighbors_index, nb.neighbors_flat, nb.counts, st.coll_prev, cutoff2, Lx, Ly)
+            k(rx, ry, nb.neighbors_index, nb.neighbors_flat, nb.counts, st.coll_prev, cutoff2, Lx, Ly; threads, blocks)
         else
-            k = CUDA.@cuda launch=false _init_prev2_pair!(st.rx, st.ry, st.typeid, nb.neighbors_index, nb.neighbors_flat, nb.counts, st.coll_prev, st.rcut_pair, Lx, Ly)
-            k(st.rx, st.ry, st.typeid, nb.neighbors_index, nb.neighbors_flat, nb.counts, st.coll_prev, st.rcut_pair, Lx, Ly; threads, blocks)
+            k = CUDA.@cuda launch=false _init_prev2_pair!(rx, ry, st.typeid, nb.neighbors_index, nb.neighbors_flat, nb.counts, st.coll_prev, st.rcut_pair, Lx, Ly)
+            k(rx, ry, st.typeid, nb.neighbors_index, nb.neighbors_flat, nb.counts, st.coll_prev, st.rcut_pair, Lx, Ly; threads, blocks)
         end
     else
         Lx = st.box3[1]; Ly = st.box3[2]; Lz = st.box3[3]
         if st.rcut_pair === nothing
             cutoff2 = T(st.pair_lj.rcut) * T(st.pair_lj.rcut)
-            k = CUDA.@cuda launch=false _init_prev3!(st.rx, st.ry, st.rz, nb.neighbors_index, nb.neighbors_flat, nb.counts, st.coll_prev, cutoff2, Lx, Ly, Lz)
-            k(st.rx, st.ry, st.rz, nb.neighbors_index, nb.neighbors_flat, nb.counts, st.coll_prev, cutoff2, Lx, Ly, Lz; threads, blocks)
+            k = CUDA.@cuda launch=false _init_prev3!(rx, ry, rz, nb.neighbors_index, nb.neighbors_flat, nb.counts, st.coll_prev, cutoff2, Lx, Ly, Lz)
+            k(rx, ry, rz, nb.neighbors_index, nb.neighbors_flat, nb.counts, st.coll_prev, cutoff2, Lx, Ly, Lz; threads, blocks)
         else
-            k = CUDA.@cuda launch=false _init_prev3_pair!(st.rx, st.ry, st.rz, st.typeid, nb.neighbors_index, nb.neighbors_flat, nb.counts, st.coll_prev, st.rcut_pair, Lx, Ly, Lz)
-            k(st.rx, st.ry, st.rz, st.typeid, nb.neighbors_index, nb.neighbors_flat, nb.counts, st.coll_prev, st.rcut_pair, Lx, Ly, Lz; threads, blocks)
+            k = CUDA.@cuda launch=false _init_prev3_pair!(rx, ry, rz, st.typeid, nb.neighbors_index, nb.neighbors_flat, nb.counts, st.coll_prev, st.rcut_pair, Lx, Ly, Lz)
+            k(rx, ry, rz, st.typeid, nb.neighbors_index, nb.neighbors_flat, nb.counts, st.coll_prev, st.rcut_pair, Lx, Ly, Lz; threads, blocks)
         end
     end
     return nothing
 end
 
 """
-Called once per step after positions have been advanced and any neighbor rebuild
-has been performed. Detects entry events and increments per-bin counters.
+Called after a physical position stage and any required neighbor rebuild. Split
+integrators can sample more than once per step; temporary midpoint force probes
+are not samples. Detects entry events and increments per-bin counters.
 """
 function _collisions_update_after_positions!(st)
     T = eltype(st.rx)
@@ -748,6 +768,7 @@ function _collisions_update_after_positions!(st)
             end
         end
     end
+    _snapshot_collision_positions!(st)
     return nothing
 end
 

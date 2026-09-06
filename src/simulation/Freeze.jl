@@ -7,6 +7,7 @@
         return false
     end
     if st.freeze_until >= 0 && st.step >= st.freeze_until
+        invalidate_forces!(st)
         st.freeze_mode = FREEZE_NONE
         st.freeze_until = -1
         return false

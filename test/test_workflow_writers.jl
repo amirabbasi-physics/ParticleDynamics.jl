@@ -258,3 +258,30 @@ end
         @test all(ctx -> ctx.handle === nothing, ParticleDynamics.Workflow._writer_contexts(sim))
     end
 end
+
+@testset "Nonzero-step initial force output and restart first kick" begin
+    mktempdir() do tmp
+        group = Group(:all, AllSelection())
+        function make_sim(counter; writer=false)
+            system = ParticleSystem([(-.6,0.),(.6,0.)]; box=(20.,20.),
+                velocities=[(0.,0.),(0.,0.)], metadata=Dict{Symbol,Any}(:step=>counter))
+            Simulation(system; groups=Groups(group), precision=Float64,
+                writers=writer ? [GSDWriter(joinpath(tmp,"initial.gsd"); write_start=true,
+                                           write_forces=true, write_virial=true)] : Writer[],
+                integrator=Integrator(dt=.01,
+                    forces=[LennardJones(epsilon=1.,sigma=1.,cutoff=2.5, pairs=:neighborlist)],
+                    methods=[ConstantVolume(group)]))
+        end
+        a, b = make_sim(100; writer=true), make_sim(0)
+        run!(a, Stage(:initial,steps=0;progress=false))
+        @test a.state.force_valid
+        frame = read_gsd_frame!(joinpath(tmp,"initial.gsd"))
+        @test frame.step == 100
+        @test maximum(abs, frame.particle_properties[:virial]) > 0
+        @test frame.particle_properties[:force][:,1] ≈ Array(a.state.fx) rtol=1e-6
+        @test Array(a.state.fx) ≈ [2.211693342223078,-2.211693342223078]
+        run!(a,1); run!(b,1)
+        @test Array(a.state.rx) ≈ Array(b.state.rx)
+        @test Array(a.state.vx) ≈ Array(b.state.vx)
+    end
+end

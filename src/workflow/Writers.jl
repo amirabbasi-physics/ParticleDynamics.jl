@@ -539,6 +539,10 @@ function write_initial_frames!(sim)
     for ctx in _writer_contexts(sim)
         writer = ctx.writer
         if writer isa GSDWriter && writer.write_start && !ctx.start_written
+            if writer.write_forces || writer.write_virial
+                spring = SimulationCore._freeze_active!(st) && st.freeze_mode == SimulationCore.FREEZE_SPRING
+                SimulationCore.evaluate_forces_into_f!(st, writer.write_virial; freeze_spring=spring)
+            end
             _write_writer!(sim, ctx, st.step)
             ctx.start_written = true
         end

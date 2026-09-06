@@ -47,6 +47,7 @@ function attach_external_potential!(st::SimulationState, pot::AbstractExternalPo
         error("external potentials replace all force terms; states with bonds are unsupported")
     st.tag === nothing ||
         error("external potentials require spatial_reorder=false (storage order must stay fixed)")
+    invalidate_forces!(st)
     st.external_potential = pot
     return st
 end
@@ -56,4 +57,8 @@ end
 
 Remove the external provider and restore the internal nonbonded/bonded path.
 """
-detach_external_potential!(st::SimulationState) = (st.external_potential = nothing; st)
+function detach_external_potential!(st::SimulationState)
+    invalidate_forces!(st)
+    st.external_potential = nothing
+    return st
+end

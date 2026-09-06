@@ -46,6 +46,7 @@ function freeze_particles!(st::SimulationState{T}, idx::CuArray{Int32,1};
     else
         throw(ArgumentError("mode must be :hold or :spring"))
     end
+    SimulationCore.invalidate_forces!(st)
     st.freeze_include_energy = include_energy
     st.freeze_until = steps === nothing ? -1 : st.step + Int(steps)
 
@@ -84,6 +85,7 @@ end
 Disable any active freeze/tethering.
 """
 function unfreeze_particles!(st::SimulationState)
+    SimulationCore.invalidate_forces!(st)
     st.freeze_mode = SimulationCore.FREEZE_NONE
     st.freeze_until = -1
     return st

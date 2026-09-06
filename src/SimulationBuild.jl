@@ -340,7 +340,7 @@ function build_simulation(;N::Int,
                          FREEZE_NONE, -1, true, nothing, zero(T), nothing, nothing, nothing,
                          false, nothing, nothing, nothing,
                          tag, -1, reorder_interval,
-                         nothing, exclude_bonded_pairs)
+                         nothing, exclude_bonded_pairs, false, false, nothing, nothing, nothing)
 
     if D == 2
         st.box2 = (T(box[1]), T(box[2]))

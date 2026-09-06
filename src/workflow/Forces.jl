@@ -131,7 +131,10 @@ struct CompiledForces
     metadata::Dict{Symbol,Any}
 end
 
-post_build!(compiled::CompiledForces, st) = compiled.post_build!(st)
+function post_build!(compiled::CompiledForces, st)
+    SimulationCore.invalidate_forces!(st)
+    return compiled.post_build!(st)
+end
 
 _wca_cutoff(sigma) = sigma * SimulationCore.WCA_RC_FACTOR
 
