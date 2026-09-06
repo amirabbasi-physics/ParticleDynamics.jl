@@ -185,21 +185,14 @@ active force slot (`f`).
 function evaluate_forces_into_f!(st::SimulationState{T},
                                  compute_energy::Bool;
                                  freeze_spring::Bool=false) where {T<:AbstractFloat}
+    st.force_valid = false
     if st.external_potential !== nothing
         external_forces!(st.external_potential, st, compute_energy)
+        st.force_valid = true
+        st.force_freeze_spring = freeze_spring
         return nothing
     end
-    # build_simulation allocates an unbuilt list until real coordinates exist.
-    # A failed capacity check also leaves the list invalid and must never be
-    # followed by an unchecked force read.
-    if st.nbh isa NeighborLists.CellListNeighborMatrix && !st.nbh.valid
-        if _is_3d(st)
-            NeighborLists.update_neighbors_inplace!(st.nbh, st.rx, st.ry, st.rz; box=st.box3, step=st.step)
-        else
-            NeighborLists.update_neighbors_inplace!(st.nbh, st.rx, st.ry; box=st.box2, step=st.step)
-        end
-        _collisions_reinit_on_rebuild!(st)
-    end
+    ensure_force_neighbors!(st)
     if _is_3d(st)
         _compute_final_nonbonded3!(st, compute_energy)
         _finalize_force_eval3!(st, compute_energy, freeze_spring)
@@ -207,6 +200,8 @@ function evaluate_forces_into_f!(st::SimulationState{T},
         _compute_final_nonbonded2!(st, compute_energy)
         _finalize_force_eval2!(st, compute_energy, freeze_spring)
     end
+    st.force_valid = true
+    st.force_freeze_spring = freeze_spring
     return nothing
 end
 
@@ -219,10 +214,12 @@ external slot ownership.
 function evaluate_forces_into_f0!(st::SimulationState{T},
                                   compute_energy::Bool;
                                   freeze_spring::Bool=false) where {T<:AbstractFloat}
+    saved_valid, saved_spring = st.force_valid, st.force_freeze_spring
     _swap_force_slots!(st)
     try
         evaluate_forces_into_f!(st, compute_energy; freeze_spring=freeze_spring)
     finally
+        st.force_valid, st.force_freeze_spring = saved_valid, saved_spring
         _swap_force_slots!(st)
     end
     return nothing
@@ -236,11 +233,13 @@ reference force slot (`f0`). This helper is used by Brownian midpoint / EM.
 """
 function evaluate_midpoint_forces_into_f0!(st::SimulationState{T};
                                            freeze_spring::Bool=false) where {T<:AbstractFloat}
+    saved_valid, saved_spring = st.force_valid, st.force_freeze_spring
     _swap_midpoint_position_slots!(st)
     _swap_force_slots!(st)
     try
         evaluate_forces_into_f!(st, false; freeze_spring=freeze_spring)
     finally
+        st.force_valid, st.force_freeze_spring = saved_valid, saved_spring
         _swap_force_slots!(st)
         _swap_midpoint_position_slots!(st)
     end

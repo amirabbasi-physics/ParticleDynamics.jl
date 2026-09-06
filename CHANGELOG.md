@@ -6,6 +6,24 @@ All notable user-visible changes to this project will be documented in this file
 
 ### Correctness and maintenance
 
+- Force evaluation checks neighbor displacement after motion and at temporary
+  midpoint coordinates, regardless of the step-boundary check interval.
+  Spatial reordering stays at safe step boundaries. These checks add a GPU
+  reduction/synchronization on neighbor-backed force evaluations.
+- Collision rebuilds reconstruct contact history from the last physical sample,
+  so entries on rebuild steps are retained and midpoint probes are not counted.
+- Cached force validity is independent of the step counter. Nonzero-step
+  restarts initialize their first force correctly; `invalidate_forces!(st)` is
+  available after manual state/model edits. Provider and freeze transitions and
+  workflow state/force setup invalidate automatically. Failed steps invalidate
+  the cache without rolling back the trajectory.
+- Increased the independent ensembles in the Brownian MSD-slope and OU-decay
+  regression tests using their correlated-sample uncertainty; accuracy
+  thresholds are unchanged.
+- Initial GSD frames requesting forces or virials evaluate them before writing.
+  SimulationState gained internal cache flags and optional collision reference
+  buffers; positional construction must use the new fields or the public builder.
+
 - Renamed private nonbonded `*_csr_*` kernels to `*_ell_*` and the three
   `*CSRCUDA.jl` files to `*ELLCUDA.jl`. Dense and stencil neighbors use ELL;
   bond adjacency remains CSR. Public force function names are unchanged.

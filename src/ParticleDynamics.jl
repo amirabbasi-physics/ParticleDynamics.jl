@@ -80,7 +80,7 @@ using .Thermostats: AbstractThermostat, ThermostatState,
     n_baths, target_temperature, response_time,
     set_target_temperature!, set_response_time!, cumulative_energy_exchange
 
-using .SimulationCore: SimulationState, build_simulation, step!, step_graph!, sync_unwrapped!, accumulate_virial!, virial_components, virial_tensor
+using .SimulationCore: SimulationState, build_simulation, step!, step_graph!, sync_unwrapped!, invalidate_forces!, accumulate_virial!, virial_components, virial_tensor
 using .SimulationCore: collect_step_observables, reset_bath_exchange_accumulators!
 using .SimulationCore: IntegratorSpec, VVSpec, BAOABSpec, BAOASpec, GSMSpec, BrownianSpec, EMSpec, NVESpec, NHCParams, NHCSpec, CSVRParams, CSVRSpec
 using .SimulationCore: velocityverlet, baoab, baoa, gsm, eulerheun, eulermaruyama, nve, nosehooverchain, csvr
@@ -120,7 +120,7 @@ export Filters, BondedForces, ParticleGroups, Thermostats, SimulationCore,
        n_baths, target_temperature, response_time,
        set_target_temperature!, set_response_time!, cumulative_energy_exchange,
        # Simulation helpers
-       SimulationState, build_simulation, step!, step_graph!, sync_unwrapped!, accumulate_virial!, virial_components, virial_tensor,
+       SimulationState, build_simulation, step!, step_graph!, sync_unwrapped!, invalidate_forces!, accumulate_virial!, virial_components, virial_tensor,
        collect_step_observables, reset_bath_exchange_accumulators!,
        AbstractIntegratorSpec,
        IntegratorSpec, VVSpec, BAOABSpec, BAOASpec, GSMSpec, BrownianSpec, EMSpec, NVESpec, NHCParams, NHCSpec, CSVRParams, CSVRSpec,

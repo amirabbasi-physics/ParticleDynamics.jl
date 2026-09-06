@@ -233,8 +233,9 @@ end
 
 Check whether the maximum displacement since the last rebuild exceeds
 `skin/2`, or whether the adaptive rebuild interval (`target_interval`) has
-elapsed. `step!` calls this every `NL_CHECK_STRIDE` steps. The heuristic mirrors
-the values tuned in the 2D/3D production scripts (skin between 0.3 and 0.5 σ).
+elapsed. Simulation force evaluation checks the actual force-time coordinates,
+including temporary midpoint positions. The step-boundary maintenance check is
+also controlled by `neigh_interval`; it cannot disable force-time safety checks.
 """
 function update_needed!(nbh::CellListNeighborMatrix{T}, rx::CuArray{T,1}, ry::CuArray{T,1};
                         skin::Real, Lx::T, Ly::T, step::Int) where {T<:AbstractFloat}

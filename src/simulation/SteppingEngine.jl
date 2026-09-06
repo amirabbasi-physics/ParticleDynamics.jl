@@ -37,13 +37,6 @@ function prepare_previous_force_buffers!(st::SimulationState,
     return nothing
 end
 
-function prepare_previous_force_buffers!(st::SimulationState,
-                                         spec::Union{VVSpec,BAOABSpec,BAOASpec,GSMSpec,NVESpec,NHCSpec,CSVRSpec})
-    if st.step > 1
-        _swap_force_slots!(st)
-    end
-    return nothing
-end
 
 """
     ensure_reference_forces_ready!(st, spec, compute_energy, freeze_spring)
@@ -62,7 +55,10 @@ function ensure_reference_forces_ready!(st::SimulationState,
                                         spec::Union{VVSpec,BAOABSpec,BAOASpec,GSMSpec,NVESpec,NHCSpec,CSVRSpec},
                                         compute_energy::Bool,
                                         freeze_spring::Bool)
-    if st.step <= 1
+    if st.force_valid && st.force_freeze_spring == freeze_spring
+        _swap_force_slots!(st)
+        st.force_valid = false
+    else
         evaluate_forces_into_f0!(st, compute_energy; freeze_spring=freeze_spring)
     end
     return nothing
@@ -72,7 +68,7 @@ function ensure_reference_forces_ready!(st::SimulationState,
                                         spec::Union{BrownianSpec,EMSpec},
                                         compute_energy::Bool,
                                         freeze_spring::Bool)
-    if st.step == 0
+    if !st.force_valid || st.force_freeze_spring != freeze_spring
         evaluate_forces_into_f!(st, compute_energy; freeze_spring=freeze_spring)
     end
     return nothing
@@ -128,29 +124,34 @@ function run_integrator_step!(st::SimulationState{T},
                               compute_energy::Bool=true) where {T<:AbstractFloat}
     validate_integrator_inputs!(spec, st, dt)
 
-    freeze_active = _freeze_active!(st)
-    freeze_hold = freeze_active && st.freeze_mode == FREEZE_HOLD
-    freeze_spring = freeze_active && st.freeze_mode == FREEZE_SPRING
+    try
+        freeze_active = _freeze_active!(st)
+        freeze_hold = freeze_active && st.freeze_mode == FREEZE_HOLD
+        freeze_spring = freeze_active && st.freeze_mode == FREEZE_SPRING
 
-    rebuild_needed = plan_neighbor_rebuild!(st, dt)
-    apply_neighbor_rebuild_if_needed!(st, spec, rebuild_needed)
+        rebuild_needed = _spatial_reorder_active(st, spec) || plan_neighbor_rebuild!(st, dt)
+        apply_neighbor_rebuild_if_needed!(st, spec, rebuild_needed)
 
-    prepare_previous_force_buffers!(st, spec)
-    ensure_reference_forces_ready!(st, spec, compute_energy, freeze_spring)
-    ensure_integrator_workspace!(spec, st)
+        prepare_previous_force_buffers!(st, spec)
+        ensure_reference_forces_ready!(st, spec, compute_energy, freeze_spring)
+        ensure_integrator_workspace!(spec, st)
 
-    for stage_tag in stage_sequence(spec)
-        _trace_integrator_stage!(st, spec, stage_tag;
-                                 force_evaluated=(stage_tag == :force),
-                                 rebuild_applied=rebuild_needed)
-        execute_integrator_stage!(spec, st, dt, stage_tag;
-                                  compute_energy=compute_energy,
-                                  freeze_hold=freeze_hold,
-                                  freeze_spring=freeze_spring)
+        for stage_tag in stage_sequence(spec)
+            _trace_integrator_stage!(st, spec, stage_tag;
+                                     force_evaluated=(stage_tag == :force),
+                                     rebuild_applied=rebuild_needed)
+            execute_integrator_stage!(spec, st, dt, stage_tag;
+                                      compute_energy=compute_energy,
+                                      freeze_hold=freeze_hold,
+                                      freeze_spring=freeze_spring)
+        end
+
+        finalize_step_accounting!(st, spec, compute_energy)
+        finalize_step_counter!(st, integrator_id(spec))
+    catch
+        invalidate_forces!(st)
+        rethrow()
     end
-
-    finalize_step_accounting!(st, spec, compute_energy)
-    finalize_step_counter!(st, integrator_id(spec))
     return nothing
 end
 

@@ -72,11 +72,14 @@
         temperature = clamp(Float64(p.temperature), 1.0, 5.0)
         boxL = max(200.0, Float64(p.boxL))
         # Use the midpoint Brownian path for the free-diffusion slope check.
-        # Euler-Maruyama is still covered elsewhere, but its larger weak-error
-        # bias makes this short regression too sensitive to example drift.
+        # Euler-Maruyama free diffusion is covered separately.
         integrator = :eulerheun
 
-        N = 384
+        # MSD samples along each trajectory are correlated. Using
+        # Cov(MSD(s),MSD(t)) = 8*d*D^2*min(s,t)^2/N gives a relative
+        # fitted-slope standard error of 7.1% at N=384 for this fit window.
+        # N=4096 reduces it to 2.2% while retaining the 15% error limit.
+        N = 4096
         steps = 3200
         sample_stride = 40
 
@@ -226,7 +229,11 @@
         tau = clamp(Float64(p.tau), 0.2, 0.5)
         boxL = max(160.0, Float64(p.boxL))
 
-        N = 512
+        # Correlated lags are not independent observations. The delta-method
+        # covariance of log normalized ACF is (exp(2*min(s,t)/tau)-1)/N.
+        # Over this fit window, N=512 gives 13–18% relative tau uncertainty;
+        # N=8192 reduces it to 3–5%, retaining the existing 30% error limit.
+        N = 8192
         burn_steps = 400
         lag_max = 300
 

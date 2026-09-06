@@ -135,6 +135,7 @@ function main()
     end
     @printf("\nfull step         : %8.3f ms/step  (%.1f steps/s)\n", 1000t / nsteps, nsteps / t)
 
+    # Force-evaluation timings include mandatory neighbor coverage checks.
     # --- components --------------------------------------------------------
     ms_force = time_component(100) do
         sc.evaluate_forces_into_f!(st, false)
@@ -168,7 +169,7 @@ function main()
     @printf("  half kick       : %8.3f ms   (x2 per step)\n", ms_kick)
     @printf("  drift           : %8.3f ms\n", ms_drift)
     @printf("  dq/dU fills     : %8.3f ms\n", ms_fills)
-    @printf("  neigh check     : %8.3f ms   (every %d steps)\n", ms_check, st.neigh_interval)
+    @printf("  neigh check     : %8.3f ms   (also included in force timings)\n", ms_check)
     @printf("  neigh rebuild   : %8.3f ms\n", ms_rebuild)
 
     est = ms_force + 2ms_kick + ms_drift + ms_fills + ms_check / st.neigh_interval

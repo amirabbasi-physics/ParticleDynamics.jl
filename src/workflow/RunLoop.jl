@@ -151,6 +151,7 @@ function _default_build_force_kwargs(::Type{T}) where {T<:AbstractFloat}
 end
 
 function _copy_system_into_state!(st::SimulationState, system::ParticleSystem)
+    SimulationCore.invalidate_forces!(st)
     T = eltype(st.rx)
     D = length(system.box)
     copyto!(st.rx, T[p[1] for p in system.positions])

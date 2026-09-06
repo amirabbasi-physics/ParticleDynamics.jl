@@ -6,13 +6,14 @@
 
 Structure-of-arrays storage for all GPU-resident buffers required to evolve a
 non-equilibrium simulation. Users normally do not construct this type manually;
-[`build_simulation`](@ref) assembles a fully initialized instance with concrete
+[`build_simulation`](@ref) assembles an allocated instance with concrete
 CuArray fields and consistent dimensionality inferred from the `box` argument.
 
 Key fields that user code may read or mutate:
 - `rx, ry[, rz]`, `vx, vy[, vz]`, `fx, fy[, fz]`: positions, velocities, and
   force accumulators in GPU memory. Arrays are sized `N` and remain allocated
-  for the entire simulation so that stepping is allocation-free.
+  during ordinary stepping; optional spatial reordering can replace them.
+  After manual position/force-model edits, call `invalidate_forces!(st)`.
 - `rx_unwrap, ry_unwrap[, rz_unwrap]`: optional unwrapped positions that track
   continuous motion across periodic boundaries (enabled via `unwrapped_positions`).
 - `nbh`: neighbor matrix (either dense cell list or sentinel all-pairs) built
@@ -137,6 +138,28 @@ mutable struct SimulationState{T<:AbstractFloat}
     # canonical Kremer-Grest FENE+WCA bond). Default true: bonded pairs are
     # excluded from nonbonded interactions.
     exclude_bonded::Bool
+    # Validity of the active force slot at the current physical coordinates.
+    force_valid::Bool
+    force_freeze_spring::Bool
+    # Last sampled collision coordinates, independent of neighbor row ordering.
+    coll_ref_x::Union{Nothing,CuArray{T,1}}
+    coll_ref_y::Union{Nothing,CuArray{T,1}}
+    coll_ref_z::Union{Nothing,CuArray{T,1}}
+end
+
+"""
+    invalidate_forces!(st) -> st
+
+Invalidate cached forces after manually changing coordinates, force parameters,
+particle types, topology, or an external provider's internal state. The next
+step initializes its first force before using it, independently of `st.step`.
+This does not resize or reconfigure neighbor ranges: parameter/box changes must
+also update the appropriate neighbor container. Velocity-only edits do not
+require force invalidation.
+"""
+function invalidate_forces!(st::SimulationState)
+    st.force_valid = false
+    return st
 end
 
 @inline backend(st::SimulationState) = storage_backend(st.rx)
@@ -151,6 +174,7 @@ before running isolated force kernels and safe to use between manual force
 evaluations.
 """
 function zero_forces!(st::SimulationState{T}) where {T<:AbstractFloat}
+    invalidate_forces!(st)
     fill!(st.fx, zero(T)); fill!(st.fy, zero(T))
     st.fz === nothing || fill!(st.fz, zero(T))
     return nothing

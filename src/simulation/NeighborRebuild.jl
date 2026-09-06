@@ -1,7 +1,8 @@
 """
     plan_neighbor_rebuild!(st, dt) -> Bool
 
-Determine whether neighbor lists should be rebuilt on this step.
+Determine whether step-boundary neighbor maintenance is due. Force-time
+coverage is checked separately by `ensure_force_neighbors!`.
 """
 function plan_neighbor_rebuild!(st::SimulationState{T}, dt::T) where {T<:AbstractFloat}
     do_check = (st.step % st.neigh_interval == 0)
@@ -117,7 +118,7 @@ function apply_neighbor_rebuild_if_needed!(st::SimulationState,
     else
         NeighborLists.update_neighbors_inplace!(st.nbh, st.rx, st.ry; box=st.box2, step=st.step)
     end
-    _collisions_reinit_on_rebuild!(st)
+    _collisions_reinit_on_rebuild!(st; preserve_history=true)
     return nothing
 end
 
@@ -133,6 +134,35 @@ function apply_post_position_hooks!(st::SimulationState,
     if freeze_hold
         _apply_freeze_hold_positions!(st)
     end
-    _collisions_update_after_positions!(st)
+    invalidate_forces!(st)
+    if st.coll_enabled
+        ensure_force_neighbors!(st)
+        _collisions_update_after_positions!(st)
+    end
+    return nothing
+end
+
+"""
+Check list coverage at the actual force/collision coordinates, including
+midpoints. Never reorder here: saved integration-stage buffers retain their
+particle indexing. `neigh_interval` only gates step-boundary maintenance.
+"""
+function ensure_force_neighbors!(st::SimulationState{T}) where {T}
+    st.nbh isa NeighborLists.AllPairsNeighborMatrix && return nothing
+    needed = if _is_3d(st)
+        NeighborLists.update_needed!(st.nbh, st.rx, st.ry, st.rz;
+            skin=st.nbh.skin, Lx=st.box3[1], Ly=st.box3[2], Lz=st.box3[3], step=st.step)
+    else
+        NeighborLists.update_needed!(st.nbh, st.rx, st.ry;
+            skin=st.nbh.skin, Lx=st.box2[1], Ly=st.box2[2], step=st.step)
+    end
+    if needed
+        if _is_3d(st)
+            NeighborLists.update_neighbors_inplace!(st.nbh, st.rx, st.ry, st.rz; box=st.box3, step=st.step)
+        else
+            NeighborLists.update_neighbors_inplace!(st.nbh, st.rx, st.ry; box=st.box2, step=st.step)
+        end
+        _collisions_reinit_on_rebuild!(st; preserve_history=true)
+    end
     return nothing
 end
