@@ -119,7 +119,7 @@ using ParticleDynamics: SimulationCore, accumulate_virial!, virial_components, v
         return st
     end
 
-    function refresh_forces!(st, mode::Symbol; dt::Real=zero(eltype(st.rx)))
+    function refresh_forces!(st, mode::Symbol; dt::Real=1e-4)
         dtT = eltype(st.rx)(dt)
         T = eltype(st.rx)
         gamma = one(T)
@@ -160,8 +160,9 @@ using ParticleDynamics: SimulationCore, accumulate_virial!, virial_components, v
         update_neighbors_host!(st)
         refresh_forces!(st, :vv)
 
-        dx = T(-1.25)
-        dy = zero(T)
+        rx, ry = Array(st.rx), Array(st.ry)
+        dx = mic(rx[1]-rx[2], T(12))
+        dy = mic(ry[1]-ry[2], T(12))
         fx, fy = lj_force_2d(dx, dy, T(1), T(1))
         expected = pair_virial2(dx, dy, fx, fy)
 
@@ -221,11 +222,6 @@ using ParticleDynamics: SimulationCore, accumulate_virial!, virial_components, v
     @testset "Minimum-image virial in Brownian EH and EM" begin
         T = Float64
         L = T(10)
-        expected_dx = T(0.5)
-        expected_dy = zero(T)
-        fx, fy = softrep_force_2d(expected_dx, expected_dy, T(8), T(1))
-        expected = pair_virial2(expected_dx, expected_dy, fx, fy)
-        wrapped = pair_virial2(T(-9.5), expected_dy, fx, fy)
 
         for mode in (:eh, :em)
             st = build_tiny2d(
@@ -237,6 +233,11 @@ using ParticleDynamics: SimulationCore, accumulate_virial!, virial_components, v
             update_neighbors_host!(st)
             refresh_forces!(st, mode)
 
+            rx, ry = Array(st.rx), Array(st.ry)
+            dx, dy = mic(rx[1]-rx[2], L), mic(ry[1]-ry[2], L)
+            fx, fy = softrep_force_2d(dx, dy, T(8), T(1))
+            expected = pair_virial2(dx, dy, fx, fy)
+            wrapped = pair_virial2(rx[1]-rx[2], dy, fx, fy)
             got = virial_tensor(st)
             assert_virial2_close(got, expected)
             @test !isapprox(got.xx, wrapped.xx; atol=1e-6, rtol=1e-6)
@@ -298,9 +299,10 @@ using ParticleDynamics: SimulationCore, accumulate_virial!, virial_components, v
         update_neighbors_host!(st)
         refresh_forces!(st, :vv)
 
-        dx = T(-0.6)
-        dy = T(-0.8)
-        dz = T(-0.2)
+        rx, ry, rz = Array(st.rx), Array(st.ry), Array(st.rz)
+        dx = mic(rx[1]-rx[2], T(14))
+        dy = mic(ry[1]-ry[2], T(14))
+        dz = mic(rz[1]-rz[2], T(14))
         fx, fy, fz = fene_bond_force_3d(dx, dy, dz, k, R0)
         expected = pair_virial3(dx, dy, dz, fx, fy, fz)
 
@@ -324,7 +326,7 @@ using ParticleDynamics: SimulationCore, accumulate_virial!, virial_components, v
         update_neighbors_host!(st)
         refresh_forces!(st, :vv)
 
-        expected = lj_virial_sum_2d(rx, ry, L, L, T(1), T(1), T(2.5))
+        expected = lj_virial_sum_2d(Array(st.rx), Array(st.ry), L, L, T(1), T(1), T(2.5))
         assert_virial2_close(virial_tensor(st; part=:nonbonded), expected)
         @test isapprox(sum(Array(st.virial)), trace(expected); atol=1e-10, rtol=1e-10)
     end

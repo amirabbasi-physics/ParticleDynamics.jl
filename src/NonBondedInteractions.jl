@@ -59,6 +59,9 @@ struct NonBondedInteraction{P<:AbstractPotential,C<:AbstractCoefficientStyle,X<:
     exclusions::X
 end
 
+_mixed_exclusion_bonds(::NoExclusions) = nothing
+_mixed_exclusion_bonds(exclusions::BondExclusions) = exclusions.bonds
+
 # 2D dispatch
 
 function compute_nonbonded!(rx::CuArray{T,1}, ry::CuArray{T,1},
@@ -185,10 +188,10 @@ function compute_nonbonded!(rx::CuArray{T,1}, ry::CuArray{T,1},
                             fx::CuArray{T,1}, fy::CuArray{T,1},
                             nbh::NeighborLists.AbstractNeighborMatrix,
                             box::Definitions.Box2{T},
-                            interaction::NonBondedInteraction{LennardJonesPotential,MixedSigmaCoefficients{T},NoExclusions},
-                            ::ForceOnly) where {T<:AbstractFloat}
+                            interaction::NonBondedInteraction{LennardJonesPotential,MixedSigmaCoefficients{T},X},
+                            ::ForceOnly) where {T<:AbstractFloat,X<:AbstractExclusionStyle}
     c = interaction.coefficients
-    NonBondedForces.lj_forces_soa_noE_mixed!(rx, ry, fx, fy, nbh, box, c.epsilon, c.sigma_particle, c.rcut_factor)
+    NonBondedForces.lj_forces_soa_noE_mixed!(rx, ry, fx, fy, nbh, box, c.epsilon, c.sigma_particle, c.rcut_factor; bonds=_mixed_exclusion_bonds(interaction.exclusions))
     return nothing
 end
 
@@ -196,10 +199,10 @@ function compute_nonbonded!(rx::CuArray{T,1}, ry::CuArray{T,1},
                             fx::CuArray{T,1}, fy::CuArray{T,1}, Epot::CuArray{T,1}, V::CuArray{T,2},
                             nbh::NeighborLists.AbstractNeighborMatrix,
                             box::Definitions.Box2{T},
-                            interaction::NonBondedInteraction{LennardJonesPotential,MixedSigmaCoefficients{T},NoExclusions},
-                            ::ForceEnergyVirial) where {T<:AbstractFloat}
+                            interaction::NonBondedInteraction{LennardJonesPotential,MixedSigmaCoefficients{T},X},
+                            ::ForceEnergyVirial) where {T<:AbstractFloat,X<:AbstractExclusionStyle}
     c = interaction.coefficients
-    NonBondedForces.lj_forces_soa_mixed!(rx, ry, fx, fy, Epot, V, nbh, box, c.epsilon, c.sigma_particle, c.rcut_factor)
+    NonBondedForces.lj_forces_soa_mixed!(rx, ry, fx, fy, Epot, V, nbh, box, c.epsilon, c.sigma_particle, c.rcut_factor; bonds=_mixed_exclusion_bonds(interaction.exclusions))
     return nothing
 end
 
@@ -207,10 +210,10 @@ function compute_nonbonded!(rx::CuArray{T,1}, ry::CuArray{T,1},
                             fx::CuArray{T,1}, fy::CuArray{T,1},
                             nbh::NeighborLists.AbstractNeighborMatrix,
                             box::Definitions.Box2{T},
-                            interaction::NonBondedInteraction{WCAPotential,MixedSigmaCoefficients{T},NoExclusions},
-                            ::ForceOnly) where {T<:AbstractFloat}
+                            interaction::NonBondedInteraction{WCAPotential,MixedSigmaCoefficients{T},X},
+                            ::ForceOnly) where {T<:AbstractFloat,X<:AbstractExclusionStyle}
     c = interaction.coefficients
-    NonBondedForces.wca_forces_soa_noE_mixed!(rx, ry, fx, fy, nbh, box, c.epsilon, c.sigma_particle, c.rcut_factor)
+    NonBondedForces.wca_forces_soa_noE_mixed!(rx, ry, fx, fy, nbh, box, c.epsilon, c.sigma_particle, c.rcut_factor; bonds=_mixed_exclusion_bonds(interaction.exclusions))
     return nothing
 end
 
@@ -218,10 +221,10 @@ function compute_nonbonded!(rx::CuArray{T,1}, ry::CuArray{T,1},
                             fx::CuArray{T,1}, fy::CuArray{T,1}, Epot::CuArray{T,1}, V::CuArray{T,2},
                             nbh::NeighborLists.AbstractNeighborMatrix,
                             box::Definitions.Box2{T},
-                            interaction::NonBondedInteraction{WCAPotential,MixedSigmaCoefficients{T},NoExclusions},
-                            ::ForceEnergyVirial) where {T<:AbstractFloat}
+                            interaction::NonBondedInteraction{WCAPotential,MixedSigmaCoefficients{T},X},
+                            ::ForceEnergyVirial) where {T<:AbstractFloat,X<:AbstractExclusionStyle}
     c = interaction.coefficients
-    NonBondedForces.wca_forces_soa_mixed!(rx, ry, fx, fy, Epot, V, nbh, box, c.epsilon, c.sigma_particle, c.rcut_factor)
+    NonBondedForces.wca_forces_soa_mixed!(rx, ry, fx, fy, Epot, V, nbh, box, c.epsilon, c.sigma_particle, c.rcut_factor; bonds=_mixed_exclusion_bonds(interaction.exclusions))
     return nothing
 end
 
@@ -443,10 +446,10 @@ function compute_nonbonded!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1}
                             fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1},
                             nbh::NeighborLists.AbstractNeighborMatrix,
                             box::Definitions.Box3{T},
-                            interaction::NonBondedInteraction{LennardJonesPotential,MixedSigmaCoefficients{T},NoExclusions},
-                            ::ForceOnly) where {T<:AbstractFloat}
+                            interaction::NonBondedInteraction{LennardJonesPotential,MixedSigmaCoefficients{T},X},
+                            ::ForceOnly) where {T<:AbstractFloat,X<:AbstractExclusionStyle}
     c = interaction.coefficients
-    NonBondedForces.lj_forces_soa_noE_mixed!(rx, ry, rz, fx, fy, fz, nbh, box, c.epsilon, c.sigma_particle, c.rcut_factor)
+    NonBondedForces.lj_forces_soa_noE_mixed!(rx, ry, rz, fx, fy, fz, nbh, box, c.epsilon, c.sigma_particle, c.rcut_factor; bonds=_mixed_exclusion_bonds(interaction.exclusions))
     return nothing
 end
 
@@ -454,10 +457,10 @@ function compute_nonbonded!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1}
                             fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1}, Epot::CuArray{T,1}, V::CuArray{T,2},
                             nbh::NeighborLists.AbstractNeighborMatrix,
                             box::Definitions.Box3{T},
-                            interaction::NonBondedInteraction{LennardJonesPotential,MixedSigmaCoefficients{T},NoExclusions},
-                            ::ForceEnergyVirial) where {T<:AbstractFloat}
+                            interaction::NonBondedInteraction{LennardJonesPotential,MixedSigmaCoefficients{T},X},
+                            ::ForceEnergyVirial) where {T<:AbstractFloat,X<:AbstractExclusionStyle}
     c = interaction.coefficients
-    NonBondedForces.lj_forces_soa_mixed!(rx, ry, rz, fx, fy, fz, Epot, V, nbh, box, c.epsilon, c.sigma_particle, c.rcut_factor)
+    NonBondedForces.lj_forces_soa_mixed!(rx, ry, rz, fx, fy, fz, Epot, V, nbh, box, c.epsilon, c.sigma_particle, c.rcut_factor; bonds=_mixed_exclusion_bonds(interaction.exclusions))
     return nothing
 end
 
@@ -465,10 +468,10 @@ function compute_nonbonded!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1}
                             fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1},
                             nbh::NeighborLists.AbstractNeighborMatrix,
                             box::Definitions.Box3{T},
-                            interaction::NonBondedInteraction{WCAPotential,MixedSigmaCoefficients{T},NoExclusions},
-                            ::ForceOnly) where {T<:AbstractFloat}
+                            interaction::NonBondedInteraction{WCAPotential,MixedSigmaCoefficients{T},X},
+                            ::ForceOnly) where {T<:AbstractFloat,X<:AbstractExclusionStyle}
     c = interaction.coefficients
-    NonBondedForces.wca_forces_soa_noE_mixed!(rx, ry, rz, fx, fy, fz, nbh, box, c.epsilon, c.sigma_particle, c.rcut_factor)
+    NonBondedForces.wca_forces_soa_noE_mixed!(rx, ry, rz, fx, fy, fz, nbh, box, c.epsilon, c.sigma_particle, c.rcut_factor; bonds=_mixed_exclusion_bonds(interaction.exclusions))
     return nothing
 end
 
@@ -476,10 +479,10 @@ function compute_nonbonded!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1}
                             fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1}, Epot::CuArray{T,1}, V::CuArray{T,2},
                             nbh::NeighborLists.AbstractNeighborMatrix,
                             box::Definitions.Box3{T},
-                            interaction::NonBondedInteraction{WCAPotential,MixedSigmaCoefficients{T},NoExclusions},
-                            ::ForceEnergyVirial) where {T<:AbstractFloat}
+                            interaction::NonBondedInteraction{WCAPotential,MixedSigmaCoefficients{T},X},
+                            ::ForceEnergyVirial) where {T<:AbstractFloat,X<:AbstractExclusionStyle}
     c = interaction.coefficients
-    NonBondedForces.wca_forces_soa_mixed!(rx, ry, rz, fx, fy, fz, Epot, V, nbh, box, c.epsilon, c.sigma_particle, c.rcut_factor)
+    NonBondedForces.wca_forces_soa_mixed!(rx, ry, rz, fx, fy, fz, Epot, V, nbh, box, c.epsilon, c.sigma_particle, c.rcut_factor; bonds=_mixed_exclusion_bonds(interaction.exclusions))
     return nothing
 end
 

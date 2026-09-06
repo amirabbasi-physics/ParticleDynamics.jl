@@ -26,7 +26,7 @@
     SimulationCore.step!(st_soft, SimulationCore.velocityverlet(st_soft; gamma=1f0, temperature=0.2f0, dt=1f-3), 1f-3; compute_energy=true)
     @test state_allfinite(st_soft)
 
-    @testset "Direct force evaluation matches zero-dt step with freeze spring" begin
+    @testset "Stepped force matches direct evaluation with freeze spring" begin
         function build_force_eval_state()
             T = Float64
             st = SimulationCore.build_simulation(
@@ -57,8 +57,10 @@
         st_direct = build_force_eval_state()
         st_step = build_force_eval_state()
 
+        SimulationCore.step!(st_step, SimulationCore.velocityverlet(st_step; gamma=0.0, temperature=0.0, dt=0.001), 0.001; compute_energy=true)
+        copyto!(st_direct.rx, st_step.rx)
+        copyto!(st_direct.ry, st_step.ry)
         SimulationCore.evaluate_forces_into_f!(st_direct, true; freeze_spring=true)
-        SimulationCore.step!(st_step, SimulationCore.velocityverlet(st_step; gamma=0.0, temperature=0.0, dt=0.0), 0.0; compute_energy=true)
         CUDA.synchronize()
 
         @test isapprox(Array(st_direct.fx), Array(st_step.fx); atol=1e-12, rtol=1e-12)

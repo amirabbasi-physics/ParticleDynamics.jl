@@ -11,6 +11,12 @@ simulations on `CUDA.jl`. The recommended public surface is the workflow API:
 </div>
 ```
 
+## Development version
+
+The current working version is **0.2.0-DEV**, not a published release.
+See the [integrator](manual/integrators.md) and [force](manual/forces.md) manuals
+for the timestep and physical-domain requirements.
+
 ## Scope
 
 - 2D/3D particle dynamics with periodic boundaries.

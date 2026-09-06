@@ -852,6 +852,7 @@ function em_step_2d!(rx::CuArray{T,1}, ry::CuArray{T,1},
                      box::Definitions.Box2{T};
                      unwrapped_x::Union{Nothing,CuArray{T,1}}=nothing,
                      unwrapped_y::Union{Nothing,CuArray{T,1}}=nothing) where {T<:AbstractFloat}
+    Definitions._require_stochastic_dt!(params, dt)
     N = length(rx)
     threads = min(256, N)
     blocks = cld(N, threads)
@@ -880,6 +881,7 @@ function em_step_3d!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
                      unwrapped_x::Union{Nothing,CuArray{T,1}}=nothing,
                      unwrapped_y::Union{Nothing,CuArray{T,1}}=nothing,
                      unwrapped_z::Union{Nothing,CuArray{T,1}}=nothing) where {T<:AbstractFloat}
+    Definitions._require_stochastic_dt!(params, dt)
     N = length(rx)
     threads = min(256, N)
     blocks = cld(N, threads)

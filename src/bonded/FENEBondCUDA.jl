@@ -1,3 +1,50 @@
+# Check the domain before any force/energy output is accumulated. A host-side
+# error avoids a device assertion (which would poison the CUDA context).
+@inline function _fene_r2(coords::NTuple{2}, i, j, box)
+    dx = mic_fast(coords[1][i] - coords[1][j], box[1]/2, box[1])
+    dy = mic_fast(coords[2][i] - coords[2][j], box[2]/2, box[2])
+    return muladd(dx, dx, dy*dy)
+end
+@inline function _fene_r2(coords::NTuple{3}, i, j, box)
+    dx = mic_fast(coords[1][i] - coords[1][j], box[1]/2, box[1])
+    dy = mic_fast(coords[2][i] - coords[2][j], box[2]/2, box[2])
+    dz = mic_fast(coords[3][i] - coords[3][j], box[3]/2, box[3])
+    return muladd(dx, dx, muladd(dy, dy, dz*dz))
+end
+function _fene_domain_kernel!(invalid, coords, index, flat, counts, box, R02)
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    i > length(index) && return
+    @inbounds for t in 0:Int(counts[i]-1)
+        j = flat[index[i]+t+1]
+        r2 = _fene_r2(coords, i, j, box)
+        if !(isfinite(r2) && r2 < R02)
+            CUDA.@atomic invalid[1] = min(invalid[1], Int32(i))
+        end
+    end
+    return
+end
+function _require_fene_domain!(coords, bonds, box, params)
+    R02 = params.R0 * params.R0
+    isfinite(params.k) && params.k >= 0 || throw(ArgumentError("FENE k must be finite and nonnegative"))
+    isfinite(params.R0) && params.R0 > 0 && isfinite(R02) && R02 > 0 ||
+        throw(ArgumentError("FENE R0 and its square must be finite and positive"))
+    isempty(bonds.flat) && return nothing
+    N = length(coords[1])
+    invalid = CUDA.fill(typemax(Int32), 1)
+    threads = min(256, N)
+    CUDA.@cuda threads=threads blocks=cld(N, threads) _fene_domain_kernel!(
+        invalid, coords, bonds.index, bonds.flat, bonds.counts, box, R02)
+    first_invalid = only(Array(invalid))
+    first_invalid == typemax(Int32) || throw(DomainError(first_invalid,
+        "FENE bond incident on particle $first_invalid has nonfinite length or r >= R0=$(params.R0). Reduce the timestep or correct the configuration; forces are not clamped."))
+    return nothing
+end
+
+# Subtraction before division retains valid near-limit extensions; log1p
+# avoids loss of the small energy for bonds close to zero length.
+@inline _fene_denom(r2, R02) = (R02 - r2) / R02
+@inline _fene_log(r2, R02, denom) = r2 < R02/2 ? log1p(-r2/R02) : log(denom)
+
 # ------------------------------------------------------------------
 # FENE kernels
 # ------------------------------------------------------------------
@@ -20,19 +67,18 @@ function _fene2_E!(
     eacc = zero(T)
     base = index[i]
     nb = counts[i]
-    invR02 = one(T) / (R0 * R0)
+    R02 = R0*R0
     @inbounds for t in 0:Int(nb - 1)
         j = flat[base + t + 1]
         dx = mic_fast(xi - rx[j], halfLx, Lx)
         dy = mic_fast(yi - ry[j], halfLy, Ly)
         r2 = muladd(dx, dx, dy * dy)
         if r2 > zero(T)
-            denom = one(T) - r2 * invR02
-            denom = max(denom, T(1e-6))
+            denom = _fene_denom(r2, R02)
             f_over_r = -k / denom
             accx += f_over_r * dx
             accy += f_over_r * dy
-            eacc += T(0.5) * (-T(0.5) * k * (R0 * R0) * log(denom))
+            eacc += T(0.5) * (-T(0.5) * k * (R0 * R0) * _fene_log(r2, R02, denom))
         end
     end
     fx[i] += accx
@@ -62,21 +108,20 @@ function _fene2_EV!(
     vxy = zero(T)
     base = index[i]
     nb = counts[i]
-    invR02 = one(T) / (R0 * R0)
+    R02 = R0*R0
     @inbounds for t in 0:Int(nb - 1)
         j = flat[base + t + 1]
         dx = mic_fast(xi - rx[j], halfLx, Lx)
         dy = mic_fast(yi - ry[j], halfLy, Ly)
         r2 = muladd(dx, dx, dy * dy)
         if r2 > zero(T)
-            denom = one(T) - r2 * invR02
-            denom = max(denom, T(1e-6))
+            denom = _fene_denom(r2, R02)
             f_over_r = -k / denom
             fxij = f_over_r * dx
             fyij = f_over_r * dy
             accx += fxij
             accy += fyij
-            eacc += T(0.5) * (-T(0.5) * k * (R0 * R0) * log(denom))
+            eacc += T(0.5) * (-T(0.5) * k * (R0 * R0) * _fene_log(r2, R02, denom))
             dvxx, dvyy, dvxy = _half_virial2(dx, dy, fxij, fyij)
             vxx += dvxx
             vyy += dvyy
@@ -112,7 +157,7 @@ function _fene3_E!(
     eacc = zero(T)
     base = index[i]
     nb = counts[i]
-    invR02 = one(T) / (R0 * R0)
+    R02 = R0*R0
     @inbounds for t in 0:Int(nb - 1)
         j = flat[base + t + 1]
         dx = mic_fast(xi - rx[j], halfLx, Lx)
@@ -120,13 +165,12 @@ function _fene3_E!(
         dz = mic_fast(zi - rz[j], halfLz, Lz)
         r2 = muladd(dx, dx, muladd(dy, dy, dz * dz))
         if r2 > zero(T)
-            denom = one(T) - r2 * invR02
-            denom = max(denom, T(1e-6))
+            denom = _fene_denom(r2, R02)
             f_over_r = -k / denom
             accx += f_over_r * dx
             accy += f_over_r * dy
             accz += f_over_r * dz
-            eacc += T(0.5) * (-T(0.5) * k * (R0 * R0) * log(denom))
+            eacc += T(0.5) * (-T(0.5) * k * (R0 * R0) * _fene_log(r2, R02, denom))
         end
     end
     fx[i] += accx
@@ -162,7 +206,7 @@ function _fene3_EV!(
     vyz = zero(T)
     base = index[i]
     nb = counts[i]
-    invR02 = one(T) / (R0 * R0)
+    R02 = R0*R0
     @inbounds for t in 0:Int(nb - 1)
         j = flat[base + t + 1]
         dx = mic_fast(xi - rx[j], halfLx, Lx)
@@ -170,8 +214,7 @@ function _fene3_EV!(
         dz = mic_fast(zi - rz[j], halfLz, Lz)
         r2 = muladd(dx, dx, muladd(dy, dy, dz * dz))
         if r2 > zero(T)
-            denom = one(T) - r2 * invR02
-            denom = max(denom, T(1e-6))
+            denom = _fene_denom(r2, R02)
             f_over_r = -k / denom
             fxij = f_over_r * dx
             fyij = f_over_r * dy
@@ -179,7 +222,7 @@ function _fene3_EV!(
             accx += fxij
             accy += fyij
             accz += fzij
-            eacc += T(0.5) * (-T(0.5) * k * (R0 * R0) * log(denom))
+            eacc += T(0.5) * (-T(0.5) * k * (R0 * R0) * _fene_log(r2, R02, denom))
             dvxx, dvyy, dvzz, dvxy, dvxz, dvyz = _half_virial3(dx, dy, dz, fxij, fyij, fzij)
             vxx += dvxx
             vyy += dvyy
@@ -219,15 +262,14 @@ function _fene2_noE!(
     accy = zero(T)
     base = index[i]
     nb = counts[i]
-    invR02 = one(T) / (R0 * R0)
+    R02 = R0*R0
     @inbounds for t in 0:Int(nb - 1)
         j = flat[base + t + 1]
         dx = mic_fast(xi - rx[j], halfLx, Lx)
         dy = mic_fast(yi - ry[j], halfLy, Ly)
         r2 = muladd(dx, dx, dy * dy)
         if r2 > zero(T)
-            denom = one(T) - r2 * invR02
-            denom = max(denom, T(1e-6))
+            denom = _fene_denom(r2, R02)
             f_over_r = -k / denom
             accx += f_over_r * dx
             accy += f_over_r * dy
@@ -257,7 +299,7 @@ function _fene3_noE!(
     accz = zero(T)
     base = index[i]
     nb = counts[i]
-    invR02 = one(T) / (R0 * R0)
+    R02 = R0*R0
     @inbounds for t in 0:Int(nb - 1)
         j = flat[base + t + 1]
         dx = mic_fast(xi - rx[j], halfLx, Lx)
@@ -265,8 +307,7 @@ function _fene3_noE!(
         dz = mic_fast(zi - rz[j], halfLz, Lz)
         r2 = muladd(dx, dx, muladd(dy, dy, dz * dz))
         if r2 > zero(T)
-            denom = one(T) - r2 * invR02
-            denom = max(denom, T(1e-6))
+            denom = _fene_denom(r2, R02)
             f_over_r = -k / denom
             accx += f_over_r * dx
             accy += f_over_r * dy
@@ -294,7 +335,9 @@ function fene_forces_soa!(
     fx::CuArray{T,1}, fy::CuArray{T,1}, E::CuArray{T,1},
     bonds::BondList, box::Definitions.Box2{T},
     params::Definitions.FENEParams{T}) where {T<:AbstractFloat}
+    _require_fene_domain!((rx, ry), bonds, box, params)
     N = length(rx)
+    N == 0 && return nothing
     threads = min(_bond_threads(N), N)
     blocks = cld(N, threads)
     Lx, Ly = box
@@ -317,7 +360,9 @@ function fene_forces_soa!(
     fx::CuArray{T,1}, fy::CuArray{T,1}, E::CuArray{T,1}, V::CuArray{T,2},
     bonds::BondList, box::Definitions.Box2{T},
     params::Definitions.FENEParams{T}) where {T<:AbstractFloat}
+    _require_fene_domain!((rx, ry), bonds, box, params)
     N = length(rx)
+    N == 0 && return nothing
     threads = min(_bond_threads(N), N)
     blocks = cld(N, threads)
     Lx, Ly = box
@@ -345,7 +390,9 @@ function fene_forces_soa_noE!(
     fx::CuArray{T,1}, fy::CuArray{T,1},
     bonds::BondList, box::Definitions.Box2{T},
     params::Definitions.FENEParams{T}) where {T<:AbstractFloat}
+    _require_fene_domain!((rx, ry), bonds, box, params)
     N = length(rx)
+    N == 0 && return nothing
     threads = min(_bond_threads(N), N)
     blocks = cld(N, threads)
     Lx, Ly = box
@@ -368,7 +415,9 @@ function fene_forces_soa!(
     fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1}, E::CuArray{T,1},
     bonds::BondList, box::Definitions.Box3{T},
     params::Definitions.FENEParams{T}) where {T<:AbstractFloat}
+    _require_fene_domain!((rx, ry, rz), bonds, box, params)
     N = length(rx)
+    N == 0 && return nothing
     threads = min(_bond_threads(N), N)
     blocks = cld(N, threads)
     Lx, Ly, Lz = box
@@ -392,7 +441,9 @@ function fene_forces_soa!(
     fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1}, E::CuArray{T,1}, V::CuArray{T,2},
     bonds::BondList, box::Definitions.Box3{T},
     params::Definitions.FENEParams{T}) where {T<:AbstractFloat}
+    _require_fene_domain!((rx, ry, rz), bonds, box, params)
     N = length(rx)
+    N == 0 && return nothing
     threads = min(_bond_threads(N), N)
     blocks = cld(N, threads)
     Lx, Ly, Lz = box
@@ -416,7 +467,9 @@ function fene_forces_soa_noE!(
     fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1},
     bonds::BondList, box::Definitions.Box3{T},
     params::Definitions.FENEParams{T}) where {T<:AbstractFloat}
+    _require_fene_domain!((rx, ry, rz), bonds, box, params)
     N = length(rx)
+    N == 0 && return nothing
     threads = min(_bond_threads(N), N)
     blocks = cld(N, threads)
     Lx, Ly, Lz = box

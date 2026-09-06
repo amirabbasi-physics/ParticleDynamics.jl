@@ -463,6 +463,7 @@ function vv_positions_soa!(rx::CuArray{T,1}, ry::CuArray{T,1},
                            params::VVParams{T}, dt::T, box::Definitions.Box2{T};
                            unwrapped_x::Union{Nothing,CuArray{T,1}}=nothing,
                            unwrapped_y::Union{Nothing,CuArray{T,1}}=nothing) where {T<:AbstractFloat}
+    Definitions._require_stochastic_dt!(params, dt)
     N = length(rx); threads = min(256, N); blocks = cld(N, threads)
     if unwrapped_x === nothing || unwrapped_y === nothing
         k = CUDA.@cuda launch=false _vv_pos2!(rx, ry, vx, vy, fx, fy, beta_x, beta_y,
@@ -490,6 +491,7 @@ function vv_positions_soa!(rx::CuArray{T,1}, ry::CuArray{T,1},
                            params::VVParams{T}, dt::T, box::Definitions.Box2{T};
                            unwrapped_x::Union{Nothing,CuArray{T,1}}=nothing,
                            unwrapped_y::Union{Nothing,CuArray{T,1}}=nothing) where {T<:AbstractFloat}
+    Definitions._require_stochastic_dt!(params, dt)
     N = length(rx); threads = min(256, N); blocks = cld(N, threads)
     if unwrapped_x === nothing || unwrapped_y === nothing
         k = CUDA.@cuda launch=false _vv_pos2!(rx, ry, vx, vy, fx, fy, beta_x, beta_y,
@@ -517,6 +519,7 @@ function vv_positions_soa!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
                            unwrapped_x::Union{Nothing,CuArray{T,1}}=nothing,
                            unwrapped_y::Union{Nothing,CuArray{T,1}}=nothing,
                            unwrapped_z::Union{Nothing,CuArray{T,1}}=nothing) where {T<:AbstractFloat}
+    Definitions._require_stochastic_dt!(params, dt)
     N = length(rx); threads = min(256, N); blocks = cld(N, threads)
     if unwrapped_x === nothing || unwrapped_y === nothing || unwrapped_z === nothing
         k = CUDA.@cuda launch=false _vv_pos3!(rx, ry, rz, vx, vy, vz, fx, fy, fz,
@@ -551,6 +554,7 @@ function vv_positions_soa!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
                            unwrapped_x::Union{Nothing,CuArray{T,1}}=nothing,
                            unwrapped_y::Union{Nothing,CuArray{T,1}}=nothing,
                            unwrapped_z::Union{Nothing,CuArray{T,1}}=nothing) where {T<:AbstractFloat}
+    Definitions._require_stochastic_dt!(params, dt)
     N = length(rx); threads = min(256, N); blocks = cld(N, threads)
     if unwrapped_x === nothing || unwrapped_y === nothing || unwrapped_z === nothing
         k = CUDA.@cuda launch=false _vv_pos3!(rx, ry, rz, vx, vy, vz, fx, fy, fz,
@@ -770,6 +774,7 @@ function vv_velocities_soa!(vx::CuArray{T,1}, vy::CuArray{T,1},
                             beta_x::CuArray{T,1}, beta_y::CuArray{T,1},
                             dq::CuArray{T,1}, dU::CuArray{T,1}, Ekin::CuArray{T,1},
                             params::VVParams{T}, dt::T) where {T<:AbstractFloat}
+    Definitions._require_stochastic_dt!(params, dt)
     N = length(vx); threads = min(256, N); blocks = cld(N, threads)
     k = CUDA.@cuda launch=false _vv_vel2!(vx, vy, f0x, f0y, fx, fy,
                                           beta_x, beta_y, dq, dU, Ekin,
@@ -789,6 +794,7 @@ function vv_velocities_soa!(vx::CuArray{T,1}, vy::CuArray{T,1},
                             dq::CuArray{T,1}, dU::CuArray{T,1}, Ekin::CuArray{T,1},
                             mass_particle::CuArray{T,1}, inv_mass_particle::CuArray{T,1},
                             params::VVParams{T}, dt::T) where {T<:AbstractFloat}
+    Definitions._require_stochastic_dt!(params, dt)
     N = length(vx); threads = min(256, N); blocks = cld(N, threads)
     k = CUDA.@cuda launch=false _vv_vel2!(vx, vy, f0x, f0y, fx, fy,
                                           beta_x, beta_y, dq, dU, Ekin,
@@ -807,6 +813,7 @@ function vv_velocities_soa!(vx::CuArray{T,1}, vy::CuArray{T,1}, vz::CuArray{T,1}
                             beta_x::CuArray{T,1}, beta_y::CuArray{T,1}, beta_z::CuArray{T,1},
                             dq::CuArray{T,1}, dU::CuArray{T,1}, Ekin::CuArray{T,1},
                             params::VVParams{T}, dt::T) where {T<:AbstractFloat}
+    Definitions._require_stochastic_dt!(params, dt)
     N = length(vx); threads = min(256, N); blocks = cld(N, threads)
     k = CUDA.@cuda launch=false _vv_vel3!(vx, vy, vz, f0x, f0y, f0z,
                                           fx, fy, fz,
@@ -828,6 +835,7 @@ function vv_velocities_soa!(vx::CuArray{T,1}, vy::CuArray{T,1}, vz::CuArray{T,1}
                             dq::CuArray{T,1}, dU::CuArray{T,1}, Ekin::CuArray{T,1},
                             mass_particle::CuArray{T,1}, inv_mass_particle::CuArray{T,1},
                             params::VVParams{T}, dt::T) where {T<:AbstractFloat}
+    Definitions._require_stochastic_dt!(params, dt)
     N = length(vx); threads = min(256, N); blocks = cld(N, threads)
     k = CUDA.@cuda launch=false _vv_vel3!(vx, vy, vz, f0x, f0y, f0z,
                                           fx, fy, fz,
@@ -1476,6 +1484,7 @@ Ornstein–Uhlenbeck velocity update (O step) for the BAOAB scheme in 2D. Uses
 the same per-particle `gamma` and noise scales as `VVParams`.
 """
 function baoab_OU_2d!(vx, vy, beta_x, beta_y, params::BAOABParams{T}, dt::T, dq) where {T<:AbstractFloat}
+    Definitions._require_stochastic_dt!(params, dt)
     N = length(vx); threads = min(256, N); blocks = cld(N, threads)
     k = CUDA.@cuda launch=false _baoab_OU2!(vx, vy, beta_x, beta_y, params.noise_scale, params.gamma, params.mass, dt, dq)
     k(vx, vy, beta_x, beta_y, params.noise_scale, params.gamma, params.mass, dt, dq; threads, blocks)
@@ -1485,6 +1494,7 @@ end
 function baoab_OU_2d!(vx, vy, beta_x, beta_y,
                       inv_mass_particle::CuArray{T,1},
                       params::BAOABParams{T}, dt::T, dq) where {T<:AbstractFloat}
+    Definitions._require_stochastic_dt!(params, dt)
     N = length(vx); threads = min(256, N); blocks = cld(N, threads)
     k = CUDA.@cuda launch=false _baoab_OU2!(vx, vy, beta_x, beta_y, params.noise_scale, params.gamma, inv_mass_particle, dt, dq)
     k(vx, vy, beta_x, beta_y, params.noise_scale, params.gamma, inv_mass_particle, dt, dq; threads, blocks)
@@ -1495,6 +1505,7 @@ end
 3D OU step for BAOAB (see [`baoab_OU_2d!`](@ref)).
 """
 function baoab_OU_3d!(vx, vy, vz, beta_x, beta_y, beta_z, params::BAOABParams{T}, dt::T, dq) where {T<:AbstractFloat}
+    Definitions._require_stochastic_dt!(params, dt)
     N = length(vx); threads = min(256, N); blocks = cld(N, threads)
     k = CUDA.@cuda launch=false _baoab_OU3!(vx, vy, vz, beta_x, beta_y, beta_z, params.noise_scale, params.gamma, params.mass, dt, dq)
     k(vx, vy, vz, beta_x, beta_y, beta_z, params.noise_scale, params.gamma, params.mass, dt, dq; threads, blocks)
@@ -1504,6 +1515,7 @@ end
 function baoab_OU_3d!(vx, vy, vz, beta_x, beta_y, beta_z,
                       inv_mass_particle::CuArray{T,1},
                       params::BAOABParams{T}, dt::T, dq) where {T<:AbstractFloat}
+    Definitions._require_stochastic_dt!(params, dt)
     N = length(vx); threads = min(256, N); blocks = cld(N, threads)
     k = CUDA.@cuda launch=false _baoab_OU3!(vx, vy, vz, beta_x, beta_y, beta_z, params.noise_scale, params.gamma, inv_mass_particle, dt, dq)
     k(vx, vy, vz, beta_x, beta_y, beta_z, params.noise_scale, params.gamma, inv_mass_particle, dt, dq; threads, blocks)

@@ -14,6 +14,13 @@ The existing low-level engine remains available for expert workflows and tests.
 That surface is centered on `build_simulation`, `step!`, integrator builders,
 and `ParticleDynamics.SimulationCore`.
 
+## Development version
+
+The working version is **0.2.0-DEV**, which has not been released.
+For compatibility changes, see the [changelog](CHANGELOG.md),
+[integrator manual](docs/src/manual/integrators.md), and
+[force manual](docs/src/manual/forces.md).
+
 ## GPU requirement
 
 This package currently targets CUDA-backed simulations.

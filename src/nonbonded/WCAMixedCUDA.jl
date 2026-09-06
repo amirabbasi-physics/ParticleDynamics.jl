@@ -2,19 +2,20 @@
 # WCA (truncated-shifted LJ)
 # =============================
 
-function _wca2_ell_kernel_mixed!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
+function _wca2_kernel_mixed!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
     fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, Epot::CuDeviceVector{T},
-    neighbors_index::CuDeviceVector{Int32}, neighbors_flat::CuDeviceVector{Int32}, counts::CuDeviceVector{Int32}, cap::Int32,
+    rows, excluded_bonds,
     Lx::T, Ly::T, halfLx::T, halfLy::T,
     ϵ::T, σp::CuDeviceVector{T}, rcut_factor::T) where {T<:AbstractFloat}
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     N = length(rx); if i > N; return; end
     xi = rx[i]; yi = ry[i]
     accx = zero(T); accy = zero(T); eacc = zero(T)
-    nlist = counts[i]
+    nlist = _mixed_count(rows, i, N)
     σi = σp[i]
     @inbounds for t in 0:Int(nlist-1)
-        j = neighbors_flat[_ell_index(i, t, N)]
+        j = _mixed_neighbor(rows, i, t, N)
+        (j == i || _mixed_excluded(excluded_bonds, i, j)) && continue
         dx = mic_fast(xi - rx[j], halfLx, Lx)
         dy = mic_fast(yi - ry[j], halfLy, Ly)
         r2 = muladd(dx, dx, dy*dy)
@@ -36,9 +37,9 @@ function _wca2_ell_kernel_mixed!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
     return
 end
 
-function _wca2_ell_kernel_mixed_virial!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
+function _wca2_kernel_mixed_virial!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
     fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, Epot::CuDeviceVector{T}, V::CuDeviceMatrix{T},
-    neighbors_index::CuDeviceVector{Int32}, neighbors_flat::CuDeviceVector{Int32}, counts::CuDeviceVector{Int32}, cap::Int32,
+    rows, excluded_bonds,
     Lx::T, Ly::T, halfLx::T, halfLy::T,
     ϵ::T, σp::CuDeviceVector{T}, rcut_factor::T) where {T<:AbstractFloat}
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
@@ -46,10 +47,11 @@ function _wca2_ell_kernel_mixed_virial!(rx::CuDeviceVector{T}, ry::CuDeviceVecto
     xi = rx[i]; yi = ry[i]
     accx = zero(T); accy = zero(T); eacc = zero(T)
     vxx = zero(T); vyy = zero(T); vxy = zero(T)
-    nlist = counts[i]
+    nlist = _mixed_count(rows, i, N)
     σi = σp[i]
     @inbounds for t in 0:Int(nlist-1)
-        j = neighbors_flat[_ell_index(i, t, N)]
+        j = _mixed_neighbor(rows, i, t, N)
+        (j == i || _mixed_excluded(excluded_bonds, i, j)) && continue
         dx = mic_fast(xi - rx[j], halfLx, Lx)
         dy = mic_fast(yi - ry[j], halfLy, Ly)
         r2 = muladd(dx, dx, dy*dy)
@@ -76,19 +78,20 @@ function _wca2_ell_kernel_mixed_virial!(rx::CuDeviceVector{T}, ry::CuDeviceVecto
     return
 end
 
-function _wca3_ell_kernel_mixed!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
+function _wca3_kernel_mixed!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
     fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, fz::CuDeviceVector{T}, Epot::CuDeviceVector{T},
-    neighbors_index::CuDeviceVector{Int32}, neighbors_flat::CuDeviceVector{Int32}, counts::CuDeviceVector{Int32}, cap::Int32,
+    rows, excluded_bonds,
     Lx::T, Ly::T, Lz::T, halfLx::T, halfLy::T, halfLz::T,
     ϵ::T, σp::CuDeviceVector{T}, rcut_factor::T) where {T<:AbstractFloat}
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     N = length(rx); if i > N; return; end
     xi = rx[i]; yi = ry[i]; zi = rz[i]
     accx = zero(T); accy = zero(T); accz = zero(T); eacc = zero(T)
-    nlist = counts[i]
+    nlist = _mixed_count(rows, i, N)
     σi = σp[i]
     @inbounds for t in 0:Int(nlist-1)
-        j = neighbors_flat[_ell_index(i, t, N)]
+        j = _mixed_neighbor(rows, i, t, N)
+        (j == i || _mixed_excluded(excluded_bonds, i, j)) && continue
         dx = mic_fast(xi - rx[j], halfLx, Lx)
         dy = mic_fast(yi - ry[j], halfLy, Ly)
         dz = mic_fast(zi - rz[j], halfLz, Lz)
@@ -112,9 +115,9 @@ function _wca3_ell_kernel_mixed!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, r
     return
 end
 
-function _wca3_ell_kernel_mixed_virial!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
+function _wca3_kernel_mixed_virial!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
     fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, fz::CuDeviceVector{T}, Epot::CuDeviceVector{T}, V::CuDeviceMatrix{T},
-    neighbors_index::CuDeviceVector{Int32}, neighbors_flat::CuDeviceVector{Int32}, counts::CuDeviceVector{Int32}, cap::Int32,
+    rows, excluded_bonds,
     Lx::T, Ly::T, Lz::T, halfLx::T, halfLy::T, halfLz::T,
     ϵ::T, σp::CuDeviceVector{T}, rcut_factor::T) where {T<:AbstractFloat}
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
@@ -122,10 +125,11 @@ function _wca3_ell_kernel_mixed_virial!(rx::CuDeviceVector{T}, ry::CuDeviceVecto
     xi = rx[i]; yi = ry[i]; zi = rz[i]
     accx = zero(T); accy = zero(T); accz = zero(T); eacc = zero(T)
     vxx = zero(T); vyy = zero(T); vzz = zero(T); vxy = zero(T); vxz = zero(T); vyz = zero(T)
-    nlist = counts[i]
+    nlist = _mixed_count(rows, i, N)
     σi = σp[i]
     @inbounds for t in 0:Int(nlist-1)
-        j = neighbors_flat[_ell_index(i, t, N)]
+        j = _mixed_neighbor(rows, i, t, N)
+        (j == i || _mixed_excluded(excluded_bonds, i, j)) && continue
         dx = mic_fast(xi - rx[j], halfLx, Lx)
         dy = mic_fast(yi - ry[j], halfLy, Ly)
         dz = mic_fast(zi - rz[j], halfLz, Lz)
@@ -157,19 +161,20 @@ function _wca3_ell_kernel_mixed_virial!(rx::CuDeviceVector{T}, ry::CuDeviceVecto
     return
 end
 
-function _wca2_ell_noE_kernel_mixed!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
+function _wca2_noE_kernel_mixed!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
     fx::CuDeviceVector{T}, fy::CuDeviceVector{T},
-    neighbors_index::CuDeviceVector{Int32}, neighbors_flat::CuDeviceVector{Int32}, counts::CuDeviceVector{Int32}, cap::Int32,
+    rows, excluded_bonds,
     Lx::T, Ly::T, halfLx::T, halfLy::T,
     ϵ::T, σp::CuDeviceVector{T}, rcut_factor::T) where {T<:AbstractFloat}
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     N = length(rx); if i > N; return; end
     xi = rx[i]; yi = ry[i]
     accx = zero(T); accy = zero(T)
-    nlist = counts[i]
+    nlist = _mixed_count(rows, i, N)
     σi = σp[i]
     @inbounds for t in 0:Int(nlist-1)
-        j = neighbors_flat[_ell_index(i, t, N)]
+        j = _mixed_neighbor(rows, i, t, N)
+        (j == i || _mixed_excluded(excluded_bonds, i, j)) && continue
         dx = mic_fast(xi - rx[j], halfLx, Lx)
         dy = mic_fast(yi - ry[j], halfLy, Ly)
         r2 = muladd(dx, dx, dy*dy)
@@ -189,19 +194,20 @@ function _wca2_ell_noE_kernel_mixed!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T
     return
 end
 
-function _wca3_ell_noE_kernel_mixed!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
+function _wca3_noE_kernel_mixed!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
     fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, fz::CuDeviceVector{T},
-    neighbors_index::CuDeviceVector{Int32}, neighbors_flat::CuDeviceVector{Int32}, counts::CuDeviceVector{Int32}, cap::Int32,
+    rows, excluded_bonds,
     Lx::T, Ly::T, Lz::T, halfLx::T, halfLy::T, halfLz::T,
     ϵ::T, σp::CuDeviceVector{T}, rcut_factor::T) where {T<:AbstractFloat}
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     N = length(rx); if i > N; return; end
     xi = rx[i]; yi = ry[i]; zi = rz[i]
     accx = zero(T); accy = zero(T); accz = zero(T)
-    nlist = counts[i]
+    nlist = _mixed_count(rows, i, N)
     σi = σp[i]
     @inbounds for t in 0:Int(nlist-1)
-        j = neighbors_flat[_ell_index(i, t, N)]
+        j = _mixed_neighbor(rows, i, t, N)
+        (j == i || _mixed_excluded(excluded_bonds, i, j)) && continue
         dx = mic_fast(xi - rx[j], halfLx, Lx)
         dy = mic_fast(yi - ry[j], halfLy, Ly)
         dz = mic_fast(zi - rz[j], halfLz, Lz)
@@ -227,19 +233,20 @@ function wca_forces_soa_mixed!(rx::CuArray{T,1}, ry::CuArray{T,1},
                                nbh::NeighborLists.AbstractNeighborMatrix,
                                box::Definitions.Box2{T},
                                ϵ::T,
-                               σp::CuArray{T,1}, rcut_factor::T) where {T<:AbstractFloat}
+                               σp::CuArray{T,1}, rcut_factor::T; bonds::Union{Nothing,BondedForces.BondList}=nothing) where {T<:AbstractFloat}
     NeighborLists.require_valid_neighbors(nbh)
     N = length(rx)
+    N == 0 && return nothing
     threads, blocks = _launch_config_energy(N)
     Lx = T(box[1]); Ly = T(box[2])
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly
-    k = CUDA.@cuda launch=false _wca2_ell_kernel_mixed!(
+    k = CUDA.@cuda launch=false _wca2_kernel_mixed!(
         rx, ry, fx, fy, Epot,
-        nbh.neighbors_index, nbh.neighbors_flat, nbh.counts, nbh.cap,
+        _mixed_neighbors(nbh), _mixed_bonds(bonds),
         Lx, Ly, halfLx, halfLy,
         ϵ, σp, rcut_factor)
     k(rx, ry, fx, fy, Epot,
-      nbh.neighbors_index, nbh.neighbors_flat, nbh.counts, nbh.cap,
+      _mixed_neighbors(nbh), _mixed_bonds(bonds),
       Lx, Ly, halfLx, halfLy,
       ϵ, σp, rcut_factor; threads, blocks)
     return nothing
@@ -250,19 +257,20 @@ function wca_forces_soa_mixed!(rx::CuArray{T,1}, ry::CuArray{T,1},
                                nbh::NeighborLists.AbstractNeighborMatrix,
                                box::Definitions.Box2{T},
                                ϵ::T,
-                               σp::CuArray{T,1}, rcut_factor::T) where {T<:AbstractFloat}
+                               σp::CuArray{T,1}, rcut_factor::T; bonds::Union{Nothing,BondedForces.BondList}=nothing) where {T<:AbstractFloat}
     NeighborLists.require_valid_neighbors(nbh)
     N = length(rx)
+    N == 0 && return nothing
     threads, blocks = _launch_config_energy(N)
     Lx = T(box[1]); Ly = T(box[2])
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly
-    k = CUDA.@cuda launch=false _wca2_ell_kernel_mixed_virial!(
+    k = CUDA.@cuda launch=false _wca2_kernel_mixed_virial!(
         rx, ry, fx, fy, Epot, V,
-        nbh.neighbors_index, nbh.neighbors_flat, nbh.counts, nbh.cap,
+        _mixed_neighbors(nbh), _mixed_bonds(bonds),
         Lx, Ly, halfLx, halfLy,
         ϵ, σp, rcut_factor)
     k(rx, ry, fx, fy, Epot, V,
-      nbh.neighbors_index, nbh.neighbors_flat, nbh.counts, nbh.cap,
+      _mixed_neighbors(nbh), _mixed_bonds(bonds),
       Lx, Ly, halfLx, halfLy,
       ϵ, σp, rcut_factor; threads, blocks)
     return nothing
@@ -273,19 +281,20 @@ function wca_forces_soa_mixed!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T
                                nbh::NeighborLists.AbstractNeighborMatrix,
                                box::Definitions.Box3{T},
                                ϵ::T,
-                               σp::CuArray{T,1}, rcut_factor::T) where {T<:AbstractFloat}
+                               σp::CuArray{T,1}, rcut_factor::T; bonds::Union{Nothing,BondedForces.BondList}=nothing) where {T<:AbstractFloat}
     NeighborLists.require_valid_neighbors(nbh)
     N = length(rx)
+    N == 0 && return nothing
     threads, blocks = _launch_config_energy(N)
     Lx = T(box[1]); Ly = T(box[2]); Lz = T(box[3])
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly; halfLz = T(0.5)*Lz
-    k = CUDA.@cuda launch=false _wca3_ell_kernel_mixed!(
+    k = CUDA.@cuda launch=false _wca3_kernel_mixed!(
         rx, ry, rz, fx, fy, fz, Epot,
-        nbh.neighbors_index, nbh.neighbors_flat, nbh.counts, nbh.cap,
+        _mixed_neighbors(nbh), _mixed_bonds(bonds),
         Lx, Ly, Lz, halfLx, halfLy, halfLz,
         ϵ, σp, rcut_factor)
     k(rx, ry, rz, fx, fy, fz, Epot,
-      nbh.neighbors_index, nbh.neighbors_flat, nbh.counts, nbh.cap,
+      _mixed_neighbors(nbh), _mixed_bonds(bonds),
       Lx, Ly, Lz, halfLx, halfLy, halfLz,
       ϵ, σp, rcut_factor; threads, blocks)
     return nothing
@@ -296,19 +305,20 @@ function wca_forces_soa_mixed!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T
                                nbh::NeighborLists.AbstractNeighborMatrix,
                                box::Definitions.Box3{T},
                                ϵ::T,
-                               σp::CuArray{T,1}, rcut_factor::T) where {T<:AbstractFloat}
+                               σp::CuArray{T,1}, rcut_factor::T; bonds::Union{Nothing,BondedForces.BondList}=nothing) where {T<:AbstractFloat}
     NeighborLists.require_valid_neighbors(nbh)
     N = length(rx)
+    N == 0 && return nothing
     threads, blocks = _launch_config_energy(N)
     Lx = T(box[1]); Ly = T(box[2]); Lz = T(box[3])
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly; halfLz = T(0.5)*Lz
-    k = CUDA.@cuda launch=false _wca3_ell_kernel_mixed_virial!(
+    k = CUDA.@cuda launch=false _wca3_kernel_mixed_virial!(
         rx, ry, rz, fx, fy, fz, Epot, V,
-        nbh.neighbors_index, nbh.neighbors_flat, nbh.counts, nbh.cap,
+        _mixed_neighbors(nbh), _mixed_bonds(bonds),
         Lx, Ly, Lz, halfLx, halfLy, halfLz,
         ϵ, σp, rcut_factor)
     k(rx, ry, rz, fx, fy, fz, Epot, V,
-      nbh.neighbors_index, nbh.neighbors_flat, nbh.counts, nbh.cap,
+      _mixed_neighbors(nbh), _mixed_bonds(bonds),
       Lx, Ly, Lz, halfLx, halfLy, halfLz,
       ϵ, σp, rcut_factor; threads, blocks)
     return nothing
@@ -319,19 +329,20 @@ function wca_forces_soa_noE_mixed!(rx::CuArray{T,1}, ry::CuArray{T,1},
                                    nbh::NeighborLists.AbstractNeighborMatrix,
                                    box::Definitions.Box2{T},
                                    ϵ::T,
-                                   σp::CuArray{T,1}, rcut_factor::T) where {T<:AbstractFloat}
+                                   σp::CuArray{T,1}, rcut_factor::T; bonds::Union{Nothing,BondedForces.BondList}=nothing) where {T<:AbstractFloat}
     NeighborLists.require_valid_neighbors(nbh)
     N = length(rx)
+    N == 0 && return nothing
     threads, blocks = _launch_config_force_only(N)
     Lx = T(box[1]); Ly = T(box[2])
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly
-    k = CUDA.@cuda launch=false _wca2_ell_noE_kernel_mixed!(
+    k = CUDA.@cuda launch=false _wca2_noE_kernel_mixed!(
         rx, ry, fx, fy,
-        nbh.neighbors_index, nbh.neighbors_flat, nbh.counts, nbh.cap,
+        _mixed_neighbors(nbh), _mixed_bonds(bonds),
         Lx, Ly, halfLx, halfLy,
         ϵ, σp, rcut_factor)
     k(rx, ry, fx, fy,
-      nbh.neighbors_index, nbh.neighbors_flat, nbh.counts, nbh.cap,
+      _mixed_neighbors(nbh), _mixed_bonds(bonds),
       Lx, Ly, halfLx, halfLy,
       ϵ, σp, rcut_factor; threads, blocks)
     return nothing
@@ -342,19 +353,20 @@ function wca_forces_soa_noE_mixed!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArr
                                    nbh::NeighborLists.AbstractNeighborMatrix,
                                    box::Definitions.Box3{T},
                                    ϵ::T,
-                                   σp::CuArray{T,1}, rcut_factor::T) where {T<:AbstractFloat}
+                                   σp::CuArray{T,1}, rcut_factor::T; bonds::Union{Nothing,BondedForces.BondList}=nothing) where {T<:AbstractFloat}
     NeighborLists.require_valid_neighbors(nbh)
     N = length(rx)
+    N == 0 && return nothing
     threads, blocks = _launch_config_force_only(N)
     Lx = T(box[1]); Ly = T(box[2]); Lz = T(box[3])
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly; halfLz = T(0.5)*Lz
-    k = CUDA.@cuda launch=false _wca3_ell_noE_kernel_mixed!(
+    k = CUDA.@cuda launch=false _wca3_noE_kernel_mixed!(
         rx, ry, rz, fx, fy, fz,
-        nbh.neighbors_index, nbh.neighbors_flat, nbh.counts, nbh.cap,
+        _mixed_neighbors(nbh), _mixed_bonds(bonds),
         Lx, Ly, Lz, halfLx, halfLy, halfLz,
         ϵ, σp, rcut_factor)
     k(rx, ry, rz, fx, fy, fz,
-      nbh.neighbors_index, nbh.neighbors_flat, nbh.counts, nbh.cap,
+      _mixed_neighbors(nbh), _mixed_bonds(bonds),
       Lx, Ly, Lz, halfLx, halfLy, halfLz,
       ϵ, σp, rcut_factor; threads, blocks)
     return nothing

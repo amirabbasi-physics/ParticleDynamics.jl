@@ -122,6 +122,7 @@ function run_integrator_step!(st::SimulationState{T},
                               spec::IntegratorSpec{T},
                               dt::T;
                               compute_energy::Bool=true) where {T<:AbstractFloat}
+    isfinite(dt) && dt > zero(T) || throw(ArgumentError("dt must be finite and positive"))
     validate_integrator_inputs!(spec, st, dt)
 
     try
