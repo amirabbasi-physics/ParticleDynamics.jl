@@ -104,8 +104,10 @@ function _kernel_neighbors2!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
                         dx = mic_fast(rx[j] - rx[i1], halfLx, Lx)
                         dy = mic_fast(ry[j] - ry[i1], halfLy, Ly)
                         r2 = muladd(dx, dx, dy*dy)
-                        if r2 <= cutoff2 && found < cap
-                            neighbors_flat[_ell_index(i1, found, N)] = j
+                        if r2 <= cutoff2
+                            if found < cap
+                                neighbors_flat[_ell_index(i1, found, N)] = j
+                            end
                             found += 1
                         end
                     end
@@ -154,8 +156,10 @@ function _kernel_neighbors3!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::C
                             dy = mic_fast(ry[j] - ry[i1], halfLy, Ly)
                             dz = mic_fast(rz[j] - rz[i1], halfLz, Lz)
                             r2 = muladd(dx, dx, muladd(dy, dy, dz*dz))
-                            if r2 <= rl2 && found < cap
-                                neighbors_flat[_ell_index(i1, found, N)] = j
+                            if r2 <= rl2
+                                if found < cap
+                                    neighbors_flat[_ell_index(i1, found, N)] = j
+                                end
                                 found += 1
                             end
                         end

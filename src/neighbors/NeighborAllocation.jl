@@ -2,6 +2,16 @@
 # Allocation helpers
 # ============================================================================
 
+function _validate_neighbor_allocation(N, D, box, cell_size, skin, cap)
+    0 < N < typemax(Int32) || throw(ArgumentError("Neighbor builders require 0 < N < typemax(Int32)."))
+    cap > 0 || throw(ArgumentError("Neighbor capacity must be positive."))
+    length(box) == D && all(x -> isfinite(x) && x > 0, box) ||
+        throw(ArgumentError("Neighbor box lengths must be finite and positive."))
+    isfinite(cell_size) && cell_size > 0 || throw(ArgumentError("Neighbor cell size must be finite and positive."))
+    isfinite(skin) && skin >= 0 || throw(ArgumentError("Neighbor skin must be finite and nonnegative."))
+    return nothing
+end
+
 function _validate_neighbor_grid(box, cell_size, nx::Integer, ny::Integer, nz::Integer, D::Int, style::AbstractString)
     ok = D == 2 ? (nx >= 3 && ny >= 3) : (nx >= 3 && ny >= 3 && nz >= 3)
     ok && return nothing
@@ -13,8 +23,10 @@ function _alloc_neighbor_matrix(T::Type{<:AbstractFloat}, N::Int, D::Int,
                                 box, cutoff::Real, skin::Real, cap::Int32)
     cutoffT = T(cutoff)
     skinT   = T(skin)
+    isfinite(cutoffT) && cutoffT >= 0 || throw(ArgumentError("Neighbor cutoff must be finite and nonnegative."))
     cutoff2 = cutoffT * cutoffT
     cell_size = max(T(1e-6), cutoffT + skinT)
+    _validate_neighbor_allocation(N, D, box, cell_size, skinT, cap)
     nx, ny, nz = _choose_grid(box, cell_size, D)
     _validate_neighbor_grid(box, cell_size, nx, ny, nz, D, "Dense cell-list neighbor builder")
 
@@ -40,7 +52,7 @@ function _alloc_neighbor_matrix(T::Type{<:AbstractFloat}, N::Int, D::Int,
         Int32(N), Int32(D),
         nx, ny, nz, cell_size,
         particle_ids_sorted, cell_offsets, cell_counts, cell_of_particle,
-        rref_x, rref_y, rref_z, dr2, 0, 20
+        rref_x, rref_y, rref_z, dr2, 0, 20, false, 0
     )
 end
 
@@ -48,6 +60,7 @@ function _alloc_stencil_matrix(T::Type{<:AbstractFloat}, N::Int, D::Int,
                                box, cell_size::Real, skin::Real, cap::Int32)
     cellT = T(cell_size)
     skinT = T(skin)
+    _validate_neighbor_allocation(N, D, box, cellT, skinT, cap)
     nx, ny, nz = _choose_grid(box, cellT, D)
     _validate_neighbor_grid(box, cellT, nx, ny, nz, D, "Stencil cell-list neighbor builder")
 
@@ -77,7 +90,7 @@ function _alloc_stencil_matrix(T::Type{<:AbstractFloat}, N::Int, D::Int,
         nx, ny, nz, cellT,
         particle_ids_sorted, cell_offsets, cell_counts, cell_of_particle,
         rlist, rlist2,
-        rref_x, rref_y, rref_z, dr2, 0, 20
+        rref_x, rref_y, rref_z, dr2, 0, 20, false, 0
     )
 end
 
@@ -184,7 +197,9 @@ function build_neighbors_stencil!(rx::CuArray{T,1}, ry::CuArray{T,1};
                                   cap::Int32, skin::Real) where {T<:AbstractFloat}
     N = length(rx)
     @assert length(rcut_particle) == N
-    rcut_host = T.(rcut_particle)
+    N > 0 || throw(ArgumentError("Neighbor builders require at least one particle."))
+    rcut_host = T.(Array(rcut_particle))
+    all(x -> isfinite(x) && x >= 0, rcut_host) || throw(ArgumentError("Stencil cutoffs must be finite and nonnegative."))
     min_rc = minimum(rcut_host)
     cell_size = max(T(1e-6), min_rc + skin)
     nbh = _alloc_stencil_matrix(T, N, 2, box, cell_size, skin, cap)
@@ -202,7 +217,9 @@ function build_neighbors_stencil!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArra
                                   cap::Int32, skin::Real) where {T<:AbstractFloat}
     N = length(rx)
     @assert length(rcut_particle) == N
-    rcut_host = T.(rcut_particle)
+    N > 0 || throw(ArgumentError("Neighbor builders require at least one particle."))
+    rcut_host = T.(Array(rcut_particle))
+    all(x -> isfinite(x) && x >= 0, rcut_host) || throw(ArgumentError("Stencil cutoffs must be finite and nonnegative."))
     min_rc = minimum(rcut_host)
     cell_size = max(T(1e-6), min_rc + skin)
     nbh = _alloc_stencil_matrix(T, N, 3, box, cell_size, skin, cap)
@@ -228,12 +245,17 @@ function build_neighbors_stencil_by_types!(rx::CuArray{T,1}, ry::CuArray{T,1};
                                            rcut_pair::AbstractMatrix{<:Real},
                                            cap::Int32, skin::Real) where {T<:AbstractFloat}
     N = length(rx)
+    N > 0 || throw(ArgumentError("Neighbor builders require at least one particle."))
     nt = size(rcut_pair, 1)
+    nt > 0 || throw(ArgumentError("Pair cutoff table must be nonempty."))
+    all(x -> isfinite(x) && x >= 0, rcut_pair) || throw(ArgumentError("Pair cutoffs must be finite and nonnegative."))
     @assert nt == size(rcut_pair, 2)
     rtype = [T(maximum(rcut_pair[t, :])) for t in 1:nt]
     cell_size = max(T(1e-6), minimum(rtype) + skin)
     nbh = _alloc_stencil_matrix(T, N, 2, box, cell_size, skin, cap)
     tid_h = Array(typeid)
+    length(tid_h) == N || throw(DimensionMismatch("typeid length must equal the particle count."))
+    all(t -> 1 <= t <= nt, tid_h) || throw(ArgumentError("typeid must index the pair cutoff table."))
     rcut_h = Vector{T}(undef, N)
     @inbounds for i in 1:N
         rcut_h[i] = rtype[Int(tid_h[i])]
@@ -252,12 +274,17 @@ function build_neighbors_stencil_by_types!(rx::CuArray{T,1}, ry::CuArray{T,1}, r
                                            rcut_pair::AbstractMatrix{<:Real},
                                            cap::Int32, skin::Real) where {T<:AbstractFloat}
     N = length(rx)
+    N > 0 || throw(ArgumentError("Neighbor builders require at least one particle."))
     nt = size(rcut_pair, 1)
+    nt > 0 || throw(ArgumentError("Pair cutoff table must be nonempty."))
+    all(x -> isfinite(x) && x >= 0, rcut_pair) || throw(ArgumentError("Pair cutoffs must be finite and nonnegative."))
     @assert nt == size(rcut_pair, 2)
     rtype = [T(maximum(rcut_pair[t, :])) for t in 1:nt]
     cell_size = max(T(1e-6), minimum(rtype) + skin)
     nbh = _alloc_stencil_matrix(T, N, 3, box, cell_size, skin, cap)
     tid_h = Array(typeid)
+    length(tid_h) == N || throw(DimensionMismatch("typeid length must equal the particle count."))
+    all(t -> 1 <= t <= nt, tid_h) || throw(ArgumentError("typeid must index the pair cutoff table."))
     rcut_h = Vector{T}(undef, N)
     @inbounds for i in 1:N
         rcut_h[i] = rtype[Int(tid_h[i])]

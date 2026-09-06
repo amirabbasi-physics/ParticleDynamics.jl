@@ -4,6 +4,34 @@ All notable user-visible changes to this project will be documented in this file
 
 ## Unreleased
 
+### Correctness and maintenance
+
+- Renamed private nonbonded `*_csr_*` kernels to `*_ell_*` and the three
+  `*CSRCUDA.jl` files to `*ELLCUDA.jl`. Dense and stencil neighbors use ELL;
+  bond adjacency remains CSR. Public force function names are unchanged.
+- Collision readers and contact-history buffers now use the same shared
+  slot-major ELL index as force kernels and neighbor builders.
+- Neighbor builders count all required entries and throw
+  `NeighborLists.NeighborCapacityError` on overflow. Failed or unbuilt lists
+  cannot be consumed by force/collision entry points. Automatic growth is not
+  implemented; callers must select sufficient capacity.
+- Neighbor containers gained `valid` and `required_capacity` fields. Code
+  using positional struct constructors must migrate to the neighbor builders
+  or supply the new fields; exported force signatures remain unchanged.
+- Low-level state construction defers its first list build until coordinates
+  are initialized, avoiding the quadratic scan of placeholder zero positions.
+- Wide periodic stencils visit each cell at most once, preventing duplicate
+  neighbors when the stencil spans an axis.
+- Workflow replace-mode writers replace output once per simulation writer
+  session and append across subsequent stages, including repeated preparation
+  of the same writer. Initial-frame failures now restore stage overrides and
+  close already-opened writers.
+- Added host-only neighbor oracle tests plus GPU completeness, overflow,
+  stencil, collision and writer-lifecycle regressions.
+- Stabilized statistical validation through an equilibrated CSVR temperature
+  average and a larger independent OU particle ensemble, rather than relaxing
+  the existing OU accuracy thresholds.
+
 ### Features
 
 - GSD output now writes particle masses automatically and infers covalent

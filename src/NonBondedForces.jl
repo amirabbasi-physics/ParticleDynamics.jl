@@ -3,6 +3,7 @@ module NonBondedForces
 using CUDA
 using ..Definitions
 using ..NeighborLists  # so we can dispatch on NeighborLists.NeighborMatrix
+using ..NeighborLists: _ell_index
 using ..BondedForces   # for BondList in exclusions
 
 export lj_forces_soa!, lj_forces_soa_noE!,
@@ -14,12 +15,12 @@ include("nonbonded/BondExclusionsCUDA.jl")
 include("nonbonded/LJAllPairsCUDA.jl")
 include("nonbonded/WCAAllPairsCUDA.jl")
 include("nonbonded/SoftRepulsiveAllPairsCUDA.jl")
-include("nonbonded/LJCSRCUDA.jl")
+include("nonbonded/LJELLCUDA.jl")
 include("nonbonded/LJMixedCUDA.jl")
 include("nonbonded/LJPairMatrixCUDA.jl")
-include("nonbonded/WCACSRCUDA.jl")
+include("nonbonded/WCAELLCUDA.jl")
 include("nonbonded/WCAMixedCUDA.jl")
 include("nonbonded/WCAPairMatrixCUDA.jl")
-include("nonbonded/SoftRepulsiveCSRCUDA.jl")
+include("nonbonded/SoftRepulsiveELLCUDA.jl")
 
 end # module

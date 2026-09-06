@@ -2,7 +2,7 @@
 # Mixed-σ LJ (per-particle size; Lorentz mixing, global ϵ)
 # ───────────────────────────────────────────────────────────────────────────────
 
-function _lj2_csr_kernel_mixed!(
+function _lj2_ell_kernel_mixed!(
     rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
     fx::CuDeviceVector{T}, fy::CuDeviceVector{T},
     Epot::CuDeviceVector{T},
@@ -41,7 +41,7 @@ function _lj2_csr_kernel_mixed!(
     return
 end
 
-function _lj2_csr_kernel_mixed_virial!(
+function _lj2_ell_kernel_mixed_virial!(
     rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
     fx::CuDeviceVector{T}, fy::CuDeviceVector{T},
     Epot::CuDeviceVector{T}, V::CuDeviceMatrix{T},
@@ -86,7 +86,7 @@ function _lj2_csr_kernel_mixed_virial!(
     return
 end
 
-function _lj3_csr_kernel_mixed!(
+function _lj3_ell_kernel_mixed!(
     rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
     fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, fz::CuDeviceVector{T},
     Epot::CuDeviceVector{T},
@@ -127,7 +127,7 @@ function _lj3_csr_kernel_mixed!(
     return
 end
 
-function _lj3_csr_kernel_mixed_virial!(
+function _lj3_ell_kernel_mixed_virial!(
     rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
     fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, fz::CuDeviceVector{T},
     Epot::CuDeviceVector{T}, V::CuDeviceMatrix{T},
@@ -177,7 +177,7 @@ function _lj3_csr_kernel_mixed_virial!(
     return
 end
 
-function _lj2_csr_noE_kernel_mixed!(
+function _lj2_ell_noE_kernel_mixed!(
     rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
     fx::CuDeviceVector{T}, fy::CuDeviceVector{T},
     neighbors_index::CuDeviceVector{Int32},
@@ -214,7 +214,7 @@ function _lj2_csr_noE_kernel_mixed!(
     return
 end
 
-function _lj3_csr_noE_kernel_mixed!(
+function _lj3_ell_noE_kernel_mixed!(
     rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
     fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, fz::CuDeviceVector{T},
     neighbors_index::CuDeviceVector{Int32},
@@ -258,12 +258,13 @@ function lj_forces_soa_mixed!(rx::CuArray{T,1}, ry::CuArray{T,1},
                               nbh::NeighborLists.AbstractNeighborMatrix,
                               box::Definitions.Box2{T},
                               ϵ::T,
-                              σp::CuArray{T,1}, rcut_factor::T) where {T<:AbstractFloat} 
+                              σp::CuArray{T,1}, rcut_factor::T) where {T<:AbstractFloat}
+    NeighborLists.require_valid_neighbors(nbh)
     N = length(rx)
     threads, blocks = _launch_config_energy(N)
     Lx = T(box[1]); Ly = T(box[2])
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly
-    k = CUDA.@cuda launch=false _lj2_csr_kernel_mixed!(
+    k = CUDA.@cuda launch=false _lj2_ell_kernel_mixed!(
         rx, ry, fx, fy, Epot,
         nbh.neighbors_index, nbh.neighbors_flat, nbh.counts, nbh.cap,
         Lx, Ly, halfLx, halfLy,
@@ -281,11 +282,12 @@ function lj_forces_soa_mixed!(rx::CuArray{T,1}, ry::CuArray{T,1},
                               box::Definitions.Box2{T},
                               ϵ::T,
                               σp::CuArray{T,1}, rcut_factor::T) where {T<:AbstractFloat}
+    NeighborLists.require_valid_neighbors(nbh)
     N = length(rx)
     threads, blocks = _launch_config_energy(N)
     Lx = T(box[1]); Ly = T(box[2])
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly
-    k = CUDA.@cuda launch=false _lj2_csr_kernel_mixed_virial!(
+    k = CUDA.@cuda launch=false _lj2_ell_kernel_mixed_virial!(
         rx, ry, fx, fy, Epot, V,
         nbh.neighbors_index, nbh.neighbors_flat, nbh.counts, nbh.cap,
         Lx, Ly, halfLx, halfLy,
@@ -303,11 +305,12 @@ function lj_forces_soa_mixed!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,
                               box::Definitions.Box3{T},
                               ϵ::T,
                               σp::CuArray{T,1}, rcut_factor::T) where {T<:AbstractFloat}
+    NeighborLists.require_valid_neighbors(nbh)
     N = length(rx)
     threads, blocks = _launch_config_energy(N)
     Lx = T(box[1]); Ly = T(box[2]); Lz = T(box[3])
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly; halfLz = T(0.5)*Lz
-    k = CUDA.@cuda launch=false _lj3_csr_kernel_mixed!(
+    k = CUDA.@cuda launch=false _lj3_ell_kernel_mixed!(
         rx, ry, rz, fx, fy, fz, Epot,
         nbh.neighbors_index, nbh.neighbors_flat, nbh.counts, nbh.cap,
         Lx, Ly, Lz, halfLx, halfLy, halfLz,
@@ -325,11 +328,12 @@ function lj_forces_soa_mixed!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,
                               box::Definitions.Box3{T},
                               ϵ::T,
                               σp::CuArray{T,1}, rcut_factor::T) where {T<:AbstractFloat}
+    NeighborLists.require_valid_neighbors(nbh)
     N = length(rx)
     threads, blocks = _launch_config_energy(N)
     Lx = T(box[1]); Ly = T(box[2]); Lz = T(box[3])
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly; halfLz = T(0.5)*Lz
-    k = CUDA.@cuda launch=false _lj3_csr_kernel_mixed_virial!(
+    k = CUDA.@cuda launch=false _lj3_ell_kernel_mixed_virial!(
         rx, ry, rz, fx, fy, fz, Epot, V,
         nbh.neighbors_index, nbh.neighbors_flat, nbh.counts, nbh.cap,
         Lx, Ly, Lz, halfLx, halfLy, halfLz,
@@ -347,11 +351,12 @@ function lj_forces_soa_noE_mixed!(rx::CuArray{T,1}, ry::CuArray{T,1},
                                   box::Definitions.Box2{T},
                                   ϵ::T,
                                   σp::CuArray{T,1}, rcut_factor::T) where {T<:AbstractFloat}
+    NeighborLists.require_valid_neighbors(nbh)
     N = length(rx)
     threads, blocks = _launch_config_force_only(N)
     Lx = T(box[1]); Ly = T(box[2])
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly
-    k = CUDA.@cuda launch=false _lj2_csr_noE_kernel_mixed!(
+    k = CUDA.@cuda launch=false _lj2_ell_noE_kernel_mixed!(
         rx, ry, fx, fy,
         nbh.neighbors_index, nbh.neighbors_flat, nbh.counts, nbh.cap,
         Lx, Ly, halfLx, halfLy,
@@ -369,11 +374,12 @@ function lj_forces_soa_noE_mixed!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArra
                                   box::Definitions.Box3{T},
                                   ϵ::T,
                                   σp::CuArray{T,1}, rcut_factor::T) where {T<:AbstractFloat}
+    NeighborLists.require_valid_neighbors(nbh)
     N = length(rx)
     threads, blocks = _launch_config_force_only(N)
     Lx = T(box[1]); Ly = T(box[2]); Lz = T(box[3])
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly; halfLz = T(0.5)*Lz
-    k = CUDA.@cuda launch=false _lj3_csr_noE_kernel_mixed!(
+    k = CUDA.@cuda launch=false _lj3_ell_noE_kernel_mixed!(
         rx, ry, rz, fx, fy, fz,
         nbh.neighbors_index, nbh.neighbors_flat, nbh.counts, nbh.cap,
         Lx, Ly, Lz, halfLx, halfLy, halfLz,

@@ -192,11 +192,11 @@ function _warn_if_neighbor_capacity_saturated!(sim)
     st === nothing && return nothing
     nbh = st.nbh
     nbh isa NeighborLists.AllPairsNeighborMatrix && return nothing
-    max_count = Int(maximum(nbh.counts))
+    max_count = nbh.required_capacity
     cap = Int(nbh.cap)
     max_count < cap && return nothing
     style = nbh isa NeighborLists.StencilNeighborMatrix ? "typed stencil" : "cell-list"
-    @warn "Neighbor list reached the configured per-particle capacity during the initial build. This can truncate neighbors and yield incorrect forces; increase `CellList.capacity`." style cap max_count
+    @warn "Neighbor list uses the full configured per-particle capacity. A future overflow will raise NeighborCapacityError; increase `CellList.capacity` to allow more neighbors." style cap max_count
     sim.metadata[:workflow_neighbor_capacity_warned] = true
     return nothing
 end
@@ -420,16 +420,14 @@ function run!(sim, stage::Stage)
 
     local_spec, local_dt, overridden_spec = _build_stage_integrator(sim, stage)
     stage.reset_step === nothing || (sim.metadata[:workflow_time] = Float64(stage.reset_step) * local_dt)
-    stage.neighbor_rebuild_interval === nothing || (st.neigh_interval = Int(stage.neighbor_rebuild_interval))
-    sim.lowlevel_integrator = local_spec
-
-    _maybe_print_stage_banner(stage, local_dt)
-    write_initial_frames!(sim)
-
     t0_ns = time_ns()
     last_report_ns = t0_ns
     last_report_step = st.step
     try
+        stage.neighbor_rebuild_interval === nothing || (st.neigh_interval = Int(stage.neighbor_rebuild_interval))
+        sim.lowlevel_integrator = local_spec
+        _maybe_print_stage_banner(stage, local_dt)
+        write_initial_frames!(sim)
         for _ in 1:stage.steps
             next_step = st.step + 1
             compute_energy = _stage_compute_energy(sim, stage, next_step)

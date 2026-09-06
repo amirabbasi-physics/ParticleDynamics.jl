@@ -30,7 +30,7 @@ jobs:
       - name: Report CUDA availability (expected false on hosted runners)
         run: julia --project -e 'using CUDA; println("CUDA.functional() = ", CUDA.functional())'
 
-      - name: Run tests (GPU suite skips cleanly without CUDA)
+      - name: Run host tests (GPU tests skip without CUDA)
         run: julia --project -e 'using Pkg; Pkg.test()'
 
       - name: Build and deploy docs

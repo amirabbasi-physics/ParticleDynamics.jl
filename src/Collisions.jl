@@ -3,6 +3,7 @@ module Collisions
 using CUDA
 using ..Definitions
 using ..NeighborLists
+using ..NeighborLists: _ell_index
 
 export enable_collision_counting!, disable_collision_counting!,
        collisions_reset_counts!, collisions_read_counts!,
@@ -69,14 +70,13 @@ function _init_prev2!(
     i = (blockIdx().x-1)*blockDim().x + threadIdx().x
     N = length(rx); if i > N; return; end
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly
-    base  = neighbors_index[i]
     n     = counts[i]
     @inbounds for t in 0:Int(n-1)
-        j = neighbors_flat[base + t + 1]
+        j = neighbors_flat[_ell_index(i, t, N)]
         dx = _mic_fast(rx[i] - rx[j], halfLx, Lx)
         dy = _mic_fast(ry[i] - ry[j], halfLy, Ly)
         r2 = muladd(dx, dx, dy*dy)
-        contact_prev[base + t + 1] = (r2 > zero(T)) & (r2 < cutoff2)
+        contact_prev[_ell_index(i, t, N)] = (r2 > zero(T)) & (r2 < cutoff2)
     end
     return
 end
@@ -90,18 +90,17 @@ function _init_prev2_pair!(
     i = (blockIdx().x-1)*blockDim().x + threadIdx().x
     N = length(rx); if i > N; return; end
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly
-    base  = neighbors_index[i]
     n     = counts[i]
     ti = typeid[i]
     @inbounds for t in 0:Int(n-1)
-        j = neighbors_flat[base + t + 1]
+        j = neighbors_flat[_ell_index(i, t, N)]
         tj = typeid[j]
         rc = rcut2_pair[ti, tj]
         cutoff2 = rc*rc
         dx = _mic_fast(rx[i] - rx[j], halfLx, Lx)
         dy = _mic_fast(ry[i] - ry[j], halfLy, Ly)
         r2 = muladd(dx, dx, dy*dy)
-        contact_prev[base + t + 1] = (r2 > zero(T)) & (r2 < cutoff2)
+        contact_prev[_ell_index(i, t, N)] = (r2 > zero(T)) & (r2 < cutoff2)
     end
     return
 end
@@ -115,15 +114,14 @@ function _init_prev3!(
     i = (blockIdx().x-1)*blockDim().x + threadIdx().x
     N = length(rx); if i > N; return; end
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly; halfLz = T(0.5)*Lz
-    base  = neighbors_index[i]
     n     = counts[i]
     @inbounds for t in 0:Int(n-1)
-        j = neighbors_flat[base + t + 1]
+        j = neighbors_flat[_ell_index(i, t, N)]
         dx = _mic_fast(rx[i] - rx[j], halfLx, Lx)
         dy = _mic_fast(ry[i] - ry[j], halfLy, Ly)
         dz = _mic_fast(rz[i] - rz[j], halfLz, Lz)
         r2 = muladd(dx, dx, muladd(dy, dy, dz*dz))
-        contact_prev[base + t + 1] = (r2 > zero(T)) & (r2 < cutoff2)
+        contact_prev[_ell_index(i, t, N)] = (r2 > zero(T)) & (r2 < cutoff2)
     end
     return
 end
@@ -137,11 +135,10 @@ function _init_prev3_pair!(
     i = (blockIdx().x-1)*blockDim().x + threadIdx().x
     N = length(rx); if i > N; return; end
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly; halfLz = T(0.5)*Lz
-    base  = neighbors_index[i]
     n     = counts[i]
     ti = typeid[i]
     @inbounds for t in 0:Int(n-1)
-        j = neighbors_flat[base + t + 1]
+        j = neighbors_flat[_ell_index(i, t, N)]
         tj = typeid[j]
         rc = rcut2_pair[ti, tj]
         cutoff2 = rc*rc
@@ -149,7 +146,7 @@ function _init_prev3_pair!(
         dy = _mic_fast(ry[i] - ry[j], halfLy, Ly)
         dz = _mic_fast(rz[i] - rz[j], halfLz, Lz)
         r2 = muladd(dx, dx, muladd(dy, dy, dz*dz))
-        contact_prev[base + t + 1] = (r2 > zero(T)) & (r2 < cutoff2)
+        contact_prev[_ell_index(i, t, N)] = (r2 > zero(T)) & (r2 < cutoff2)
     end
     return
 end
@@ -167,16 +164,15 @@ function _events2!(
     N = length(rx); if i > N; return; end
     ti = typeid[i]
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly
-    base  = neighbors_index[i]
     n     = counts[i]
     @inbounds for t in 0:Int(n-1)
-        j = neighbors_flat[base + t + 1]
+        j = neighbors_flat[_ell_index(i, t, N)]
         if i < j
             dx = _mic_fast(rx[i] - rx[j], halfLx, Lx)
             dy = _mic_fast(ry[i] - ry[j], halfLy, Ly)
             r2 = muladd(dx, dx, dy*dy)
             cur = (r2 > zero(T)) & (r2 < cutoff2)
-            prev = contact_prev[base + t + 1] != 0
+            prev = contact_prev[_ell_index(i, t, N)] != 0
             if (!prev) & cur
                 tj = typeid[j]
                 b = bin_lut[ti, tj]
@@ -184,7 +180,7 @@ function _events2!(
                     CUDA.@atomic counts_bins[Int32(b+1)] += Int64(1)  # 1-based device indexing
                 end
             end
-            contact_prev[base + t + 1] = cur
+            contact_prev[_ell_index(i, t, N)] = cur
         end
     end
     return
@@ -203,11 +199,10 @@ function _events2_excl!(
     N = length(rx); if i > N; return; end
     ti = typeid[i]
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly
-    base  = neighbors_index[i]
     n     = counts[i]
     bbase, bnb, b1, b2 = _bond_cache(Int32(i), bindex, bflat, bcounts)
     @inbounds for t in 0:Int(n-1)
-        j = neighbors_flat[base + t + 1]
+        j = neighbors_flat[_ell_index(i, t, N)]
         if i < j
             if _is_bonded_cached(j, bbase, bnb, b1, b2, bflat)
                 continue
@@ -216,7 +211,7 @@ function _events2_excl!(
             dy = _mic_fast(ry[i] - ry[j], halfLy, Ly)
             r2 = muladd(dx, dx, dy*dy)
             cur = (r2 > zero(T)) & (r2 < cutoff2)
-            prev = contact_prev[base + t + 1] != 0
+            prev = contact_prev[_ell_index(i, t, N)] != 0
             if (!prev) & cur
                 tj = typeid[j]
                 b = bin_lut[ti, tj]
@@ -224,7 +219,7 @@ function _events2_excl!(
                     CUDA.@atomic counts_bins[Int32(b+1)] += Int64(1)
                 end
             end
-            contact_prev[base + t + 1] = cur
+            contact_prev[_ell_index(i, t, N)] = cur
         end
     end
     return
@@ -242,10 +237,9 @@ function _events2_pair!(
     N = length(rx); if i > N; return; end
     ti = typeid[i]
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly
-    base  = neighbors_index[i]
     n     = counts[i]
     @inbounds for t in 0:Int(n-1)
-        j = neighbors_flat[base + t + 1]
+        j = neighbors_flat[_ell_index(i, t, N)]
         if i < j
             tj = typeid[j]
             rc = rcut2_pair[ti, tj]
@@ -254,14 +248,14 @@ function _events2_pair!(
             dy = _mic_fast(ry[i] - ry[j], halfLy, Ly)
             r2 = muladd(dx, dx, dy*dy)
             cur = (r2 > zero(T)) & (r2 < cutoff2)
-            prev = contact_prev[base + t + 1] != 0
+            prev = contact_prev[_ell_index(i, t, N)] != 0
             if (!prev) & cur
                 b = bin_lut[ti, tj]
                 if b >= 0
                     CUDA.@atomic counts_bins[Int32(b+1)] += Int64(1)
                 end
             end
-            contact_prev[base + t + 1] = cur
+            contact_prev[_ell_index(i, t, N)] = cur
         end
     end
     return
@@ -280,11 +274,10 @@ function _events2_pair_excl!(
     N = length(rx); if i > N; return; end
     ti = typeid[i]
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly
-    base  = neighbors_index[i]
     n     = counts[i]
     bbase, bnb, b1, b2 = _bond_cache(Int32(i), bindex, bflat, bcounts)
     @inbounds for t in 0:Int(n-1)
-        j = neighbors_flat[base + t + 1]
+        j = neighbors_flat[_ell_index(i, t, N)]
         if i < j
             if _is_bonded_cached(j, bbase, bnb, b1, b2, bflat)
                 continue
@@ -296,14 +289,14 @@ function _events2_pair_excl!(
             dy = _mic_fast(ry[i] - ry[j], halfLy, Ly)
             r2 = muladd(dx, dx, dy*dy)
             cur = (r2 > zero(T)) & (r2 < cutoff2)
-            prev = contact_prev[base + t + 1] != 0
+            prev = contact_prev[_ell_index(i, t, N)] != 0
             if (!prev) & cur
                 b = bin_lut[ti, tj]
                 if b >= 0
                     CUDA.@atomic counts_bins[Int32(b+1)] += Int64(1)
                 end
             end
-            contact_prev[base + t + 1] = cur
+            contact_prev[_ell_index(i, t, N)] = cur
         end
     end
     return
@@ -321,17 +314,16 @@ function _events3!(
     N = length(rx); if i > N; return; end
     ti = typeid[i]
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly; halfLz = T(0.5)*Lz
-    base  = neighbors_index[i]
     n     = counts[i]
     @inbounds for t in 0:Int(n-1)
-        j = neighbors_flat[base + t + 1]
+        j = neighbors_flat[_ell_index(i, t, N)]
         if i < j
             dx = _mic_fast(rx[i] - rx[j], halfLx, Lx)
             dy = _mic_fast(ry[i] - ry[j], halfLy, Ly)
             dz = _mic_fast(rz[i] - rz[j], halfLz, Lz)
             r2 = muladd(dx, dx, muladd(dy, dy, dz*dz))
             cur = (r2 > zero(T)) & (r2 < cutoff2)
-            prev = contact_prev[base + t + 1] != 0
+            prev = contact_prev[_ell_index(i, t, N)] != 0
             if (!prev) & cur
                 tj = typeid[j]
                 b = bin_lut[ti, tj]
@@ -339,7 +331,7 @@ function _events3!(
                     CUDA.@atomic counts_bins[Int32(b+1)] += Int64(1)
                 end
             end
-            contact_prev[base + t + 1] = cur
+            contact_prev[_ell_index(i, t, N)] = cur
         end
     end
     return
@@ -358,11 +350,10 @@ function _events3_excl!(
     N = length(rx); if i > N; return; end
     ti = typeid[i]
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly; halfLz = T(0.5)*Lz
-    base  = neighbors_index[i]
     n     = counts[i]
     bbase, bnb, b1, b2 = _bond_cache(Int32(i), bindex, bflat, bcounts)
     @inbounds for t in 0:Int(n-1)
-        j = neighbors_flat[base + t + 1]
+        j = neighbors_flat[_ell_index(i, t, N)]
         if i < j
             if _is_bonded_cached(j, bbase, bnb, b1, b2, bflat)
                 continue
@@ -372,7 +363,7 @@ function _events3_excl!(
             dz = _mic_fast(rz[i] - rz[j], halfLz, Lz)
             r2 = muladd(dx, dx, muladd(dy, dy, dz*dz))
             cur = (r2 > zero(T)) & (r2 < cutoff2)
-            prev = contact_prev[base + t + 1] != 0
+            prev = contact_prev[_ell_index(i, t, N)] != 0
             if (!prev) & cur
                 tj = typeid[j]
                 b = bin_lut[ti, tj]
@@ -380,7 +371,7 @@ function _events3_excl!(
                     CUDA.@atomic counts_bins[Int32(b+1)] += Int64(1)
                 end
             end
-            contact_prev[base + t + 1] = cur
+            contact_prev[_ell_index(i, t, N)] = cur
         end
     end
     return
@@ -398,10 +389,9 @@ function _events3_pair!(
     N = length(rx); if i > N; return; end
     ti = typeid[i]
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly; halfLz = T(0.5)*Lz
-    base  = neighbors_index[i]
     n     = counts[i]
     @inbounds for t in 0:Int(n-1)
-        j = neighbors_flat[base + t + 1]
+        j = neighbors_flat[_ell_index(i, t, N)]
         if i < j
             tj = typeid[j]
             rc = rcut2_pair[ti, tj]
@@ -411,14 +401,14 @@ function _events3_pair!(
             dz = _mic_fast(rz[i] - rz[j], halfLz, Lz)
             r2 = muladd(dx, dx, muladd(dy, dy, dz*dz))
             cur = (r2 > zero(T)) & (r2 < cutoff2)
-            prev = contact_prev[base + t + 1] != 0
+            prev = contact_prev[_ell_index(i, t, N)] != 0
             if (!prev) & cur
                 b = bin_lut[ti, tj]
                 if b >= 0
                     CUDA.@atomic counts_bins[Int32(b+1)] += Int64(1)
                 end
             end
-            contact_prev[base + t + 1] = cur
+            contact_prev[_ell_index(i, t, N)] = cur
         end
     end
     return
@@ -437,11 +427,10 @@ function _events3_pair_excl!(
     N = length(rx); if i > N; return; end
     ti = typeid[i]
     halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly; halfLz = T(0.5)*Lz
-    base  = neighbors_index[i]
     n     = counts[i]
     bbase, bnb, b1, b2 = _bond_cache(Int32(i), bindex, bflat, bcounts)
     @inbounds for t in 0:Int(n-1)
-        j = neighbors_flat[base + t + 1]
+        j = neighbors_flat[_ell_index(i, t, N)]
         if i < j
             if _is_bonded_cached(j, bbase, bnb, b1, b2, bflat)
                 continue
@@ -454,14 +443,14 @@ function _events3_pair_excl!(
             dz = _mic_fast(rz[i] - rz[j], halfLz, Lz)
             r2 = muladd(dx, dx, muladd(dy, dy, dz*dz))
             cur = (r2 > zero(T)) & (r2 < cutoff2)
-            prev = contact_prev[base + t + 1] != 0
+            prev = contact_prev[_ell_index(i, t, N)] != 0
             if (!prev) & cur
                 b = bin_lut[ti, tj]
                 if b >= 0
                     CUDA.@atomic counts_bins[Int32(b+1)] += Int64(1)
                 end
             end
-            contact_prev[base + t + 1] = cur
+            contact_prev[_ell_index(i, t, N)] = cur
         end
     end
     return
@@ -526,8 +515,10 @@ function enable_collision_counting!(st; ntypes::Union{Nothing,Int}=nothing, bins
     return st
 end
 
-@inline _collision_neighbor_matrix(nb::NeighborLists.NeighborMatrix) = nb
-@inline _collision_neighbor_matrix(nb::NeighborLists.StencilNeighborMatrix) = nb
+@inline function _collision_neighbor_matrix(nb::NeighborLists.CellListNeighborMatrix)
+    NeighborLists.require_valid_neighbors(nb)
+    return nb
+end
 function _collision_neighbor_matrix(nb)
     throw(ArgumentError("Collision counting requires a neighbor-list-backed simulation state; got $(typeof(nb))."))
 end

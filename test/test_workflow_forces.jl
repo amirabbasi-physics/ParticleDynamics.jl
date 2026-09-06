@@ -216,7 +216,7 @@ end
     @test Array(st.rcut_pair) == cutoff_eff
 end
 
-@testset "Workflow warns on saturated initial neighbor capacity" begin
+@testset "Workflow rejects insufficient initial neighbor capacity" begin
     system = ParticleSystem(
         [
             [-0.20, 0.0],
@@ -235,7 +235,7 @@ end
         ),
         precision=Float64,
     )
-    @test_logs (:warn, r"Neighbor list reached the configured per-particle capacity") match_mode=:any prepare!(sim)
+    @test_throws ParticleDynamics.NeighborLists.NeighborCapacityError prepare!(sim)
 end
 
 @testset "Workflow rejects undersized dense cell-list grids" begin

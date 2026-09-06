@@ -40,11 +40,11 @@ function _kernel_neighbors_stencil2!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T
         rl    = rlist[i1]
         rl2   = rlist2[i1]
         Rmax  = Int32(ceil(rl * inv_cs))
-        for oy in -Rmax:Rmax
+        for oy in _stencil_offsets(Rmax, ny)
             cy2 = cy + Int32(oy)
             cy2 -= (cy2 >= ny)*ny
             cy2 += (cy2 < 0)*ny
-            for ox in -Rmax:Rmax
+            for ox in _stencil_offsets(Rmax, nx)
                 cx2 = cx + Int32(ox)
                 cx2 -= (cx2 >= nx)*nx
                 cx2 += (cx2 < 0)*nx
@@ -57,8 +57,10 @@ function _kernel_neighbors_stencil2!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T
                         dx = mic_fast(rx[j] - rx[i1], halfLx, Lx)
                         dy = mic_fast(ry[j] - ry[i1], halfLy, Ly)
                         r2 = muladd(dx, dx, dy*dy)
-                        if r2 <= rl2 && found < cap
-                            neighbors_flat[_ell_index(i1, found, N)] = j
+                        if r2 <= rl2
+                            if found < cap
+                                neighbors_flat[_ell_index(i1, found, N)] = j
+                            end
                             found += 1
                         end
                     end
@@ -96,11 +98,11 @@ function _kernel_neighbors_stencil3!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T
         rl    = rlist[i1]
         rl2   = rlist2[i1]
         Rmax  = Int32(ceil(rl * inv_cs))
-        for oz in -Rmax:Rmax
+        for oz in _stencil_offsets(Rmax, nz)
             cz2 = cz + Int32(oz); cz2 -= (cz2 >= nz)*nz; cz2 += (cz2 < 0)*nz
-            for oy in -Rmax:Rmax
+            for oy in _stencil_offsets(Rmax, ny)
                 cy2 = cy + Int32(oy); cy2 -= (cy2 >= ny)*ny; cy2 += (cy2 < 0)*ny
-                for ox in -Rmax:Rmax
+                for ox in _stencil_offsets(Rmax, nx)
                     cx2 = cx + Int32(ox); cx2 -= (cx2 >= nx)*nx; cx2 += (cx2 < 0)*nx
                     c = (cz2*ny + cy2)*nx + cx2
                     s = cell_offsets[c+1]
@@ -112,8 +114,10 @@ function _kernel_neighbors_stencil3!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T
                             dy = mic_fast(ry[j] - ry[i1], halfLy, Ly)
                             dz = mic_fast(rz[j] - rz[i1], halfLz, Lz)
                             r2 = muladd(dx, dx, muladd(dy, dy, dz*dz))
-                            if r2 <= rl2 && found < cap
-                                neighbors_flat[_ell_index(i1, found, N)] = j
+                            if r2 <= rl2
+                                if found < cap
+                                    neighbors_flat[_ell_index(i1, found, N)] = j
+                                end
                                 found += 1
                             end
                         end

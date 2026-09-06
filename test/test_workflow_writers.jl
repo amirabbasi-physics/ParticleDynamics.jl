@@ -199,3 +199,62 @@ end
         @test abs(image[2, 1] - image[1, 1]) == 1
     end
 end
+
+@testset "Writer session survives stage close and repeated prepare" begin
+    mktempdir() do tmp
+        system = ParticleSystem([(0.0, 0.0), (2.0, 0.0)]; box=(20.0, 20.0), velocities=[(0.0, 0.0), (0.0, 0.0)])
+        group = Group(:all, AllSelection())
+        thermo = ThermodynamicObservable(group)
+        table = joinpath(tmp, "stages.csv")
+        trajectory = joinpath(tmp, "stages.gsd")
+        write(table, "previous run must be replaced\n")
+        writers = [TableWriter(table; every=1, observables=[thermo => [:kinetic_energy]]),
+                   GSDWriter(trajectory; every=1, write_start=true)]
+        make_sim() = Simulation(system; groups=Groups(group), writers=writers,
+            integrator=Integrator(dt=0.001, forces=[LennardJones(epsilon=0.0, sigma=1.0, cutoff=2.5)],
+                                  methods=[ConstantVolume(group)]))
+        sim = make_sim()
+        run!(sim, 2)
+        run!(sim, 2)
+        lines = readlines(table)
+        @test length(lines) == 5
+        @test [parse(Int, first(split(line, ','))) for line in lines[2:end]] == collect(1:4)
+        @test read_gsd_frame!(trajectory; step=0).step == 0
+        @test read_gsd_frame!(trajectory; step=2).step == 2
+        @test read_gsd_frame!(trajectory).step == 4
+        @test all(ctx -> ctx.handle === nothing, ParticleDynamics.Workflow._writer_contexts(sim))
+        # prepare! on the same writer objects retains the session, even if the
+        # previous handles have already been closed at a stage boundary.
+        prepare!(sim)
+        run!(sim, 1)
+        @test length(readlines(table)) == 6
+        @test read_gsd_frame!(trajectory; step=0).step == 0
+        @test read_gsd_frame!(trajectory).step == 5
+        # A different Simulation starts a new replace-mode writer session.
+        fresh = make_sim()
+        run!(fresh, 1)
+        @test length(readlines(table)) == 2
+        @test read_gsd_frame!(trajectory).step == 1
+    end
+end
+
+@testset "Initial writer failure restores stage overrides and closes handles" begin
+    mktempdir() do tmp
+        system = ParticleSystem([(0.0, 0.0), (2.0, 0.0)]; box=(20.0, 20.0))
+        group = Group(:all, AllSelection())
+        blocker = joinpath(tmp, "not_a_directory")
+        write(blocker, "block output path")
+        sim = Simulation(system; groups=Groups(group),
+            writers=[GSDWriter(joinpath(tmp, "opened_first.gsd"); write_start=true),
+                     GSDWriter(joinpath(blocker, "cannot_open.gsd"); write_start=true)],
+            integrator=Integrator(dt=0.001, methods=[ConstantVolume(group)]))
+        prepare!(sim)
+        previous_spec = sim.lowlevel_integrator
+        previous_interval = state(sim).neigh_interval
+        @test_throws Base.IOError run!(sim, Stage(:failing, steps=1; dt=0.002, neighbor_rebuild_interval=1, progress=false))
+        @test state(sim).neigh_interval == previous_interval
+        @test sim.lowlevel_integrator === previous_spec
+        @test state(sim).step == 0
+        @test all(ctx -> ctx.handle === nothing, ParticleDynamics.Workflow._writer_contexts(sim))
+    end
+end

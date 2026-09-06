@@ -108,6 +108,7 @@ mutable struct PreparedWriter
     start_written::Bool
     needs_energy::Bool
     needs_interval_reset::Bool
+    opened::Bool
 end
 
 function _normalize_writer_requests(sim, writer::TableWriter)
@@ -162,6 +163,7 @@ function _validate_writer(writer::GSDWriter)
 end
 
 function prepare_writers!(sim)
+    previous = _writer_contexts(sim)
     contexts = PreparedWriter[]
     for writer in sim.writers
         _validate_writer(writer)
@@ -173,7 +175,20 @@ function prepare_writers!(sim)
         needs_energy = any(req -> observable_requires_energy(req.observable, req.fields), requests) ||
                        (writer isa GSDWriter && writer.write_virial)
         needs_interval_reset = any(req -> observable_has_interval_fields(req.observable, req.fields), requests)
-        push!(contexts, PreparedWriter(writer, schedule, requests, nothing, String[], false, false, needs_energy, needs_interval_reset))
+        ctx = PreparedWriter(writer, schedule, requests, nothing, String[], false, false, needs_energy, needs_interval_reset, false)
+        old_index = findfirst(old -> old.writer === writer, previous)
+        if old_index !== nothing
+            old = previous[old_index]
+            ctx.handle = old.handle
+            ctx.header = old.header
+            ctx.header_written = old.header_written
+            ctx.start_written = old.start_written
+            ctx.opened = old.opened
+        end
+        push!(contexts, ctx)
+    end
+    for old in previous
+        any(ctx -> ctx.writer === old.writer, contexts) || _close_writer!(old)
     end
     sim.metadata[:workflow_writer_contexts] = contexts
     return sim
@@ -185,24 +200,25 @@ end
 
 function _open_writer!(ctx::PreparedWriter)
     writer = ctx.writer
+    # Replacement applies once per prepared writer session, not once per stage.
+    append = ctx.opened || _writer_append_mode(writer)
     if writer isa TableWriter
         ctx.handle === nothing || return ctx
         path = writer.filename
         mkpath(dirname(path))
-        if !_writer_append_mode(writer) && isfile(path)
-            rm(path; force=true)
-        end
-        ctx.handle = open(path, _writer_append_mode(writer) ? "a" : "w")
-        ctx.header_written = _writer_append_mode(writer) && isfile(path) && filesize(path) > 0
+        header_exists = append && isfile(path) && filesize(path) > 0
+        ctx.handle = open(path, append ? "a" : "w")
+        ctx.header_written = header_exists
     elseif writer isa GSDWriter
         ctx.handle === nothing || return ctx
         path = writer.filename
         mkpath(dirname(path))
-        if !_writer_append_mode(writer) && isfile(path)
+        if !append && isfile(path)
             rm(path; force=true)
         end
-        ctx.handle = gsd_open(path; append=_writer_append_mode(writer))
+        ctx.handle = gsd_open(path; append=append)
     end
+    ctx.opened = true
     return ctx
 end
 

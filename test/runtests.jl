@@ -6,6 +6,10 @@ using ParticleDynamics: SimulationCore, BrownianIntegrators, LangevinIntegrators
 
 CUDA.allowscalar(false)
 
+include("neighbor_reference.jl")
+using .NeighborReference
+include("test_neighbor_reference.jl")
+
 include("utils.jl")
 using .TestUtils
 include("params_from_examples.jl")
@@ -40,6 +44,7 @@ using .ParamsFromExamples
         include("test_phase4a_neighbors.jl")
         include("test_phase4b_stochastic.jl")
         include("test_neighbors.jl")
+        include("test_neighbor_integrity.jl")
         include("test_integrators_langevin.jl")
         include("test_integrators_brownian.jl")
         include("test_integrators_nve.jl")
