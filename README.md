@@ -14,10 +14,10 @@ The existing low-level engine remains available for expert workflows and tests.
 That surface is centered on `build_simulation`, `step!`, integrator builders,
 and `ParticleDynamics.SimulationCore`.
 
-## Development version
+## Version
 
-The working version is **0.2.0-DEV**, which has not been released.
-For compatibility changes, see the [changelog](CHANGELOG.md),
+The current release is **0.6.10**.
+For changes, see the [changelog](CHANGELOG.md),
 [integrator manual](docs/src/manual/integrators.md), and
 [force manual](docs/src/manual/forces.md).
 
@@ -34,11 +34,11 @@ There is no production CPU simulation backend yet.
 
 ## Installation
 
-### Add from a git URL
+ParticleDynamics.jl is registered in the Julia General registry:
 
 ```julia
 using Pkg
-Pkg.add(url="https://github.com/amirabbasi-physics/ParticleDynamics.jl")
+Pkg.add("ParticleDynamics")
 ```
 
 ### Develop locally

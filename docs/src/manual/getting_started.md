@@ -11,7 +11,7 @@ workflow API shown in the [Quickstart](../quickstart.md).
 
 ```julia
 using Pkg
-Pkg.add(url="<repository-url>")  # or local dev path
+Pkg.add("ParticleDynamics")
 ```
 
 ```julia

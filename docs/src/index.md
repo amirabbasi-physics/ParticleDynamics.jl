@@ -11,19 +11,27 @@ simulations on `CUDA.jl`. The recommended public surface is the workflow API:
 </div>
 ```
 
-## Development version
+## Installation
 
-The current working version is **0.2.0-DEV**, not a published release.
+The current release is **0.6.10**, registered in the Julia General registry:
+
+```julia
+using Pkg
+Pkg.add("ParticleDynamics")
+```
+
 See the [integrator](manual/integrators.md) and [force](manual/forces.md) manuals
 for the timestep and physical-domain requirements.
 
 ## Scope
 
 - 2D/3D particle dynamics with periodic boundaries.
-- Deterministic MD: pure NVE plus thermostat-driven constant-volume dynamics.
+- Deterministic MD: NVE, thermostatted NVT, and NPT with stochastic cell rescaling.
 - Langevin integrators: velocity-Verlet (default), BAOAB, BAOA, GSM.
 - Brownian integrators: midpoint (Euler-Heun style) and Euler-Maruyama.
-- Nonbonded interactions (LJ/WCA/soft-repulsive), bonded interactions (harmonic/FENE), filters/freeze controls, collision counting, and XYZ/CSV/GSD outputs.
+- Nonbonded interactions (LJ/WCA/soft-repulsive) with exact or buffered neighbor lists, GPU long-range electrostatics (PME, PPPM, Ewald summation with prolates), and machine-learned potentials (MACE, Orb).
+- Bonded interactions: bonds (harmonic/FENE), angles, dihedrals and impropers; rigid three-site water.
+- Energy minimization (FIRE, steepest descent), filters/freeze controls, collision counting, and XYZ/CSV/GSD outputs.
 
 ## Workflow model
 
