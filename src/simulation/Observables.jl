@@ -132,8 +132,11 @@ function collect_integrator_observables(spec::NHCSpec{T},
             nhc_velocity_scale=stage_scale)
 end
 
+_ensure_csvr_report_sample!(engine,st,spec)=nothing
+
 function collect_integrator_observables(spec::CSVRSpec{T},
                                         st::SimulationState{T}) where {T<:AbstractFloat}
+    _ensure_csvr_report_sample!(st.engine,st,spec)
     p = spec.params
     ws = spec.workspace
     _csvr_update_dof_per_bath!(spec, st)
@@ -303,10 +306,12 @@ entropy totals accumulated since the last reset of the relevant buffers.
 """
 function collect_step_observables(st::SimulationState{T},
                                   spec::IntegratorSpec{T}) where {T<:AbstractFloat}
+    _engine_boundary!(st.engine, st)
+    st.rigid_water === nothing || evaluate_configuration!(st, EvaluationRequest(virial=true))
     _ensure_sample_buffers!(st, spec)
     Epot_total = T(CUDA.sum(st.Epot))
     Ekin_total = T(CUDA.sum(st.Ekin))
-    virial_total = T(CUDA.sum(st.virial))
+    virial_total = T(CUDA.sum(st.virial)) + global_virial_trace(st) + T(constraint_virial_trace(st))
     dq_total = T(CUDA.sum(st.dq))
     dU_total = T(CUDA.sum(st.dU))
 

@@ -4,11 +4,15 @@ Bonded interaction kernels (harmonic and FENE) used by the polymer examples.
 module BondedForces
 
 using CUDA
+using StaticArrays
+using LinearAlgebra: dot, cross, norm
 using ..Definitions
 
 export BondList, build_bondlist,
        harmonic_forces_soa!, harmonic_forces_soa_noE!,
-       fene_forces_soa!, fene_forces_soa_noE!
+       fene_forces_soa!, fene_forces_soa_noE!,
+       InteractionTable, build_interaction_table, BondedFamily, BondedTerms,
+       evaluate_bonded!, bonded_status
 
 # ------------------------------------------------------------------
 # Shared helpers
@@ -39,5 +43,8 @@ end
 include("bonded/BondTypes.jl")
 include("bonded/HarmonicBondCUDA.jl")
 include("bonded/FENEBondCUDA.jl")
+include("bonded/BondedGeometry.jl")
+include("bonded/InteractionTables.jl")
+include("bonded/BondedKernels.jl")
 
 end # module BondedForces

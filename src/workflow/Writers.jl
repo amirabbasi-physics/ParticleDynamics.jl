@@ -411,6 +411,8 @@ function _log_headers_and_values(sim, ctx::PreparedWriter, step::Int)
     headers = String["Time"]
     values = Any[step]
     for req in ctx.requests
+        _reject_subgroup_global_virial(sim, req.observable, req.fields)
+        _refresh_energies_for!(sim, req.observable, req.fields)
         data = _observable_data(sim, req.observable)
         for field in req.fields
             if req.observable isa CollisionObservable && field in (:counts, :rate)
@@ -520,8 +522,16 @@ function _write_gsd!(sim, ctx::PreparedWriter, step::Int)
         write_virial=writer.write_virial,
         write_unwrapped=writer.write_unwrapped,
         sync_on_write=writer.sync_on_write,
+        logs=_writer_logs(sim),
     )
     return ctx
+end
+
+# Restart records written with every GSD frame.
+function _writer_logs(sim)
+    ctx = get(sim.metadata, :barostat_context, nothing)
+    ctx === nothing && return ()
+    return ("log/barostat/state" => barostat_state_record(sim),)
 end
 
 function _write_writer!(sim, ctx::PreparedWriter, step::Int)
@@ -541,7 +551,7 @@ function write_initial_frames!(sim)
         if writer isa GSDWriter && writer.write_start && !ctx.start_written
             if writer.write_forces || writer.write_virial
                 spring = SimulationCore._freeze_active!(st) && st.freeze_mode == SimulationCore.FREEZE_SPRING
-                SimulationCore.evaluate_forces_into_f!(st, writer.write_virial; freeze_spring=spring)
+                SimulationCore.evaluate_current_configuration!(st, writer.write_virial; freeze_spring=spring)
             end
             _write_writer!(sim, ctx, st.step)
             ctx.start_written = true

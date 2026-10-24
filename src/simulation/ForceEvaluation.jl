@@ -1,247 +1,91 @@
-# -------------------------
-# Bond helpers (2D / 3D)
-# -------------------------
-function _apply_bonds2!(st::SimulationState{T}, fx::CuArray{T,1}, fy::CuArray{T,1},
-                        E::Union{Nothing,CuArray{T,1}}, compute_energy::Bool,
-                        V::Union{Nothing,CuArray{T,2}}=nothing) where {T<:AbstractFloat}
-    if (st.bonds === nothing) || (st.bonding === nothing)
-        V === nothing || fill!(V, zero(T))
-        return
-    end
-    if st.bonding isa Definitions.HarmonicBond{T}
-        p = (st.bonding::Definitions.HarmonicBond{T}).params
-        if compute_energy && E !== nothing
-            if V === nothing
-                BondedForces.harmonic_forces_soa!(st.rx, st.ry, fx, fy, E, st.bonds, st.box2::Definitions.Box2{T}, p)
-            else
-                BondedForces.harmonic_forces_soa!(st.rx, st.ry, fx, fy, E, V, st.bonds, st.box2::Definitions.Box2{T}, p)
-            end
-        else
-            BondedForces.harmonic_forces_soa_noE!(st.rx, st.ry, fx, fy, st.bonds, st.box2::Definitions.Box2{T}, p)
-        end
-    elseif st.bonding isa Definitions.FENEBond{T}
-        p = (st.bonding::Definitions.FENEBond{T}).params
-        if compute_energy && E !== nothing
-            if V === nothing
-                BondedForces.fene_forces_soa!(st.rx, st.ry, fx, fy, E, st.bonds, st.box2::Definitions.Box2{T}, p)
-            else
-                BondedForces.fene_forces_soa!(st.rx, st.ry, fx, fy, E, V, st.bonds, st.box2::Definitions.Box2{T}, p)
-            end
-        else
-            BondedForces.fene_forces_soa_noE!(st.rx, st.ry, fx, fy, st.bonds, st.box2::Definitions.Box2{T}, p)
-        end
-    end
-    return
-end
+# =========================
+#   Force evaluation
+# =========================
+# Every force evaluation runs on the device engine (`ParticleDynamics.DeviceEngine`):
+# the engine that owns the state, or an evaluation-only engine created for it. An
+# attached external provider is the force field itself and is called directly. The
+# staged force driver (pair kernels per potential, bond application, virial
+# combination) was removed with the staged step engine.
 
-function _apply_bonds3!(st::SimulationState{T}, fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1},
-                        E::Union{Nothing,CuArray{T,1}}, compute_energy::Bool,
-                        V::Union{Nothing,CuArray{T,2}}=nothing) where {T<:AbstractFloat}
-    if (st.bonds === nothing) || (st.bonding === nothing)
-        V === nothing || fill!(V, zero(T))
-        return
-    end
-    if st.bonding isa Definitions.HarmonicBond{T}
-        p = (st.bonding::Definitions.HarmonicBond{T}).params
-        if compute_energy && E !== nothing
-            if V === nothing
-                BondedForces.harmonic_forces_soa!(st.rx, st.ry, st.rz, fx, fy, fz, E, st.bonds, st.box3::Definitions.Box3{T}, p)
-            else
-                BondedForces.harmonic_forces_soa!(st.rx, st.ry, st.rz, fx, fy, fz, E, V, st.bonds, st.box3::Definitions.Box3{T}, p)
-            end
-        else
-            BondedForces.harmonic_forces_soa_noE!(st.rx, st.ry, st.rz, fx, fy, fz, st.bonds, st.box3::Definitions.Box3{T}, p)
-        end
-    elseif st.bonding isa Definitions.FENEBond{T}
-        p = (st.bonding::Definitions.FENEBond{T}).params
-        if compute_energy && E !== nothing
-            if V === nothing
-                BondedForces.fene_forces_soa!(st.rx, st.ry, st.rz, fx, fy, fz, E, st.bonds, st.box3::Definitions.Box3{T}, p)
-            else
-                BondedForces.fene_forces_soa!(st.rx, st.ry, st.rz, fx, fy, fz, E, V, st.bonds, st.box3::Definitions.Box3{T}, p)
-            end
-        else
-            BondedForces.fene_forces_soa_noE!(st.rx, st.ry, st.rz, fx, fy, fz, st.bonds, st.box3::Definitions.Box3{T}, p)
-        end
-    end
-    return
-end
-
-function _compute_final_nonbonded2!(st::SimulationState{T}, compute_energy::Bool) where {T<:AbstractFloat}
-    interaction = _nonbonded_interaction(st)
-    if compute_energy
-        NonBondedInteractions.compute_nonbonded!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.virial_nonbonded,
-                                                 st.nbh, st.box2::Definitions.Box2{T},
-                                                 interaction, NonBondedInteractions.ForceEnergyVirial())
-    else
-        NonBondedInteractions.compute_nonbonded!(st.rx, st.ry, st.fx, st.fy,
-                                                 st.nbh, st.box2::Definitions.Box2{T},
-                                                 interaction, NonBondedInteractions.ForceOnly())
-    end
-    return nothing
-end
-
-function _compute_final_nonbonded3!(st::SimulationState{T}, compute_energy::Bool) where {T<:AbstractFloat}
-    interaction = _nonbonded_interaction(st)
-    if compute_energy
-        NonBondedInteractions.compute_nonbonded!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, st.Epot, st.virial_nonbonded,
-                                                 st.nbh, st.box3::Definitions.Box3{T},
-                                                 interaction, NonBondedInteractions.ForceEnergyVirial())
-    else
-        NonBondedInteractions.compute_nonbonded!(st.rx, st.ry, st.rz, st.fx, st.fy, st.fz,
-                                                 st.nbh, st.box3::Definitions.Box3{T},
-                                                 interaction, NonBondedInteractions.ForceOnly())
-    end
-    return nothing
-end
-
-@inline _nonbonded_exclusions(st::SimulationState) =
-    (st.bonds === nothing || !st.exclude_bonded) ? NonBondedInteractions.NoExclusions() :
-                                                   NonBondedInteractions.BondExclusions(st.bonds)
-
-function _nonbonded_interaction(st::SimulationState{T}) where {T<:AbstractFloat}
-    if st.nb_kind == NB_KIND_LJ
-        if st.sigma_pair !== nothing
-            @assert st.epsilon_pair !== nothing && st.rcut_pair !== nothing "pair-matrix LJ coefficients are incomplete"
-            return NonBondedInteractions.NonBondedInteraction(
-                NonBondedInteractions.LennardJonesPotential(),
-                NonBondedInteractions.PairMatrixCoefficients(st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair),
-                _nonbonded_exclusions(st),
-            )
-        elseif st.sigma_particle !== nothing
-            return NonBondedInteractions.NonBondedInteraction(
-                NonBondedInteractions.LennardJonesPotential(),
-                NonBondedInteractions.MixedSigmaCoefficients(st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor),
-                _nonbonded_exclusions(st),
-            )
-        end
-        return NonBondedInteractions.NonBondedInteraction(
-            NonBondedInteractions.LennardJonesPotential(),
-            NonBondedInteractions.UniformLJCoefficients(st.pair_lj),
-            _nonbonded_exclusions(st),
-        )
-    elseif st.nb_kind == NB_KIND_WCA
-        if st.sigma_pair !== nothing
-            @assert st.epsilon_pair !== nothing && st.rcut_pair !== nothing "pair-matrix WCA coefficients are incomplete"
-            return NonBondedInteractions.NonBondedInteraction(
-                NonBondedInteractions.WCAPotential(),
-                NonBondedInteractions.PairMatrixCoefficients(st.typeid, st.sigma_pair, st.epsilon_pair, st.rcut_pair),
-                _nonbonded_exclusions(st),
-            )
-        elseif st.sigma_particle !== nothing
-            return NonBondedInteractions.NonBondedInteraction(
-                NonBondedInteractions.WCAPotential(),
-                NonBondedInteractions.MixedSigmaCoefficients(st.pair_lj.ϵ, st.sigma_particle, st.rcut_factor),
-                _nonbonded_exclusions(st),
-            )
-        end
-        return NonBondedInteractions.NonBondedInteraction(
-            NonBondedInteractions.WCAPotential(),
-            NonBondedInteractions.UniformLJCoefficients(st.pair_lj),
-            _nonbonded_exclusions(st),
-        )
-    end
-
-    @assert st.softrep !== nothing "softrep params missing"
-    return NonBondedInteractions.NonBondedInteraction(
-        NonBondedInteractions.SoftRepulsivePotential(),
-        NonBondedInteractions.UniformSoftRepCoefficients(st.softrep),
-        _nonbonded_exclusions(st),
-    )
-end
-
-function _finalize_force_eval2!(st::SimulationState{T}, compute_energy::Bool, freeze_spring::Bool) where {T<:AbstractFloat}
-    _apply_bonds2!(st, st.fx, st.fy, compute_energy ? st.Epot : nothing, compute_energy,
-                   compute_energy ? st.virial_bonded : nothing)
+"""
+Forces from an attached external provider (the user's code, not a force-field term)
+plus the freeze tether. Restraints are user biases on top of the provider's surface:
+the freeze tether survives; force-field terms do not
+combine with a provider (`attach_external_potential!`).
+"""
+function _provider_evaluate!(st::SimulationState, compute_energy::Bool, freeze_spring::Bool)
+    external_forces!(st.external_potential, st, compute_energy)
     if freeze_spring
-        _apply_freeze_spring!(st, st.rx, st.ry, st.fx, st.fy,
-                              compute_energy ? st.Epot : nothing, compute_energy)
+        E = compute_energy ? st.Epot : nothing
+        if _is_3d(st)
+            _apply_freeze_spring!(st, st.rx, st.ry, st.rz, st.fx, st.fy, st.fz, E, compute_energy)
+        else
+            _apply_freeze_spring!(st, st.rx, st.ry, st.fx, st.fy, E, compute_energy)
+        end
     end
-    if compute_energy
-        _combine_virial!(st)
-    end
-    return nothing
-end
-
-function _finalize_force_eval3!(st::SimulationState{T}, compute_energy::Bool, freeze_spring::Bool) where {T<:AbstractFloat}
-    _apply_bonds3!(st, st.fx, st.fy, st.fz, compute_energy ? st.Epot : nothing, compute_energy,
-                   compute_energy ? st.virial_bonded : nothing)
-    if freeze_spring
-        _apply_freeze_spring!(st, st.rx, st.ry, st.rz, st.fx, st.fy, st.fz,
-                              compute_energy ? st.Epot : nothing, compute_energy)
-    end
-    if compute_energy
-        _combine_virial!(st)
-    end
+    st.force_valid = true
+    st.energy_valid = compute_energy
+    st.force_freeze_spring = freeze_spring
     return nothing
 end
 
 """
     evaluate_forces_into_f!(st, compute_energy; freeze_spring=false)
 
-Evaluate nonbonded + bonded + optional freeze-spring contributions into the
-active force slot (`f`).
+A fresh evaluation at the current coordinates (forces invalidated first, then
+[`evaluate_current_configuration!`](@ref)): forces, and with `compute_energy`
+energies and virials, on the device engine that owns the state, or on an
+evaluation-only engine (the staged force driver was removed).
 """
-function evaluate_forces_into_f!(st::SimulationState{T},
-                                 compute_energy::Bool;
-                                 freeze_spring::Bool=false) where {T<:AbstractFloat}
-    st.force_valid = false
-    if st.external_potential !== nothing
-        external_forces!(st.external_potential, st, compute_energy)
-        st.force_valid = true
-        st.force_freeze_spring = freeze_spring
+function evaluate_forces_into_f!(st::SimulationState, compute_energy::Bool; freeze_spring::Bool=false)
+    invalidate_forces!(st)
+    evaluate_current_configuration!(st, compute_energy; freeze_spring=freeze_spring, moved=true)
+    return nothing
+end
+
+"""
+    ensure_energies!(st; freeze_spring=st.force_freeze_spring) -> st
+
+Refresh the energy and virial buffers for the current coordinates if they are
+stale (`!st.energy_valid`), by evaluating forces with `compute_energy=true`
+into the active slot. Forces at unchanged coordinates are reproduced, so this
+is safe at step boundaries.
+"""
+function ensure_energies!(st::SimulationState; freeze_spring::Bool=st.force_freeze_spring)
+    st.energy_valid && return st
+    evaluate_current_configuration!(st, true; freeze_spring=freeze_spring)
+    return st
+end
+
+# Device-engine hook (configuration evaluation): forces at the current configuration
+# from the engine that owns the state, without handing it back to the staged
+# path. `DeviceEngine` adds a method for its engine; `false` means not taken.
+_engine_evaluate!(engine, st, compute_energy::Bool, freeze_spring::Bool; moved::Bool=false, create::Bool=false) = false
+
+"""
+    evaluate_current_configuration!(st, compute_energy; freeze_spring=false, moved=false, create=true)
+
+Forces (and energies/virials) at the current configuration for the public
+evaluation entry points. A state owned by the device engine is evaluated there
+(storage order unchanged); otherwise an evaluation engine is created when
+`create=true`. Unsupported configurations raise an error.
+`moved=true`: the caller only moved coordinates in place since the last
+evaluation (forces are invalid for that reason alone); `create=true` (default): an engine-supported state without an engine gets an evaluation-only
+engine, kept for later evaluations.
+"""
+function evaluate_current_configuration!(st::SimulationState, compute_energy::Bool;
+                                         freeze_spring::Bool=false, moved::Bool=false, create::Bool=true)
+    _engine_evaluate!(st.engine, st, compute_energy, freeze_spring; moved, create) && return nothing
+    if st.external_potential !== nothing && st.engine === nothing
+        _provider_evaluate!(st, compute_energy, freeze_spring)   # the provider is the force field
         return nothing
     end
-    ensure_force_neighbors!(st)
-    if _is_3d(st)
-        _compute_final_nonbonded3!(st, compute_energy)
-        _finalize_force_eval3!(st, compute_energy, freeze_spring)
-    else
-        _compute_final_nonbonded2!(st, compute_energy)
-        _finalize_force_eval2!(st, compute_energy, freeze_spring)
+    # No staged fallback: an engine that cannot take this evaluation (forces
+    # invalidated by an edit, another tether) gives way to an evaluation-only engine.
+    if st.engine !== nothing
+        _drop_engine!(st.engine, st)
+        st.external_potential === nothing || (_provider_evaluate!(st, compute_energy, freeze_spring); return nothing)
+        _engine_evaluate!(nothing, st, compute_energy, freeze_spring; moved=true, create=true) && return nothing
     end
-    st.force_valid = true
-    st.force_freeze_spring = freeze_spring
-    return nothing
-end
-
-"""
-    evaluate_forces_into_f0!(st, compute_energy; freeze_spring=false)
-
-Evaluate forces into the reference force slot (`f0`) without changing the
-external slot ownership.
-"""
-function evaluate_forces_into_f0!(st::SimulationState{T},
-                                  compute_energy::Bool;
-                                  freeze_spring::Bool=false) where {T<:AbstractFloat}
-    saved_valid, saved_spring = st.force_valid, st.force_freeze_spring
-    _swap_force_slots!(st)
-    try
-        evaluate_forces_into_f!(st, compute_energy; freeze_spring=freeze_spring)
-    finally
-        st.force_valid, st.force_freeze_spring = saved_valid, saved_spring
-        _swap_force_slots!(st)
-    end
-    return nothing
-end
-
-"""
-    evaluate_midpoint_forces_into_f0!(st; freeze_spring=false)
-
-Evaluate forces at midpoint coordinates (stored in `vx,vy[,vz]`) into the
-reference force slot (`f0`). This helper is used by Brownian midpoint / EM.
-"""
-function evaluate_midpoint_forces_into_f0!(st::SimulationState{T};
-                                           freeze_spring::Bool=false) where {T<:AbstractFloat}
-    saved_valid, saved_spring = st.force_valid, st.force_freeze_spring
-    _swap_midpoint_position_slots!(st)
-    _swap_force_slots!(st)
-    try
-        evaluate_forces_into_f!(st, false; freeze_spring=freeze_spring)
-    finally
-        st.force_valid, st.force_freeze_spring = saved_valid, saved_spring
-        _swap_force_slots!(st)
-        _swap_midpoint_position_slots!(st)
-    end
-    return nothing
+    throw(ArgumentError("The device engine does not evaluate this state: " * _evaluation_refusal(st, freeze_spring)))
 end

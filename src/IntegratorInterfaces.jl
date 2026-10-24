@@ -5,16 +5,14 @@ export AbstractIntegratorSpec,
        ensure_integrator_workspace!,
        integrator_id,
        integrator_name,
-       stage_sequence,
-       execute_integrator_stage!,
        collect_integrator_observables
 
 """
     AbstractIntegratorSpec{T}
 
-Base protocol type for stage-driven time integrators. Concrete specs (VV, BAOAB,
-Brownian, EM, NHC) should subtype this and provide protocol methods used
-by the shared stepping engine.
+Base type of the integrator specs (VV, BAOAB, BAOA, GSM, Brownian, EM, NHC, CSVR, NVE).
+The device engine (`ParticleDynamics.DeviceEngine`) steps every spec in captured
+CUDA graphs; the protocol here validates inputs and sizes per-spec workspaces.
 """
 abstract type AbstractIntegratorSpec{T<:AbstractFloat} end
 
@@ -56,28 +54,7 @@ function integrator_name(spec::AbstractIntegratorSpec)
     throw(MethodError(integrator_name, (spec,)))
 end
 
-"""
-    stage_sequence(spec) -> Tuple
 
-Return ordered stage tags executed by the shared engine for one step.
-"""
-function stage_sequence(spec::AbstractIntegratorSpec)
-    throw(MethodError(stage_sequence, (spec,)))
-end
-
-"""
-    execute_integrator_stage!(spec, st, dt, stage_tag; compute_energy=true,
-                              freeze_hold=false, freeze_spring=false)
-
-Execute a single integrator stage. The shared engine drives stage iteration and
-passes common runtime flags.
-"""
-function execute_integrator_stage!(spec::AbstractIntegratorSpec, st, dt, stage_tag;
-                                   compute_energy::Bool=true,
-                                   freeze_hold::Bool=false,
-                                   freeze_spring::Bool=false)
-    throw(MethodError(execute_integrator_stage!, (spec, st, dt, stage_tag)))
-end
 
 """
     collect_integrator_observables(spec, st) -> NamedTuple

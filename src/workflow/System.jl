@@ -74,11 +74,17 @@ function _normalize_molecules(values)
 end
 
 """
-    Topology(; bonds=[], bond_types=[], angles=[], dihedrals=[], impropers=[], exclusions=[], molecules=[], metadata=Dict())
+    Topology(; bonds=[], bond_types=[], angles=[], angle_types=[], dihedrals=[], dihedral_types=[],
+             impropers=[], improper_types=[], exclusions=[], molecules=[], metadata=Dict())
 
-Future-ready topology container used by the workflow API. Current compiled
-support covers bond connectivity and bond forces; higher-order terms are stored
-as metadata for future force-field work.
+Topology container used by the workflow API. Each `*_types` vector is either
+empty (every tuple carries the label `:default`) or holds one label per tuple;
+bonded force descriptors select tuples by these labels. Tuple atom order is
+kept exactly (it defines angle vertices and torsion signs).
+
+The type-label vectors were added after `metadata` in the field order. The
+former 8-argument positional constructor still works and migrates
+`metadata[:angle_types]` etc. (as earlier GSD imports stored them).
 """
 struct Topology
     bonds::Vector{Tuple{Int32,Int32}}
@@ -89,13 +95,33 @@ struct Topology
     exclusions::Vector{Tuple{Int32,Int32}}
     molecules::Vector{Vector{Int32}}
     metadata::Dict{Symbol,Any}
+    angle_types::Vector{Symbol}
+    dihedral_types::Vector{Symbol}
+    improper_types::Vector{Symbol}
+end
+
+function _normalize_type_labels(labels, metadata::Dict{Symbol,Any}, key::Symbol, n::Int, label::AbstractString)
+    syms = Symbol.(collect(labels))
+    if isempty(syms) && haskey(metadata, key)
+        syms = Symbol.(collect(pop!(metadata, key)))
+    end
+    isempty(syms) || length(syms) == n ||
+        throw(ArgumentError("$(label) must be empty or match the number of tuples ($(n))."))
+    return syms
+end
+
+function Topology(bonds, bond_types, angles, dihedrals, impropers, exclusions, molecules, metadata)
+    return Topology(; bonds, bond_types, angles, dihedrals, impropers, exclusions, molecules, metadata)
 end
 
 function Topology(; bonds=Tuple{Int32,Int32}[],
                     bond_types=Symbol[],
                     angles=NTuple{3,Int32}[],
+                    angle_types=Symbol[],
                     dihedrals=NTuple{4,Int32}[],
+                    dihedral_types=Symbol[],
                     impropers=NTuple{4,Int32}[],
+                    improper_types=Symbol[],
                     exclusions=Tuple{Int32,Int32}[],
                     molecules=Vector{Int32}[],
                     metadata=Dict{Symbol,Any}())
@@ -103,15 +129,27 @@ function Topology(; bonds=Tuple{Int32,Int32}[],
     bond_types_sym = Symbol.(collect(bond_types))
     isempty(bond_types_sym) || length(bond_types_sym) == length(bonds32) ||
         throw(ArgumentError("bond_types must be empty or match the number of bonds."))
+    meta = _metadata_dict(metadata)
+    angles3 = _normalize_ntuples(angles, Val(3), "angle")
+    dihedrals4 = _normalize_ntuples(dihedrals, Val(4), "dihedral")
+    impropers4 = _normalize_ntuples(impropers, Val(4), "improper")
+    for (name, tuples) in (("angle", angles3), ("dihedral", dihedrals4), ("improper", impropers4))
+        for tup in tuples
+            allunique(tup) || throw(ArgumentError("$(name) $(tup) repeats an atom."))
+        end
+    end
     return Topology(
         bonds32,
         bond_types_sym,
-        _normalize_ntuples(angles, Val(3), "angle"),
-        _normalize_ntuples(dihedrals, Val(4), "dihedral"),
-        _normalize_ntuples(impropers, Val(4), "improper"),
+        angles3,
+        dihedrals4,
+        impropers4,
         _normalize_pair_tuples(exclusions, "exclusion"),
         _normalize_molecules(molecules),
-        _metadata_dict(metadata),
+        meta,
+        _normalize_type_labels(angle_types, meta, :angle_types, length(angles3), "angle_types"),
+        _normalize_type_labels(dihedral_types, meta, :dihedral_types, length(dihedrals4), "dihedral_types"),
+        _normalize_type_labels(improper_types, meta, :improper_types, length(impropers4), "improper_types"),
     )
 end
 
@@ -278,12 +316,6 @@ end
 
 function _topology_from_gsd(topology::GSDTopology)
     metadata = Dict{Symbol,Any}()
-    angle_types = _section_types(topology.angles)
-    isempty(angle_types) || (metadata[:angle_types] = angle_types)
-    dihedral_types = _section_types(topology.dihedrals)
-    isempty(dihedral_types) || (metadata[:dihedral_types] = dihedral_types)
-    improper_types = _section_types(topology.impropers)
-    isempty(improper_types) || (metadata[:improper_types] = improper_types)
     topology.constraints.N == 0 || (metadata[:constraints] = topology.constraints)
     topology.special_pairs.N == 0 || (metadata[:special_pairs] = topology.special_pairs)
 
@@ -291,18 +323,28 @@ function _topology_from_gsd(topology::GSDTopology)
         bonds = topology.bonds.tuples,
         bond_types = _section_types(topology.bonds),
         angles = topology.angles.tuples,
+        angle_types = _section_types(topology.angles),
         dihedrals = topology.dihedrals.tuples,
+        dihedral_types = _section_types(topology.dihedrals),
         impropers = topology.impropers.tuples,
+        improper_types = _section_types(topology.impropers),
         metadata = metadata,
     )
 end
 
 """
-    ParticleSystem(data; box, types, typeids, masses, velocities, topology=Topology(), metadata=Dict())
+    ParticleSystem(data; box, types, typeids, masses, velocities, charges=nothing,
+                   topology=Topology(), metadata=Dict())
 
 High-level particle/topology container used to build a workflow
 [`Simulation`](@ref). `data` may be positions directly, an initializer result
-with `.positions`/`.box`, or a GSD frame.
+with `.positions`/`.box`, or a GSD frame (whose `particles/charge` chunk, if
+present, provides the charges).
+
+`charges` accepts a length-`N` vector, a per-type `Dict` (`:Na => 1.0, …`), or
+a scalar, in the caller's charge unit. They are only used by long-range
+electrostatics forces ([`PME`](@ref), [`PPPM`](@ref), [`ESP`](@ref)) and are
+never inferred from particle types or force-field parameters.
 """
 struct ParticleSystem
     positions
@@ -313,6 +355,27 @@ struct ParticleSystem
     velocities
     topology::Topology
     metadata::Dict{Symbol,Any}
+    charges::Union{Nothing,Vector{Float64}}
+end
+
+function _normalize_charges(charges, types::Vector{Symbol}, typeids::Vector{Int32}, N::Int)
+    charges === nothing && return nothing
+    host = if charges isa AbstractDict
+        dict = Dict{Symbol,Float64}(Symbol(k) => Float64(v) for (k, v) in pairs(charges))
+        used = unique(types[Int(id)] for id in typeids)
+        missing = filter(sym -> !haskey(dict, sym), used)
+        isempty(missing) || throw(ArgumentError("Charge dictionary is missing entries for particle types: $(join(string.(missing), ", "))."))
+        Float64[dict[types[Int(id)]] for id in typeids]
+    elseif charges isa AbstractVector
+        length(charges) == N || throw(ArgumentError("charges must have length $(N)."))
+        Float64.(collect(charges))
+    elseif charges isa Real
+        fill(Float64(charges), N)
+    else
+        throw(ArgumentError("Unsupported charges container $(typeof(charges))."))
+    end
+    all(isfinite, host) || throw(ArgumentError("charges must be finite."))
+    return host
 end
 
 Base.length(system::ParticleSystem) = length(system.positions)
@@ -323,6 +386,7 @@ function _particle_system_from_positions(positions;
                                          typeids=nothing,
                                          masses=nothing,
                                          velocities=nothing,
+                                         charges=nothing,
                                          topology::Topology=Topology(),
                                          metadata=Dict{Symbol,Any}())
     positions_norm, T, D = _normalize_position_data(positions)
@@ -341,6 +405,7 @@ function _particle_system_from_positions(positions;
         velocities_norm,
         topology,
         _metadata_dict(metadata),
+        _normalize_charges(charges, types_norm, ids_norm, length(positions_norm)),
     )
 end
 
@@ -350,6 +415,7 @@ function ParticleSystem(data;
                         typeids=nothing,
                         masses=nothing,
                         velocities=nothing,
+                        charges=nothing,
                         topology::Topology=Topology(),
                         metadata=Dict{Symbol,Any}())
     if data isa GSDFrameData
@@ -359,6 +425,7 @@ function ParticleSystem(data;
                                        typeids=typeids,
                                        masses=masses,
                                        velocities=velocities,
+                                       charges=charges,
                                        topology=topology,
                                        metadata=metadata)
     end
@@ -385,6 +452,7 @@ function ParticleSystem(data;
                                            typeids=typeids,
                                            masses=masses,
                                            velocities=velocities,
+                                           charges=charges,
                                            topology=topology,
                                            metadata=merge(auto_metadata, _metadata_dict(metadata)))
 end
@@ -395,6 +463,7 @@ function ParticleSystem_from_gsd(frame::GSDFrameData;
                                  typeids=nothing,
                                  masses=nothing,
                                  velocities=nothing,
+                                 charges=nothing,
                                  topology::Topology=_topology_from_gsd(frame.topology),
                                  metadata=Dict{Symbol,Any}())
     D = frame.D
@@ -420,6 +489,11 @@ function ParticleSystem_from_gsd(frame::GSDFrameData;
     else
         masses
     end
+    charges_data = if charges === nothing && haskey(frame.particle_properties, :charge)
+        frame.particle_properties[:charge]
+    else
+        charges
+    end
     types_data = types === nothing ? Symbol.(frame.types) : types
     typeids_data = typeids === nothing ? frame.typeid : typeids
     auto_metadata = Dict{Symbol,Any}(
@@ -440,6 +514,7 @@ function ParticleSystem_from_gsd(frame::GSDFrameData;
                                            typeids=typeids_data,
                                            masses=masses_data,
                                            velocities=velocities_data,
+                                           charges=charges_data,
                                            topology=topology,
                                            metadata=merge(auto_metadata, _metadata_dict(metadata)))
 end

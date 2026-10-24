@@ -15,6 +15,26 @@ tensors.
 virial_components(st::SimulationState) =
     st.rz === nothing ? (:xx, :yy, :xy) : (:xx, :yy, :zz, :xy, :xz, :yz)
 
+"""
+    has_global_virial(st) -> Bool
+
+True while a term without a per-particle virial decomposition (the
+reciprocal-space electrostatic tensor) contributes to `st.virial_global`.
+"""
+has_global_virial(st::SimulationState) = st.electrostatics !== nothing
+
+"""
+    global_virial_trace(st; accumulated=false)
+
+Trace of the global virial contribution (zero without such terms).
+"""
+function global_virial_trace(st::SimulationState{T}; accumulated::Bool=false) where {T<:AbstractFloat}
+    has_global_virial(st) || return zero(T)
+    D = _is_3d(st) ? 3 : 2
+    g = Array(accumulated ? st.virial_global_accum : st.virial_global)
+    return T(Base.sum(view(g, 1:D)))
+end
+
 @inline function _virial_buffer(st::SimulationState, part::Symbol, accumulated::Bool)
     if accumulated
         part === :total || throw(ArgumentError("only the total virial tensor has an accumulated buffer"))
@@ -27,7 +47,7 @@ virial_components(st::SimulationState) =
     elseif part === :bonded
         return st.virial_bonded
     end
-    throw(ArgumentError("unknown virial part $(part); use :total, :nonbonded, or :bonded"))
+    throw(ArgumentError("unknown virial part $(part); use :total, :nonbonded, :bonded, or :reciprocal"))
 end
 
 """
@@ -42,12 +62,31 @@ Component ordering follows:
 - 2D: `(:xx, :yy, :xy)`
 - 3D: `(:xx, :yy, :zz, :xy, :xz, :yz)`
 
+`part` selects `:total` (per-particle terms, reciprocal-space electrostatic
+virial and rigid-water constraint virial), `:nonbonded` (vdW plus real-space
+Coulomb and exception corrections), `:bonded`, or `:reciprocal` (the global
+electrostatic mesh tensor only).
+
 The primary buffers remain GPU-resident in `SimulationState`; this helper
 reduces the selected tensor to a small host-side summary for diagnostics.
 Virial buffers are refreshed by force evaluations with `compute_energy=true`.
+Rigid-water contributions are recomputed from current coordinates, velocities
+and conservative forces when sampled; they are not stored in `st.virial`.
 """
 function virial_tensor(st::SimulationState{T}; part::Symbol=:total, accumulated::Bool=false) where {T<:AbstractFloat}
-    comps = vec(Array(CUDA.sum(_virial_buffer(st, part, accumulated); dims=1)))
+    st.rigid_water !== nothing && !accumulated && part === :total &&
+        evaluate_configuration!(st, EvaluationRequest(virial=true))
+    comps = if part === :reciprocal
+        Array(accumulated ? st.virial_global_accum : st.virial_global)
+    else
+        c = vec(Array(CUDA.sum(_virial_buffer(st, part, accumulated); dims=1)))
+        part === :total && has_global_virial(st) &&
+            (c .+= Array(accumulated ? st.virial_global_accum : st.virial_global))
+        c
+    end
+    if part === :total && st.rigid_water !== nothing
+        comps .+= _constraint_virial_components(st; accumulated)
+    end
     if st.rz === nothing
         return (xx=comps[1], yy=comps[2], xy=comps[3])
     end
@@ -147,10 +186,15 @@ end
     accumulate_virial!(st)
 
 Add the instantaneous virial trace and total virial tensor into their
-per-interval accumulators. `st.virial` remains the scalar trace of the
+per-interval accumulators, including the global (reciprocal electrostatic)
+tensor. `st.virial` remains the scalar per-particle trace of the
 configurational virial tensor for backward compatibility.
 """
 function accumulate_virial!(st::SimulationState{T}) where {T<:AbstractFloat}
+    if st.rigid_water !== nothing
+        evaluate_configuration!(st, EvaluationRequest(virial=true))
+        _constraint_virial_buffer(st)
+    end
     N = length(st.virial)
     threads = min(256, N)
     blocks  = cld(N, threads)
@@ -161,5 +205,7 @@ function accumulate_virial!(st::SimulationState{T}) where {T<:AbstractFloat}
         k = CUDA.@cuda launch=false _accumulate_virial3!(st.virial_accum, st.virial, st.virial_tensor_accum, st.virial_tensor)
         k(st.virial_accum, st.virial, st.virial_tensor_accum, st.virial_tensor; threads, blocks)
     end
+    has_global_virial(st) && (st.virial_global_accum .+= st.virial_global)
+    st.rigid_water === nothing || (st.rigid_water.virial_accum .+= st.rigid_water.virial)
     return nothing
 end

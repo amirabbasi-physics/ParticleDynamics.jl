@@ -6,7 +6,8 @@ DocMeta.setdocmeta!(ParticleDynamics, :DocTestSetup, :(using ParticleDynamics); 
 makedocs(
     modules=[ParticleDynamics],
     sitename="ParticleDynamics.jl",
-    format=Documenter.HTML(prettyurls=get(ENV, "CI", nothing) == "true", edit_link=nothing),
+    format=Documenter.HTML(prettyurls=get(ENV, "CI", nothing) == "true", edit_link=nothing,
+                           repolink="https://github.com/amirabbasi-physics/ParticleDynamics.jl"),
     checkdocs=:none,
     doctest=false,
     remotes=nothing,
@@ -18,6 +19,8 @@ makedocs(
             "Simulation State" => "manual/simulation_state.md",
             "Integrators" => "manual/integrators.md",
             "Forces" => "manual/forces.md",
+            "Electrostatics" => "manual/electrostatics.md",
+            "Bonded, Minimization, NPT" => "manual/bonded_minimization_npt.md",
             "Groups and Filters" => "manual/groups_filters.md",
             "Thermostats" => "manual/thermostats.md",
             "Observables" => "manual/observables.md",

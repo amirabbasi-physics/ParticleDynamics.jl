@@ -9,7 +9,8 @@ repository-code: "https://github.com/amirabbasi-physics/ParticleDynamics.jl"
 url: "https://github.com/amirabbasi-physics/ParticleDynamics.jl"
 abstract: >
   GPU-accelerated simulation toolkit for particle dynamics in Julia using CUDA.jl.
-version: "0.2.0-DEV"
+version: "0.6.10"
+date-released: "2026-10-24"
 license: "MIT"
 keywords:
   - Julia

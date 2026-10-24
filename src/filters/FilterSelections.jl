@@ -18,7 +18,10 @@ TypeIDs(ids::AbstractVector{<:Integer}) = TypeIDs{Int}(Int.(ids))
 TypeIDs(id::Integer) = TypeIDs([Int(id)])
 
 """
-Explicit list of particle indices.
+Explicit list of particle ids (build-time numbering, 1:N). With spatial sorting
+they are resolved to the particles' current storage slots through `st.tag`, so an
+index filter always selects the same particles. A resolved [`Selection`](@ref)
+holds slots: re-resolve it after the state has been sorted.
 """
 struct Indices{I<:Integer} <: Filter
     idx::Vector{I}

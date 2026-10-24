@@ -27,17 +27,11 @@
         CUDA.fill!(st.Epot, 0.0)
 
         if nonbonded == :lj
-            ParticleDynamics.NonBondedForces.lj_forces_soa!(
-                st.rx, st.ry, st.fx, st.fy, st.Epot, st.nbh, st.box2, st.pair_lj
-            )
+            SimulationCore.evaluate_forces_into_f!(st, true)   # device engine (staged kernels removed)
         elseif nonbonded == :wca
-            ParticleDynamics.NonBondedForces.wca_forces_soa!(
-                st.rx, st.ry, st.fx, st.fy, st.Epot, st.nbh, st.box2, st.pair_lj
-            )
+            SimulationCore.evaluate_forces_into_f!(st, true)   # device engine (staged kernels removed)
         elseif nonbonded == :soft_repulsive
-            ParticleDynamics.NonBondedForces.harmonic_rep_forces_soa!(
-                st.rx, st.ry, st.fx, st.fy, st.Epot, st.nbh, st.box2, st.softrep
-            )
+            SimulationCore.evaluate_forces_into_f!(st, true)   # device engine (staged kernels removed)
         else
             error("unsupported nonbonded=$(nonbonded)")
         end

@@ -13,8 +13,6 @@
 
         @test ParticleDynamics.IntegratorInterfaces.integrator_name(spec) == :nose_hoover_chain
         @test ParticleDynamics.IntegratorInterfaces.integrator_id(spec) == UInt8(3)
-        @test ParticleDynamics.IntegratorInterfaces.stage_sequence(spec) ==
-              (:thermostat_pre, :kick1, :drift, :force, :kick2, :thermostat_post)
 
         SimulationCore.step!(st, spec, dt; compute_energy=true)
         @test state_allfinite(st)

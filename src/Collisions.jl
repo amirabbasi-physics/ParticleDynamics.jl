@@ -8,7 +8,7 @@ using ..NeighborLists: _ell_index
 export enable_collision_counting!, disable_collision_counting!,
        collisions_reset_counts!, collisions_read_counts!,
        set_collision_pair_cutoffs!,
-       _collisions_reinit_on_rebuild!, _collisions_update_after_positions!
+       _collisions_reinit_on_rebuild!, _collisions_update_after_positions!, _collisions_snapshot!
 
 # Internal helpers -----------------------------------------------------------
 @inline function _mic_fast(dx::T, halfL::T, L::T) where {T<:AbstractFloat}
@@ -504,6 +504,14 @@ function enable_collision_counting!(st; ntypes::Union{Nothing,Int}=nothing, bins
     st.coll_bins = CuArray(lut_h)
     st.coll_counts = CUDA.fill(Int64(0), nbins)
 
+    if st.nonbonded_backend === :cluster
+        # Cluster backend: the device engine keeps the contact rows and sizes and
+        # initializes their flags from this snapshot at its first rebuild.
+        st.coll_prev = nothing
+        st.coll_enabled = true
+        _snapshot_collision_positions!(st)
+        return st
+    end
     # Allocate contact_prev with current neighbor capacity
     neighbors_flat = _collision_neighbor_matrix(st.nbh).neighbors_flat
     st.coll_prev = CUDA.fill(UInt8(0), length(neighbors_flat))
@@ -576,10 +584,17 @@ setup in `examples/3D_stencil_two_sizes.jl`.
 function set_collision_pair_cutoffs!(st, rcut_pair::AbstractMatrix{<:Real})
     T = eltype(st.rx)
     st.rcut_pair = CuArray(T.(rcut_pair))  # store distances; kernels square internally
+    # Contact flags were initialized with the previous cutoff; without this a pair
+    # flagged "in contact" under the old cutoff would not count when it enters the
+    # new one (missed entries until the next neighbor rebuild).
+    st.coll_enabled && _collisions_reinit_on_rebuild!(st)
     return st
 end
 
 # Hooks called from Simulation.step! -----------------------------------------
+
+"""Re-snapshot the contact reference positions (cell changes, restored trials, minimization)."""
+_collisions_snapshot!(st) = (st.coll_enabled && _snapshot_collision_positions!(st); nothing)
 
 function _snapshot_collision_positions!(st)
     if st.coll_ref_x === nothing
@@ -602,6 +617,7 @@ coordinates, retaining entry events even when a previously absent pair enters.
 function _collisions_reinit_on_rebuild!(st; preserve_history::Bool=false)
     T = eltype(st.rx)
     if !st.coll_enabled; return; end
+    st.nonbonded_backend === :cluster && return   # contact rows live in the device engine
     nb = _collision_neighbor_matrix(st.nbh)
     if !preserve_history || st.coll_ref_x === nothing
         _snapshot_collision_positions!(st)
@@ -649,6 +665,8 @@ are not samples. Detects entry events and increments per-bin counters.
 function _collisions_update_after_positions!(st)
     T = eltype(st.rx)
     if !st.coll_enabled; return; end
+    st.nonbonded_backend === :cluster &&
+        throw(ArgumentError("Collision counting on the cluster backend runs on the device engine (step! with a supported integrator)"))
     nb = _collision_neighbor_matrix(st.nbh)
     N = length(st.rx)
     threads = min(256, N)

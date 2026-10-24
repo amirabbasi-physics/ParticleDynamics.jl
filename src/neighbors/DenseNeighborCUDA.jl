@@ -83,7 +83,7 @@ function _kernel_neighbors2!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
                              cell_of_particle::CuDeviceVector{Int32},
                              Lx::T, Ly::T, halfLx::T, halfLy::T,
                              nx::Int32, ny::Int32,
-                             cutoff2::T, cap::Int32) where {T<:AbstractFloat}
+                             cutoff2::T, cap::Int32, candidates=nothing) where {T<:AbstractFloat}
     i1 = (blockIdx().x-1)*blockDim().x + threadIdx().x
     N = length(rx); if i1 > N; return; end
     @inbounds begin
@@ -91,6 +91,7 @@ function _kernel_neighbors2!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
         cx = c0 % nx
         cy = c0 ÷ nx
         found = Int32(0)
+        tested = Int64(0)
         for oy in Int32(-1):Int32(1)
             cy2 = cy + oy; cy2 -= (cy2 >= ny)*ny; cy2 += (cy2 < 0)*ny
             for ox in Int32(-1):Int32(1)
@@ -101,6 +102,7 @@ function _kernel_neighbors2!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
                 for k in s:(e-1)
                     j = particle_ids_sorted[k]
                     if j != i1
+                        candidates === nothing || (tested += 1)
                         dx = mic_fast(rx[j] - rx[i1], halfLx, Lx)
                         dy = mic_fast(ry[j] - ry[i1], halfLy, Ly)
                         r2 = muladd(dx, dx, dy*dy)
@@ -115,11 +117,39 @@ function _kernel_neighbors2!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
             end
         end
         counts[i1] = found
+        candidates === nothing || (candidates[i1] = tested)
     end
     return
 end
 
 # 3D version of `_kernel_neighbors2!`, now looping over 27 neighboring cells.
+# All-pairs rows (small boxes): every other particle within the list radius, one
+# minimum image (the radius is at most half the box), in the same ELL layout.
+function _kernel_neighbors_allpairs!(r::NTuple{D}, neighbors_flat, counts, L::NTuple{D,T}, h::NTuple{D,T},
+                                     rl2::T, cap::Int32, candidates=nothing) where {D,T}
+    i1 = (blockIdx().x-1)*blockDim().x + threadIdx().x
+    N = length(r[1]); if i1 > N; return; end
+    @inbounds begin
+        xi = ntuple(d -> r[d][i1], Val(D))
+        found = Int32(0)
+        for j in 1:N
+            j == i1 && continue
+            r2 = zero(T)
+            for d in 1:D
+                dd = mic_fast(r[d][j] - xi[d], h[d], L[d])
+                r2 = muladd(dd, dd, r2)
+            end
+            if r2 <= rl2
+                found < cap && (neighbors_flat[_ell_index(i1, found, N)] = Int32(j))
+                found += 1
+            end
+        end
+        counts[i1] = found
+        candidates === nothing || (candidates[i1] = Int64(N - 1))
+    end
+    return
+end
+
 function _kernel_neighbors3!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
                              neighbors_index::CuDeviceVector{Int32},
                              neighbors_flat::CuDeviceVector{Int32},
@@ -130,7 +160,7 @@ function _kernel_neighbors3!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::C
                              Lx::T, Ly::T, Lz::T,
                              halfLx::T, halfLy::T, halfLz::T,
                              nx::Int32, ny::Int32, nz::Int32,
-                             rl2::T, cap::Int32) where {T<:AbstractFloat}
+                             rl2::T, cap::Int32, candidates=nothing) where {T<:AbstractFloat}
     i1 = (blockIdx().x-1)*blockDim().x + threadIdx().x
     N = length(rx); if i1 > N; return; end
     @inbounds begin
@@ -140,6 +170,7 @@ function _kernel_neighbors3!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::C
         cy = tmp % ny
         cz = tmp ÷ ny
         found = Int32(0)
+        tested = Int64(0)
         for oz in Int32(-1):Int32(1)
             cz2 = cz + oz; cz2 -= (cz2 >= nz)*nz; cz2 += (cz2 < 0)*nz
             for oy in Int32(-1):Int32(1)
@@ -152,6 +183,7 @@ function _kernel_neighbors3!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::C
                     for k in s:(e-1)
                         j = particle_ids_sorted[k]
                         if j != i1
+                            candidates === nothing || (tested += 1)
                             dx = mic_fast(rx[j] - rx[i1], halfLx, Lx)
                             dy = mic_fast(ry[j] - ry[i1], halfLy, Ly)
                             dz = mic_fast(rz[j] - rz[i1], halfLz, Lz)
@@ -168,6 +200,7 @@ function _kernel_neighbors3!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::C
             end
         end
         counts[i1] = found
+        candidates === nothing || (candidates[i1] = tested)
     end
     return
 end

@@ -19,17 +19,43 @@ function _validate_neighbor_grid(box, cell_size, nx::Integer, ny::Integer, nz::I
     throw(ArgumentError("$(style) requires at least 3 cells per periodic dimension to avoid duplicate neighbor-cell visits. Got grid=$(grid) for box=$(box) and cell_size=$(cell_size). Increase the box size, reduce cutoff+skin, or use a different neighbor strategy."))
 end
 
+"""All-pairs rows need one periodic image per pair: list radius ≤ half the shortest box side."""
+function _validate_allpairs_radius(box, rlist)
+    2 * rlist <= minimum(box) && return nothing
+    throw(ArgumentError("All-pairs neighbor rows need cutoff+skin ≤ L/2 (minimum image); got $(rlist) for box=$(box)."))
+end
+
 function _alloc_neighbor_matrix(T::Type{<:AbstractFloat}, N::Int, D::Int,
-                                box, cutoff::Real, skin::Real, cap::Int32)
+                                box, cutoff::Real, skin::Real, cap::Int32; allpairs::Bool=false, margin::Real=1.0,
+                                sub::Integer=1)
     cutoffT = T(cutoff)
     skinT   = T(skin)
     isfinite(cutoffT) && cutoffT >= 0 || throw(ArgumentError("Neighbor cutoff must be finite and nonnegative."))
     cutoff2 = cutoffT * cutoffT
     cell_size = max(T(1e-6), cutoffT + skinT)
     _validate_neighbor_allocation(N, D, box, cell_size, skinT, cap)
-    nx, ny, nz = _choose_grid(box, cell_size, D)
-    _validate_neighbor_grid(box, cell_size, nx, ny, nz, D, "Dense cell-list neighbor builder")
+    if allpairs   # rows from all pairs (small boxes): one cell, minimum image of the list radius
+        _validate_allpairs_radius(box, cell_size)
+        nx, ny, nz = Int32(1), Int32(1), Int32(1)
+    else
+        # margin < 1 (device pressure control): cells for a box shrunk by `margin`, so the
+        # fractional device binning (cell = ⌊x·n/L⌋ with the current L) stays valid down to it
+        gbox = map(x -> x * margin, box)
+        nx, ny, nz = _choose_grid(gbox, cell_size, D)
+        _validate_neighbor_grid(gbox, cell_size, nx, ny, nz, D, "Dense cell-list neighbor builder")
+        # sub > 1 (device builders): cells of width rlist/sub when every dimension holds 2sub+1
+        if sub > 1
+            fine = cell_size / T(sub)
+            fx, fy, fz = _choose_grid(gbox, fine, D)
+            if all(n -> n >= 2sub + 1, (fx, fy, fz)[1:D])
+                cell_size = fine; nx, ny, nz = fx, fy, fz
+            end
+        end
+    end
 
+    Int(N) * Int(cap) <= typemax(Int32) || throw(ArgumentError(
+        "Neighbor table of $(N) particles × cap $(cap) exceeds the Int32 index range; lower `cap` " *
+        "(charged states on the cluster-pair backend do not use this table: cap=16 suffices)."))
     neighbors_index = CuArray(Int32[(i - 1) * Int(cap) for i in 1:N])
     neighbors_flat  = CUDA.fill(Int32(-1), N * Int(cap))
     counts          = CUDA.CuArray{Int32}(undef, N)
@@ -64,6 +90,9 @@ function _alloc_stencil_matrix(T::Type{<:AbstractFloat}, N::Int, D::Int,
     nx, ny, nz = _choose_grid(box, cellT, D)
     _validate_neighbor_grid(box, cellT, nx, ny, nz, D, "Stencil cell-list neighbor builder")
 
+    Int(N) * Int(cap) <= typemax(Int32) || throw(ArgumentError(
+        "Neighbor table of $(N) particles × cap $(cap) exceeds the Int32 index range; lower `cap` " *
+        "(charged states on the cluster-pair backend do not use this table: cap=16 suffices)."))
     neighbors_index = CuArray(Int32[(i - 1) * Int(cap) for i in 1:N])
     neighbors_flat  = CUDA.fill(Int32(-1), N * Int(cap))
     counts          = CUDA.CuArray{Int32}(undef, N)

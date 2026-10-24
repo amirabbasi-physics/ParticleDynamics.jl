@@ -1402,41 +1402,7 @@ function baoab_BA_2d!(rx, ry, vx, vy, f0x, f0y,
 end
 
 # Conservative power accumulators (match VV formula: P_cons = v · f at end step)
-function _cons_power2!(vx::CuDeviceVector{T}, vy::CuDeviceVector{T},
-                       fx::CuDeviceVector{T}, fy::CuDeviceVector{T},
-                       dU::CuDeviceVector{T}) where {T<:AbstractFloat}
-    i = (blockIdx().x-1)*blockDim().x + threadIdx().x
-    N = length(vx); if i > N; return; end
-    @inbounds begin
-        dU[i] += vx[i]*fx[i] + vy[i]*fy[i]
-    end
-    return
-end
 
-function _cons_power3!(vx::CuDeviceVector{T}, vy::CuDeviceVector{T}, vz::CuDeviceVector{T},
-                       fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, fz::CuDeviceVector{T},
-                       dU::CuDeviceVector{T}) where {T<:AbstractFloat}
-    i = (blockIdx().x-1)*blockDim().x + threadIdx().x
-    N = length(vx); if i > N; return; end
-    @inbounds begin
-        dU[i] += vx[i]*fx[i] + vy[i]*fy[i] + vz[i]*fz[i]
-    end
-    return
-end
-
-function cons_power_2d!(vx::CuArray{T,1}, vy::CuArray{T,1}, fx::CuArray{T,1}, fy::CuArray{T,1}, dU::CuArray{T,1}) where {T<:AbstractFloat}
-    N = length(vx); threads = min(256, N); blocks = cld(N, threads)
-    k = CUDA.@cuda launch=false _cons_power2!(vx, vy, fx, fy, dU)
-    k(vx, vy, fx, fy, dU; threads, blocks)
-    return nothing
-end
-
-function cons_power_3d!(vx::CuArray{T,1}, vy::CuArray{T,1}, vz::CuArray{T,1}, fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1}, dU::CuArray{T,1}) where {T<:AbstractFloat}
-    N = length(vx); threads = min(256, N); blocks = cld(N, threads)
-    k = CUDA.@cuda launch=false _cons_power3!(vx, vy, vz, fx, fy, fz, dU)
-    k(vx, vy, vz, fx, fy, fz, dU; threads, blocks)
-    return nothing
-end
 
 """
 3D variant of [`baoab_BA_2d!`](@ref).

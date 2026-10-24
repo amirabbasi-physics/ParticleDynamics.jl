@@ -2,12 +2,23 @@
 # Bond topology
 # ------------------------------------------------------------------
 
-# Placeholder extension point for future angles/dihedrals and richer
-# all-atom topologies. Stage 14 keeps only BondList as the concrete topology.
+# Common interface for bond topology storage.
 abstract type AbstractBondTopology end
 
+# Sorted states: topology tables keep build-time particle ids. Kernels read the
+# row of storage slot `i` through `tag` (slot → id) and partner ids through `slot_of`
+# (id → slot); `nothing` means unsorted storage (slot = id).
+@inline _brow(i, ::Nothing) = i
+@inline _brow(i, tag) = @inbounds tag[i]
+@inline _bslot(j, ::Nothing) = j
+@inline _bslot(j, slot_of) = @inbounds slot_of[j]
+
 """
-CSR-style adjacency list describing bead connectivity.
+    BondList
+
+GPU adjacency list describing bead connectivity in build-time particle-id order.
+Construct it with [`build_bondlist`](@ref). Each bond is stored at both endpoints;
+`index` gives each particle's zero-based starting offset in `flat`, and `counts` its degree.
 """
 struct BondList <: AbstractBondTopology
     index::CuArray{Int32,1}

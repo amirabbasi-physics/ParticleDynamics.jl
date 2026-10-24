@@ -12,8 +12,6 @@
 
         @test ParticleDynamics.IntegratorInterfaces.integrator_name(spec) == :csvr
         @test ParticleDynamics.IntegratorInterfaces.integrator_id(spec) == UInt8(4)
-        @test ParticleDynamics.IntegratorInterfaces.stage_sequence(spec) ==
-              (:kick1, :drift, :force, :kick2, :thermostat)
 
         vx0 = randn(Float32, length(st.rx))
         vy0 = randn(Float32, length(st.rx))
@@ -98,14 +96,23 @@
 
         Nc = Filters.count(st, cold)
         Nh = Filters.count(st, hot)
-        Tc = Float64(2f0 * Filters.sum(st.Ekin, st, cold) / Float32(3 * Nc))
-        Th = Float64(2f0 * Filters.sum(st.Ekin, st, hot) / Float32(3 * Nh))
-
-        @test isfinite(Tc)
-        @test isfinite(Th)
+        # A single canonical kinetic temperature fluctuates strongly for 48
+        # particles. Average samples separated by one thermostat time, as in
+        # the single-bath test above, to test the target rather than one draw.
+        cold_samples = Float64[]
+        hot_samples = Float64[]
+        for _ in 1:40
+            for _ in 1:200
+                SimulationCore.step!(st, spec, dt; compute_energy=false)
+            end
+            push!(cold_samples, Float64(2f0 * Filters.sum(st.Ekin, st, cold) / Float32(3 * Nc)))
+            push!(hot_samples, Float64(2f0 * Filters.sum(st.Ekin, st, hot) / Float32(3 * Nh)))
+        end
+        Tc, Th = sum(cold_samples) / length(cold_samples), sum(hot_samples) / length(hot_samples)
+        @test all(isfinite, cold_samples) && all(isfinite, hot_samples)
         @test Tc < Th
-        @test abs(Tc - 0.8) < 0.45
-        @test abs(Th - 1.4) < 0.45
+        @test abs(Tc - 0.8) < 0.20
+        @test abs(Th - 1.4) < 0.20
     end
 
     @testset "Effective energy accounting" begin

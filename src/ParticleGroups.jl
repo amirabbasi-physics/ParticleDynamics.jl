@@ -102,10 +102,21 @@ function resolve(::All, state)
     return collect(1:N)
 end
 
+# `Indices` are particle ids (build-time numbering). With spatial sorting the
+# particle with id `k` sits in the slot `s` with `state.tag[s] == k`; resolve
+# ids to current slots so index selections always mean the same particles.
+function _slots_of_ids(idx::Vector{Int}, state)
+    tag = hasproperty(state, :tag) ? state.tag : nothing
+    tag === nothing && return idx
+    slot = Vector{Int}(undef, length(tag))
+    slot[Array(tag)] = 1:length(tag)
+    return slot[idx]
+end
+
 function resolve(sel::Indices, state)
     idx = Int.(sel.idx)
     _validate_indices(idx, length(state.rx))
-    return idx
+    return _slots_of_ids(idx, state)
 end
 
 function resolve(sel::TypeIDs, state)
@@ -123,9 +134,7 @@ function resolve_gpu(::All, state)
 end
 
 function resolve_gpu(sel::Indices, state)
-    idx = Int.(sel.idx)
-    _validate_indices(idx, length(state.rx))
-    return CuArray(Int32.(idx))
+    return CuArray(Int32.(resolve(sel, state)))
 end
 
 function resolve_gpu(sel::TypeIDs, state)

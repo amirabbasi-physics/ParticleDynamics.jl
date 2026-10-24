@@ -15,65 +15,22 @@
     return true
 end
 
-function _freeze_hold2_kernel!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
-                               mask::CuDeviceVector{UInt8},
-                               ax::CuDeviceVector{T}, ay::CuDeviceVector{T}) where {T<:AbstractFloat}
-    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
-    N = length(rx); if i > N; return; end
-    @inbounds begin
-        if mask[i] != 0
-            rx[i] = ax[i]
-            ry[i] = ay[i]
-        end
-    end
-    return
-end
 
-function _freeze_hold3_kernel!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
-                               mask::CuDeviceVector{UInt8},
-                               ax::CuDeviceVector{T}, ay::CuDeviceVector{T}, az::CuDeviceVector{T}) where {T<:AbstractFloat}
-    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
-    N = length(rx); if i > N; return; end
-    @inbounds begin
-        if mask[i] != 0
-            rx[i] = ax[i]
-            ry[i] = ay[i]
-            rz[i] = az[i]
-        end
-    end
-    return
-end
 
-function _freeze_hold2!(rx::CuArray{T,1}, ry::CuArray{T,1},
-                        mask::CuArray{UInt8,1},
-                        ax::CuArray{T,1}, ay::CuArray{T,1}) where {T<:AbstractFloat}
-    N = length(rx); N == 0 && return nothing
-    threads = min(256, N); blocks = cld(N, threads)
-    k = CUDA.@cuda launch=false _freeze_hold2_kernel!(rx, ry, mask, ax, ay)
-    k(rx, ry, mask, ax, ay; threads, blocks)
-    return nothing
-end
-
-function _freeze_hold3!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
-                        mask::CuArray{UInt8,1},
-                        ax::CuArray{T,1}, ay::CuArray{T,1}, az::CuArray{T,1}) where {T<:AbstractFloat}
-    N = length(rx); N == 0 && return nothing
-    threads = min(256, N); blocks = cld(N, threads)
-    k = CUDA.@cuda launch=false _freeze_hold3_kernel!(rx, ry, rz, mask, ax, ay, az)
-    k(rx, ry, rz, mask, ax, ay, az; threads, blocks)
-    return nothing
-end
-
+# The tether displacement is the minimum image of r - anchor: positions are
+# wrapped, so a tethered particle crossing a periodic face keeps a continuous
+# force and energy (any physical tether keeps |r - anchor| < L/2).
 function _freeze_spring2_kernel!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
                                  fx::CuDeviceVector{T}, fy::CuDeviceVector{T},
                                  mask::CuDeviceVector{UInt8},
-                                 ax::CuDeviceVector{T}, ay::CuDeviceVector{T}, k::T) where {T<:AbstractFloat}
+                                 ax::CuDeviceVector{T}, ay::CuDeviceVector{T}, k::T,
+                                 L::NTuple{2,T}, h::NTuple{2,T}) where {T<:AbstractFloat}
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     N = length(rx); if i > N; return; end
     @inbounds begin
         if mask[i] != 0
-            dx = rx[i] - ax[i]
-            dy = ry[i] - ay[i]
+            dx = NeighborLists.mic_fast(rx[i] - ax[i], h[1], L[1])
+            dy = NeighborLists.mic_fast(ry[i] - ay[i], h[2], L[2])
             fx[i] -= k * dx
             fy[i] -= k * dy
         end
@@ -85,13 +42,14 @@ function _freeze_spring2_energy_kernel!(rx::CuDeviceVector{T}, ry::CuDeviceVecto
                                         fx::CuDeviceVector{T}, fy::CuDeviceVector{T},
                                         Epot::CuDeviceVector{T},
                                         mask::CuDeviceVector{UInt8},
-                                        ax::CuDeviceVector{T}, ay::CuDeviceVector{T}, k::T) where {T<:AbstractFloat}
+                                        ax::CuDeviceVector{T}, ay::CuDeviceVector{T}, k::T,
+                                        L::NTuple{2,T}, h::NTuple{2,T}) where {T<:AbstractFloat}
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     N = length(rx); if i > N; return; end
     @inbounds begin
         if mask[i] != 0
-            dx = rx[i] - ax[i]
-            dy = ry[i] - ay[i]
+            dx = NeighborLists.mic_fast(rx[i] - ax[i], h[1], L[1])
+            dy = NeighborLists.mic_fast(ry[i] - ay[i], h[2], L[2])
             fx[i] -= k * dx
             fy[i] -= k * dy
             Epot[i] += T(0.5) * k * (dx * dx + dy * dy)
@@ -103,14 +61,15 @@ end
 function _freeze_spring3_kernel!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
                                  fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, fz::CuDeviceVector{T},
                                  mask::CuDeviceVector{UInt8},
-                                 ax::CuDeviceVector{T}, ay::CuDeviceVector{T}, az::CuDeviceVector{T}, k::T) where {T<:AbstractFloat}
+                                 ax::CuDeviceVector{T}, ay::CuDeviceVector{T}, az::CuDeviceVector{T}, k::T,
+                                 L::NTuple{3,T}, h::NTuple{3,T}) where {T<:AbstractFloat}
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     N = length(rx); if i > N; return; end
     @inbounds begin
         if mask[i] != 0
-            dx = rx[i] - ax[i]
-            dy = ry[i] - ay[i]
-            dz = rz[i] - az[i]
+            dx = NeighborLists.mic_fast(rx[i] - ax[i], h[1], L[1])
+            dy = NeighborLists.mic_fast(ry[i] - ay[i], h[2], L[2])
+            dz = NeighborLists.mic_fast(rz[i] - az[i], h[3], L[3])
             fx[i] -= k * dx
             fy[i] -= k * dy
             fz[i] -= k * dz
@@ -123,14 +82,15 @@ function _freeze_spring3_energy_kernel!(rx::CuDeviceVector{T}, ry::CuDeviceVecto
                                         fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, fz::CuDeviceVector{T},
                                         Epot::CuDeviceVector{T},
                                         mask::CuDeviceVector{UInt8},
-                                        ax::CuDeviceVector{T}, ay::CuDeviceVector{T}, az::CuDeviceVector{T}, k::T) where {T<:AbstractFloat}
+                                        ax::CuDeviceVector{T}, ay::CuDeviceVector{T}, az::CuDeviceVector{T}, k::T,
+                                        L::NTuple{3,T}, h::NTuple{3,T}) where {T<:AbstractFloat}
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     N = length(rx); if i > N; return; end
     @inbounds begin
         if mask[i] != 0
-            dx = rx[i] - ax[i]
-            dy = ry[i] - ay[i]
-            dz = rz[i] - az[i]
+            dx = NeighborLists.mic_fast(rx[i] - ax[i], h[1], L[1])
+            dy = NeighborLists.mic_fast(ry[i] - ay[i], h[2], L[2])
+            dz = NeighborLists.mic_fast(rz[i] - az[i], h[3], L[3])
             fx[i] -= k * dx
             fy[i] -= k * dy
             fz[i] -= k * dz
@@ -143,11 +103,11 @@ end
 function _freeze_spring2!(rx::CuArray{T,1}, ry::CuArray{T,1},
                           fx::CuArray{T,1}, fy::CuArray{T,1},
                           mask::CuArray{UInt8,1},
-                          ax::CuArray{T,1}, ay::CuArray{T,1}, k::T) where {T<:AbstractFloat}
+                          ax::CuArray{T,1}, ay::CuArray{T,1}, k::T, L::NTuple{2,T}) where {T<:AbstractFloat}
     N = length(rx); N == 0 && return nothing
-    threads = min(256, N); blocks = cld(N, threads)
-    ker = CUDA.@cuda launch=false _freeze_spring2_kernel!(rx, ry, fx, fy, mask, ax, ay, k)
-    ker(rx, ry, fx, fy, mask, ax, ay, k; threads, blocks)
+    threads = min(256, N); blocks = cld(N, threads); h = map(x -> T(0.5) * x, L)
+    ker = CUDA.@cuda launch=false _freeze_spring2_kernel!(rx, ry, fx, fy, mask, ax, ay, k, L, h)
+    ker(rx, ry, fx, fy, mask, ax, ay, k, L, h; threads, blocks)
     return nothing
 end
 
@@ -155,22 +115,22 @@ function _freeze_spring2_energy!(rx::CuArray{T,1}, ry::CuArray{T,1},
                                  fx::CuArray{T,1}, fy::CuArray{T,1},
                                  Epot::CuArray{T,1},
                                  mask::CuArray{UInt8,1},
-                                 ax::CuArray{T,1}, ay::CuArray{T,1}, k::T) where {T<:AbstractFloat}
+                                 ax::CuArray{T,1}, ay::CuArray{T,1}, k::T, L::NTuple{2,T}) where {T<:AbstractFloat}
     N = length(rx); N == 0 && return nothing
-    threads = min(256, N); blocks = cld(N, threads)
-    ker = CUDA.@cuda launch=false _freeze_spring2_energy_kernel!(rx, ry, fx, fy, Epot, mask, ax, ay, k)
-    ker(rx, ry, fx, fy, Epot, mask, ax, ay, k; threads, blocks)
+    threads = min(256, N); blocks = cld(N, threads); h = map(x -> T(0.5) * x, L)
+    ker = CUDA.@cuda launch=false _freeze_spring2_energy_kernel!(rx, ry, fx, fy, Epot, mask, ax, ay, k, L, h)
+    ker(rx, ry, fx, fy, Epot, mask, ax, ay, k, L, h; threads, blocks)
     return nothing
 end
 
 function _freeze_spring3!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1},
                           fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1},
                           mask::CuArray{UInt8,1},
-                          ax::CuArray{T,1}, ay::CuArray{T,1}, az::CuArray{T,1}, k::T) where {T<:AbstractFloat}
+                          ax::CuArray{T,1}, ay::CuArray{T,1}, az::CuArray{T,1}, k::T, L::NTuple{3,T}) where {T<:AbstractFloat}
     N = length(rx); N == 0 && return nothing
-    threads = min(256, N); blocks = cld(N, threads)
-    ker = CUDA.@cuda launch=false _freeze_spring3_kernel!(rx, ry, rz, fx, fy, fz, mask, ax, ay, az, k)
-    ker(rx, ry, rz, fx, fy, fz, mask, ax, ay, az, k; threads, blocks)
+    threads = min(256, N); blocks = cld(N, threads); h = map(x -> T(0.5) * x, L)
+    ker = CUDA.@cuda launch=false _freeze_spring3_kernel!(rx, ry, rz, fx, fy, fz, mask, ax, ay, az, k, L, h)
+    ker(rx, ry, rz, fx, fy, fz, mask, ax, ay, az, k, L, h; threads, blocks)
     return nothing
 end
 
@@ -178,34 +138,49 @@ function _freeze_spring3_energy!(rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray
                                  fx::CuArray{T,1}, fy::CuArray{T,1}, fz::CuArray{T,1},
                                  Epot::CuArray{T,1},
                                  mask::CuArray{UInt8,1},
-                                 ax::CuArray{T,1}, ay::CuArray{T,1}, az::CuArray{T,1}, k::T) where {T<:AbstractFloat}
+                                 ax::CuArray{T,1}, ay::CuArray{T,1}, az::CuArray{T,1}, k::T, L::NTuple{3,T}) where {T<:AbstractFloat}
     N = length(rx); N == 0 && return nothing
-    threads = min(256, N); blocks = cld(N, threads)
-    ker = CUDA.@cuda launch=false _freeze_spring3_energy_kernel!(rx, ry, rz, fx, fy, fz, Epot, mask, ax, ay, az, k)
-    ker(rx, ry, rz, fx, fy, fz, Epot, mask, ax, ay, az, k; threads, blocks)
+    threads = min(256, N); blocks = cld(N, threads); h = map(x -> T(0.5) * x, L)
+    ker = CUDA.@cuda launch=false _freeze_spring3_energy_kernel!(rx, ry, rz, fx, fy, fz, Epot, mask, ax, ay, az, k, L, h)
+    ker(rx, ry, rz, fx, fy, fz, Epot, mask, ax, ay, az, k, L, h; threads, blocks)
     return nothing
 end
 
-function _apply_freeze_hold!(st::SimulationState{T}, rx::CuArray{T,1}, ry::CuArray{T,1}) where {T<:AbstractFloat}
-    mask = st.freeze_mask
-    ax = st.freeze_rx
-    ay = st.freeze_ry
-    if mask === nothing || ax === nothing || ay === nothing
-        return nothing
+# Held particles move their unwrapped coordinates back with them by the minimum
+# image of anchor - r. Called before the positions are reset to the anchors, so
+# unwrapped - wrapped stays a multiple of the box length and the unwrapped
+# trajectory stays continuous (a held particle's unwrapped coordinate keeps its
+# value from the freeze, image count included).
+function _freeze_hold_unwrap2_kernel!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
+                                      ux::CuDeviceVector{T}, uy::CuDeviceVector{T},
+                                      mask::CuDeviceVector{UInt8},
+                                      ax::CuDeviceVector{T}, ay::CuDeviceVector{T},
+                                      L::NTuple{2,T}, h::NTuple{2,T}) where {T<:AbstractFloat}
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    @inbounds if mask[i] != 0
+        ux[i] += NeighborLists.mic_fast(ax[i] - rx[i], h[1], L[1])
+        uy[i] += NeighborLists.mic_fast(ay[i] - ry[i], h[2], L[2])
     end
-    return _freeze_hold2!(rx, ry, mask, ax, ay)
+    return
 end
 
-function _apply_freeze_hold!(st::SimulationState{T}, rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1}) where {T<:AbstractFloat}
-    mask = st.freeze_mask
-    ax = st.freeze_rx
-    ay = st.freeze_ry
-    az = st.freeze_rz
-    if mask === nothing || ax === nothing || ay === nothing || az === nothing
-        return nothing
+function _freeze_hold_unwrap3_kernel!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
+                                      ux::CuDeviceVector{T}, uy::CuDeviceVector{T}, uz::CuDeviceVector{T},
+                                      mask::CuDeviceVector{UInt8},
+                                      ax::CuDeviceVector{T}, ay::CuDeviceVector{T}, az::CuDeviceVector{T},
+                                      L::NTuple{3,T}, h::NTuple{3,T}) where {T<:AbstractFloat}
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    N = length(rx); if i > N; return; end
+    @inbounds if mask[i] != 0
+        ux[i] += NeighborLists.mic_fast(ax[i] - rx[i], h[1], L[1])
+        uy[i] += NeighborLists.mic_fast(ay[i] - ry[i], h[2], L[2])
+        uz[i] += NeighborLists.mic_fast(az[i] - rz[i], h[3], L[3])
     end
-    return _freeze_hold3!(rx, ry, rz, mask, ax, ay, az)
+    return
 end
+
+
 
 function _apply_freeze_hold_unwrap!(st::SimulationState{T}) where {T<:AbstractFloat}
     rxu = st.rx_unwrap
@@ -219,23 +194,22 @@ function _apply_freeze_hold_unwrap!(st::SimulationState{T}) where {T<:AbstractFl
     if mask === nothing || ax === nothing || ay === nothing
         return nothing
     end
+    N = length(st.rx); N == 0 && return nothing
+    threads = min(256, N); blocks = cld(N, threads)
     if st.rz_unwrap === nothing
-        return _freeze_hold2!(rxu, ryu, mask, ax, ay)
+        L2 = st.box2::Definitions.Box2{T}; h2 = map(x -> T(0.5) * x, L2)
+        ker = CUDA.@cuda launch=false _freeze_hold_unwrap2_kernel!(st.rx, st.ry, rxu, ryu, mask, ax, ay, L2, h2)
+        ker(st.rx, st.ry, rxu, ryu, mask, ax, ay, L2, h2; threads, blocks)
+        return nothing
     end
     az = st.freeze_rz
     az === nothing && return nothing
-    return _freeze_hold3!(rxu, ryu, st.rz_unwrap, mask, ax, ay, az)
-end
-
-function _apply_freeze_hold_positions!(st::SimulationState{T}) where {T<:AbstractFloat}
-    if st.rz === nothing
-        _apply_freeze_hold!(st, st.rx, st.ry)
-    else
-        _apply_freeze_hold!(st, st.rx, st.ry, st.rz)
-    end
-    _apply_freeze_hold_unwrap!(st)
+    L3 = st.box3::Definitions.Box3{T}; h3 = map(x -> T(0.5) * x, L3)
+    ker = CUDA.@cuda launch=false _freeze_hold_unwrap3_kernel!(st.rx, st.ry, st.rz, rxu, ryu, st.rz_unwrap, mask, ax, ay, az, L3, h3)
+    ker(st.rx, st.ry, st.rz, rxu, ryu, st.rz_unwrap, mask, ax, ay, az, L3, h3; threads, blocks)
     return nothing
 end
+
 
 function _apply_freeze_spring!(st::SimulationState{T},
                                rx::CuArray{T,1}, ry::CuArray{T,1},
@@ -250,9 +224,9 @@ function _apply_freeze_spring!(st::SimulationState{T},
     k = st.freeze_k
     k <= zero(T) && return nothing
     if compute_energy && st.freeze_include_energy && E !== nothing
-        return _freeze_spring2_energy!(rx, ry, fx, fy, E, mask, ax, ay, k)
+        return _freeze_spring2_energy!(rx, ry, fx, fy, E, mask, ax, ay, k, st.box2::Definitions.Box2{T})
     end
-    return _freeze_spring2!(rx, ry, fx, fy, mask, ax, ay, k)
+    return _freeze_spring2!(rx, ry, fx, fy, mask, ax, ay, k, st.box2::Definitions.Box2{T})
 end
 
 function _apply_freeze_spring!(st::SimulationState{T},
@@ -269,7 +243,7 @@ function _apply_freeze_spring!(st::SimulationState{T},
     k = st.freeze_k
     k <= zero(T) && return nothing
     if compute_energy && st.freeze_include_energy && E !== nothing
-        return _freeze_spring3_energy!(rx, ry, rz, fx, fy, fz, E, mask, ax, ay, az, k)
+        return _freeze_spring3_energy!(rx, ry, rz, fx, fy, fz, E, mask, ax, ay, az, k, st.box3::Definitions.Box3{T})
     end
-    return _freeze_spring3!(rx, ry, rz, fx, fy, fz, mask, ax, ay, az, k)
+    return _freeze_spring3!(rx, ry, rz, fx, fy, fz, mask, ax, ay, az, k, st.box3::Definitions.Box3{T})
 end

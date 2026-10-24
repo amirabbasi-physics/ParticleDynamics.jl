@@ -41,6 +41,21 @@ Neighbor-list policy for workflow nonbonded forces.
 end
 
 """
+    ClusterPairList(; buffer=0.1, prune_buffer=nothing)
+
+Cluster-pair traversal for 3D Lennard-Jones (uniform or pair table) and
+real-space Coulomb: one fused kernel over a Newton-3 list of 8×8 particle
+tiles (see [`set_nonbonded_backend!`](@ref)). The list radius is the largest
+interaction cutoff plus `buffer`; between rebuilds the list is pruned to the
+cutoff plus `prune_buffer` (default `buffer/2`). Bond exclusions of the vdW
+term are not supported (use `CellList`).
+"""
+@kwdef struct ClusterPairList
+    buffer::Float64 = 0.1
+    prune_buffer::Union{Nothing,Float64} = nothing
+end
+
+"""
     PairTable(; sigma, epsilon, cutoff, type_names)
 
 Per-type parameter table for workflow Lennard-Jones and WCA forces.
@@ -238,10 +253,18 @@ function _neighbor_kwargs(force)
     end
 
     spec = force.neighborlist
+    if spec isa ClusterPairList
+        spec.buffer > 0 || throw(ArgumentError("ClusterPairList buffer must be positive."))
+        kwargs[:skin] = Float64(spec.buffer)
+        kwargs[:nonbonded_backend] = :cluster
+        kwargs[:prune_buffer] = spec.prune_buffer
+        # the cluster engine keeps its own list; no typed stencil list is built
+        return kwargs, false
+    end
     if spec === nothing
         spec = CellList()
     elseif !(spec isa CellList)
-        throw(ArgumentError("Only CellList neighbor specifications are supported right now; got $(typeof(spec))."))
+        throw(ArgumentError("Neighbor specification must be CellList or ClusterPairList; got $(typeof(spec))."))
     end
     spec.capacity > 0 || throw(ArgumentError("CellList capacity must be positive."))
     spec.buffer >= 0 || throw(ArgumentError("CellList buffer must be nonnegative."))
@@ -280,11 +303,15 @@ function _uniform_lj_kwargs(force, nonbonded::Symbol, ::Type{T}) where {T<:Abstr
     return kwargs, (st -> st), Dict{Symbol,Any}(:pair_style => :uniform)
 end
 
-function _pair_table_kwargs(system::ParticleSystem, force, nonbonded::Symbol, ::Type{T}) where {T<:AbstractFloat}
+function _pair_table_kwargs(system::ParticleSystem, force, nonbonded::Symbol, ::Type{T};
+                            list_floor::Real=0) where {T<:AbstractFloat}
     table = force.pair_table
     table isa PairTable || throw(ArgumentError("Type-dependent $(typeof(force)) requires `pair_table=PairTable(...)`."))
     sigma_pair, epsilon_pair, cutoff_pair = _pair_table_for_system(table, system.types, T)
     effective_cutoff_pair = _effective_pair_cutoff(cutoff_pair, epsilon_pair)
+    # Neighbor radii also cover a longer real-space Coulomb cutoff, if any;
+    # the vdW kernel keeps applying `effective_cutoff_pair`.
+    list_cutoff_pair = max.(effective_cutoff_pair, T(list_floor))
     kwargs, use_typed_neighbors = _neighbor_kwargs(force)
     kwargs[:nonbonded] = nonbonded
     kwargs[:epsilon] = maximum(epsilon_pair)
@@ -310,14 +337,14 @@ function _pair_table_kwargs(system::ParticleSystem, force, nonbonded::Symbol, ::
                 st.nbh = NeighborLists.build_neighbors_stencil_by_types!(st.rx, st.ry;
                                                                          box=st.box2,
                                                                          typeid=st.typeid,
-                                                                         rcut_pair=effective_cutoff_pair,
+                                                                         rcut_pair=list_cutoff_pair,
                                                                          cap=cap,
                                                                          skin=skin)
             else
                 st.nbh = NeighborLists.build_neighbors_stencil_by_types!(st.rx, st.ry, st.rz;
                                                                          box=st.box3,
                                                                          typeid=st.typeid,
-                                                                         rcut_pair=effective_cutoff_pair,
+                                                                         rcut_pair=list_cutoff_pair,
                                                                          cap=cap,
                                                                          skin=skin)
             end
@@ -333,21 +360,21 @@ function _pair_table_kwargs(system::ParticleSystem, force, nonbonded::Symbol, ::
     )
 end
 
-function _compile_nonbonded(system::ParticleSystem, force::LennardJones, ::Type{T}) where {T<:AbstractFloat}
+function _compile_nonbonded(system::ParticleSystem, force::LennardJones, ::Type{T}; list_floor::Real=0) where {T<:AbstractFloat}
     if force.pair_table === nothing
         return _uniform_lj_kwargs(force, :lj, T)
     end
-    return _pair_table_kwargs(system, force, :lj, T)
+    return _pair_table_kwargs(system, force, :lj, T; list_floor)
 end
 
-function _compile_nonbonded(system::ParticleSystem, force::WCA, ::Type{T}) where {T<:AbstractFloat}
+function _compile_nonbonded(system::ParticleSystem, force::WCA, ::Type{T}; list_floor::Real=0) where {T<:AbstractFloat}
     if force.pair_table === nothing
         return _uniform_lj_kwargs(force, :wca, T)
     end
-    return _pair_table_kwargs(system, force, :wca, T)
+    return _pair_table_kwargs(system, force, :wca, T; list_floor)
 end
 
-function _compile_nonbonded(system::ParticleSystem, force::SoftRepulsive, ::Type{T}) where {T<:AbstractFloat}
+function _compile_nonbonded(system::ParticleSystem, force::SoftRepulsive, ::Type{T}; list_floor::Real=0) where {T<:AbstractFloat}
     force.pair_table === nothing || throw(ArgumentError("SoftRepulsive pair tables are not implemented yet."))
     force.epsilon === nothing && throw(ArgumentError("SoftRepulsive requires `epsilon`."))
     force.sigma === nothing && throw(ArgumentError("SoftRepulsive requires `sigma`."))
@@ -398,17 +425,28 @@ function _compile_bonded(system::ParticleSystem, force::FENEBondForce, ::Type{T}
     ), Dict{Symbol,Any}(:bond_style => :fene)
 end
 
+_no_nonbonded_kwargs(::Type{T}) where {T<:AbstractFloat} = Dict{Symbol,Any}(
+    :nonbonded => :none,
+    :epsilon => zero(T),
+    :sigma => one(T),
+    :cutoff => T(SimulationCore.WCA_RC_FACTOR),
+    :use_neighborlist => false,
+)
+
 function compile_forces(system::ParticleSystem, forces; precision=:f64)
     T = _precision_type(precision)
     force_list = _force_list(forces)
 
     nonbonded = Force[]
     bonded = Force[]
+    electrostatic = Force[]
     for force in force_list
         if force isa Union{LennardJones,WCA,SoftRepulsive}
             push!(nonbonded, force)
-        elseif force isa Union{HarmonicBondForce,FENEBondForce}
+        elseif force isa BondedSectionForce
             push!(bonded, force)
+        elseif force isa ElectrostaticsForce
+            push!(electrostatic, force)
         else
             throw(ArgumentError("Unsupported workflow force type $(typeof(force))."))
         end
@@ -416,24 +454,55 @@ function compile_forces(system::ParticleSystem, forces; precision=:f64)
 
     length(nonbonded) <= 1 ||
         throw(ArgumentError("Only one nonbonded force family may be active per simulation with the current engine."))
-    length(bonded) <= 1 ||
-        throw(ArgumentError("Only one bonded force family may be active per simulation with the current engine."))
+    length(electrostatic) <= 1 ||
+        throw(ArgumentError("Only one long-range electrostatics force may be active per simulation."))
 
     build_kwargs = Dict{Symbol,Any}()
     post_build_hooks = Function[]
     metadata = Dict{Symbol,Any}()
 
+    elec_spec = isempty(electrostatic) ? nothing : electrostatics_spec(only(electrostatic))
+    rc_coulomb = elec_spec === nothing ? 0.0 : elec_spec.real_cutoff
+
     if !isempty(nonbonded)
-        nb_kwargs, nb_post, nb_meta = _compile_nonbonded(system, only(nonbonded), T)
+        nb_kwargs, nb_post, nb_meta = _compile_nonbonded(system, only(nonbonded), T; list_floor=rc_coulomb)
         merge!(build_kwargs, nb_kwargs)
         push!(post_build_hooks, nb_post)
         merge!(metadata, nb_meta)
     end
 
+    if elec_spec !== nothing
+        force = only(electrostatic)
+        length(system.box) == 3 ||
+            throw(ArgumentError("Long-range electrostatics requires a 3D ParticleSystem."))
+        system.charges === nothing &&
+            throw(ArgumentError("$(nameof(typeof(force))) requires `ParticleSystem(...; charges=...)`."))
+        if isempty(nonbonded)
+            # Pure Coulomb (plus bonds): no vdW kernel, list sized for real space.
+            merge!(build_kwargs, Dict{Symbol,Any}(:nonbonded => :none, :cutoff => T(rc_coulomb),
+                                                  :epsilon => zero(T), :sigma => one(T)))
+            merge!(build_kwargs, _neighbor_kwargs(force)[1])
+        else
+            build_kwargs[:neighbor_cutoff] = T(rc_coulomb)
+        end
+        exc = electrostatic_exceptions(system, force)
+        q = copy(system.charges)
+        push!(post_build_hooks, st -> SimulationCore.attach_electrostatics!(st, elec_spec; charges=q, exceptions=exc))
+        metadata[:electrostatics] = elec_spec
+        metadata[:electrostatic_exceptions] = exc
+    end
+
+    if isempty(nonbonded) && elec_spec === nothing
+        # No pair term was requested: build an explicit no-vdW state instead
+        # of falling back to the low-level builder's default LJ.
+        merge!(build_kwargs, _no_nonbonded_kwargs(T))
+    end
+
     if !isempty(bonded)
-        bond_kwargs, bond_meta = _compile_bonded(system, only(bonded), T)
+        bond_kwargs, bond_post, bond_meta = _compile_bonded_forces(system, bonded, T)
         merge!(build_kwargs, bond_kwargs)
         merge!(metadata, bond_meta)
+        bond_post === nothing || push!(post_build_hooks, bond_post)
     end
 
     function _post_build(st)

@@ -93,7 +93,9 @@ end
                       mass=1, bonds=nothing, bonding=nothing,
                       nonbonded=:lj, softrep_params=nothing, backend=:cuda,
                       precision=:f32, unwrapped_positions::Bool=false,
-                      spatial_reorder::Bool=true, reorder_interval::Int=500)
+                      spatial_reorder::Bool=true, reorder_interval::Int=500,
+                      exclude_bonded_pairs::Bool=true, neighbor_cutoff=nothing,
+                      charges=nothing, nonbonded_backend=:ell, prune_buffer=nothing)
 
 Construct a [`SimulationState`](@ref) with GPU-resident SoA arrays and a
 neighbor list configured for the requested potential. All inputs are keyword
@@ -120,10 +122,25 @@ Key behaviors:
   once per `reorder_interval` steps, at a neighbor rebuild). This keeps
   storage order aligned with space, which is essential for force-kernel memory
   locality at large `N`. `st.tag[k]` records the build-time id of the particle
-  in slot `k`, and GSD/restart output is written in build-time order. Pass
-  `spatial_reorder=false` if external code indexes into the state arrays by
-  fixed particle number (e.g. `Filters.Indices`); typeid-based selections
-  remain valid because `typeid` is permuted consistently.
+  in slot `k`, and GSD/restart output is written in build-time order.
+  `Filters.Indices` are particle ids and are mapped to current slots through
+  `st.tag`; typeid-based selections remain valid because `typeid` is permuted
+  consistently. Pass `spatial_reorder=false` if external code indexes the state
+  arrays directly by fixed particle number.
+- `nonbonded = :none` builds a state without a short-range vdW term (pure
+  charged or purely bonded systems); `cutoff` then only sizes the neighbor
+  list.
+- `neighbor_cutoff` widens the neighbor-list radius beyond the vdW cutoff
+  (e.g. to a longer real-space Coulomb cutoff) without changing the vdW
+  potential, which keeps applying its own cutoff.
+- `charges` (length `N`, caller's charge unit) allocates `st.charge`; attach a
+  long-range solver with [`attach_electrostatics!`](@ref).
+- `vdw_modifier = :potential_shift` shifts each Lennard-Jones pair energy to
+  zero at its cutoff (forces unchanged; see [`set_vdw_modifier!`](@ref)).
+- `nonbonded_backend = :cluster` evaluates Lennard-Jones and real-space
+  Coulomb with the fused cluster-pair engine instead of per-particle neighbor
+  rows (3D; see [`set_nonbonded_backend!`](@ref), which also documents
+  `prune_buffer`).
 
 Example (mirrors `examples/2D_example.jl`, scaled down to N=4096 for testing):
 
@@ -169,7 +186,12 @@ function build_simulation(;N::Int,
                            unwrapped_positions::Bool = false,
                            spatial_reorder::Bool = true,
                            reorder_interval::Int = 500,
-                           exclude_bonded_pairs::Bool = true)
+                           exclude_bonded_pairs::Bool = true,
+                           neighbor_cutoff::Union{Nothing,Real} = nothing,
+                           charges::Union{Nothing,AbstractVector{<:Real}} = nothing,
+                           nonbonded_backend::Symbol = :ell,
+                           prune_buffer::Union{Nothing,Real} = nothing,
+                           vdw_modifier::Symbol = :none)
 
     0 < N < typemax(Int32) || throw(ArgumentError("Simulation particle count must satisfy 0 < N < typemax(Int32)."))
     backend_impl = Backends.normalize_backend(backend)
@@ -193,6 +215,7 @@ function build_simulation(;N::Int,
     requested_cutoff = T(cutoff)
     nb_cutoff = (nonbonded === :wca) ? (sigmaT * T(WCA_RC_FACTOR)) : requested_cutoff
     rcut_factor = sigmaT == zero(T) ? T(1) : nb_cutoff / sigmaT
+    list_cutoff = neighbor_cutoff === nothing ? nb_cutoff : max(nb_cutoff, T(neighbor_cutoff))
 
     rx = Backends.allocate_vector(backend_impl, T, N); ry = Backends.allocate_vector(backend_impl, T, N)
     vx = Backends.allocate_vector(backend_impl, T, N); vy = Backends.allocate_vector(backend_impl, T, N)
@@ -253,12 +276,12 @@ function build_simulation(;N::Int,
         # Coordinates are filled by the caller/workflow after allocation. Building
         # against zeros here is quadratic and can overflow before initialization.
         # First force evaluation (or explicit update) builds the actual rows.
-        nbh = NeighborLists._alloc_neighbor_matrix(T, N, D, T.(box), nb_cutoff, T(skin), cap)
+        nbh = NeighborLists._alloc_neighbor_matrix(T, N, D, T.(box), list_cutoff, T(skin), cap)
     else
         if D == 2
-            nbh = NeighborLists.build_neighbors_allpairs!(rx, ry; box=(T(box[1]), T(box[2])), cutoff=nb_cutoff, cap, skin=T(skin))
+            nbh = NeighborLists.build_neighbors_allpairs!(rx, ry; box=(T(box[1]), T(box[2])), cutoff=list_cutoff, cap, skin=T(skin))
         else
-            nbh = NeighborLists.build_neighbors_allpairs!(rx, ry, rz; box=(T(box[1]), T(box[2]), T(box[3])), cutoff=nb_cutoff, cap, skin=T(skin))
+            nbh = NeighborLists.build_neighbors_allpairs!(rx, ry, rz; box=(T(box[1]), T(box[2]), T(box[3])), cutoff=list_cutoff, cap, skin=T(skin))
         end
     end
 
@@ -298,9 +321,22 @@ function build_simulation(;N::Int,
     elseif nonbonded === :soft_repulsive || nonbonded === :softrep || nonbonded === :soft
         nb_tag = NB_KIND_SOFTREP
         srp = softrep_params === nothing ? Definitions.SoftRepulsiveParams{T}(epsilonT, sigmaT) : softrep_params
+    elseif nonbonded === :none
+        nb_tag = NB_KIND_NONE
+        srp = nothing
     else
-        error("Unknown nonbonded=:$(nonbonded). Use :lj, :wca, or :soft_repulsive")
+        error("Unknown nonbonded=:$(nonbonded). Use :lj, :wca, :soft_repulsive, or :none")
     end
+
+    charge = nothing
+    if charges !== nothing
+        length(charges) == N || throw(ArgumentError("charges must have length $(N)."))
+        host_q = T.(collect(charges))
+        all(isfinite, host_q) || throw(ArgumentError("charges must be finite."))
+        charge = Backends.from_host(backend_impl, host_q)
+    end
+    virial_global = Backends.allocate_vector(backend_impl, T, nvirial); fill!(virial_global, zero(T))
+    virial_global_accum = Backends.allocate_vector(backend_impl, T, nvirial); fill!(virial_global_accum, zero(T))
 
     local bond_spec
     if bonding !== nothing
@@ -319,10 +355,10 @@ function build_simulation(;N::Int,
 
     # Spatial reordering keeps per-particle arrays in cell-sorted order for
     # memory locality. Only meaningful with a cell list, and unsupported with
-    # bonds (topology arrays are index-based). External index lists into this
-    # state (e.g. `Filters.Indices`) require `spatial_reorder=false`.
-    tag = (spatial_reorder && use_neighborlist && bondlist === nothing) ?
-          CuArray(Int32.(1:N)) : nothing
+    # `Filters.Indices` are particle ids resolved through `tag`; raw external index lists
+    # require `spatial_reorder=false`. Bonded topology keeps build-time ids and is mapped
+    # through `tag`/`slot_of` once the device engine sorts the state.
+    tag = (spatial_reorder && use_neighborlist) ? CuArray(Int32.(1:N)) : nothing
 
     st = SimulationState(rx, ry, rz, rx_unwrap, ry_unwrap, rz_unwrap, vx, vy, vz, fx, fy, fz,
                          f0x, f0y, f0z,
@@ -340,7 +376,10 @@ function build_simulation(;N::Int,
                          FREEZE_NONE, -1, true, nothing, zero(T), nothing, nothing, nothing,
                          false, nothing, nothing, nothing,
                          tag, -1, reorder_interval,
-                         nothing, exclude_bonded_pairs, false, false, nothing, nothing, nothing)
+                         nothing, exclude_bonded_pairs, false, false, nothing, nothing, nothing,
+                         charge, nothing, virial_global, virial_global_accum, false,
+                         :ell, nothing, nothing,
+                         nothing, nothing, nothing, :none, nothing, nothing)
 
     if D == 2
         st.box2 = (T(box[1]), T(box[2]))
@@ -349,6 +388,8 @@ function build_simulation(;N::Int,
         st.box2 = nothing
         st.box3 = (T(box[1]), T(box[2]), T(box[3]))
     end
+    nonbonded_backend === :ell || set_nonbonded_backend!(st, nonbonded_backend; prune_buffer=prune_buffer)
+    vdw_modifier === :none || set_vdw_modifier!(st, vdw_modifier)
 
     return st
 end

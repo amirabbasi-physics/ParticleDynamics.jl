@@ -43,19 +43,19 @@
             neigh_interval=4, gamma=1f0, temperature=1f0, nonbonded=:wca
         )
 
-        rx0 = copy(st.rx)
-        ry0 = copy(st.ry)
+        rx0 = by_id(st, st.rx)
+        ry0 = by_id(st, st.ry)
         eh = SimulationCore.eulerheun(st; gamma=1f0, temperature=1f0, dt=dt)
         SimulationCore.step!(st, eh, dt; compute_energy=true)
         @test state_allfinite(st)
-        @test msd_2d(rx0, ry0, st.rx, st.ry) > 0.0
+        @test msd_2d(rx0, ry0, by_id(st, st.rx), by_id(st, st.ry)) > 0.0
 
-        rx1 = copy(st.rx)
-        ry1 = copy(st.ry)
+        rx1 = by_id(st, st.rx)
+        ry1 = by_id(st, st.ry)
         em = SimulationCore.eulermaruyama(st; gamma=1f0, temperature=1f0, dt=dt)
         SimulationCore.step!(st, em, dt; compute_energy=true)
         @test state_allfinite(st)
-        @test msd_2d(rx1, ry1, st.rx, st.ry) > 0.0
+        @test msd_2d(rx1, ry1, by_id(st, st.rx), by_id(st, st.ry)) > 0.0
     end
 
     @testset "Euler-Maruyama precomputed-noise step" begin

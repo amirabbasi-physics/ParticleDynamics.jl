@@ -10,7 +10,7 @@ export gpu_required, seed_all!,
        set_positions_2d!, set_positions_3d!,
        set_velocities_2d!, set_velocities_3d!,
        msd_2d, msd_3d, kinetic_moments,
-       gpu_allfinite, state_allfinite
+       gpu_allfinite, state_allfinite, by_id
 
 const DEFAULT_SEED = 0x1234ABCD
 
@@ -208,5 +208,14 @@ function state_allfinite(st)
     end
     return ok
 end
+
+"""
+    by_id(st, x) -> CuArray
+
+Per-particle array `x` in particle-id order. The device engine reorders particle
+storage (slot `k` holds particle `st.tag[k]`), so snapshots compared across steps
+must be taken and compared in id order.
+"""
+by_id(st, x) = st.tag === nothing ? copy(x) : (y = similar(x); y[st.tag] = x; y)
 
 end # module

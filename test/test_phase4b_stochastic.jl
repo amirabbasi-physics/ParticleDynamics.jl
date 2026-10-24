@@ -109,8 +109,8 @@
         spec = integrator == :eulermaruyama ?
                SimulationCore.eulermaruyama(st; gamma=gamma, temperature=temperature, dt=dt) :
                SimulationCore.eulerheun(st; gamma=gamma, temperature=temperature, dt=dt)
-        rx0 = copy(st.rx_unwrap)
-        ry0 = copy(st.ry_unwrap)
+        rx0 = by_id(st, st.rx_unwrap)
+        ry0 = by_id(st, st.ry_unwrap)
 
         ts = Float64[]
         msd = Float64[]
@@ -118,7 +118,7 @@
             SimulationCore.step!(st, spec, dt; compute_energy=false)
             if s % sample_stride == 0
                 push!(ts, s * dt)
-                v = CUDA.sum((st.rx_unwrap .- rx0).^2 .+ (st.ry_unwrap .- ry0).^2) / Float64(N)
+                v = CUDA.sum((by_id(st, st.rx_unwrap) .- rx0).^2 .+ (by_id(st, st.ry_unwrap) .- ry0).^2) / Float64(N)
                 push!(msd, Float64(v))
             end
         end
@@ -265,8 +265,8 @@
             SimulationCore.step!(st, spec, dt; compute_energy=false)
         end
 
-        v0x = copy(st.vx)
-        v0y = copy(st.vy)
+        v0x = by_id(st, st.vx)
+        v0y = by_id(st, st.vy)
         c0v = Float64(CUDA.sum(v0x.^2 .+ v0y.^2)) / N
 
         ou0 = copy(vec(spec.workspace.ou_y))
@@ -277,7 +277,7 @@
         c_ou = Float64[]
         for lag in 1:lag_max
             SimulationCore.step!(st, spec, dt; compute_energy=false)
-            cv = Float64(CUDA.sum(v0x .* st.vx .+ v0y .* st.vy)) / N
+            cv = Float64(CUDA.sum(v0x .* by_id(st, st.vx) .+ v0y .* by_id(st, st.vy))) / N
             co = Float64(CUDA.sum(ou0 .* vec(spec.workspace.ou_y))) / N
             push!(t_lags, lag * dt)
             push!(c_vel, cv / c0v)
@@ -419,10 +419,10 @@
             SimulationCore.step!(st, spec, dt; compute_energy = false)
         end
 
-        rx0 = copy(st.rx_unwrap)
-        ry0 = copy(st.ry_unwrap)
-        vx0 = copy(st.vx)
-        vy0 = copy(st.vy)
+        rx0 = by_id(st, st.rx_unwrap)
+        ry0 = by_id(st, st.ry_unwrap)
+        vx0 = by_id(st, st.vx)
+        vy0 = by_id(st, st.vy)
 
         msd_num = Float64[]
         msd_ref = Float64[]
@@ -432,9 +432,9 @@
             SimulationCore.step!(st, spec, dt; compute_energy = false)
             if step % sample_stride == 0
                 t = step * dt
-                push!(msd_num, Float64(CUDA.sum((st.rx_unwrap .- rx0).^2 .+ (st.ry_unwrap .- ry0).^2) / N))
+                push!(msd_num, Float64(CUDA.sum((by_id(st, st.rx_unwrap) .- rx0).^2 .+ (by_id(st, st.ry_unwrap) .- ry0).^2) / N))
                 push!(msd_ref, 2 * msd_report_1d(t, mass, gamma, tau, D))
-                push!(vacf_num, Float64(CUDA.sum(vx0 .* st.vx .+ vy0 .* st.vy) / N))
+                push!(vacf_num, Float64(CUDA.sum(vx0 .* by_id(st, st.vx) .+ vy0 .* by_id(st, st.vy)) / N))
                 push!(vacf_ref, 2 * vacf_report_1d(t, mass, gamma, tau, D))
             end
         end
@@ -504,15 +504,15 @@
                                             ou_scales=noise_scale,
                                             dt=dt)
 
-            rx0 = copy(st.rx_unwrap)
-            ry0 = copy(st.ry_unwrap)
+            rx0 = by_id(st, st.rx_unwrap)
+            ry0 = by_id(st, st.ry_unwrap)
 
             msd_num = Float64[]
             msd_ref = Float64[]
             for step in 1:steps
                 SimulationCore.step!(st, spec, dt; compute_energy = false)
                 if step % sample_stride == 0
-                    push!(msd_num, Float64(CUDA.sum((st.rx_unwrap .- rx0).^2 .+ (st.ry_unwrap .- ry0).^2) / N))
+                    push!(msd_num, Float64(CUDA.sum((by_id(st, st.rx_unwrap) .- rx0).^2 .+ (by_id(st, st.ry_unwrap) .- ry0).^2) / N))
                     push!(msd_ref, 2.0 * free_aoup_msd_1d(step, gamma, dt, temperature, tau, noise_scale))
                 end
             end
@@ -578,15 +578,15 @@
                                             ou_scales=scales,
                                             dt=dt)
 
-            rx0 = copy(st.rx_unwrap)
-            ry0 = copy(st.ry_unwrap)
+            rx0 = by_id(st, st.rx_unwrap)
+            ry0 = by_id(st, st.ry_unwrap)
 
             msd_num = Float64[]
             msd_ref = Float64[]
             for step in 1:steps
                 SimulationCore.step!(st, spec, dt; compute_energy = false)
                 if step % sample_stride == 0
-                    push!(msd_num, Float64(CUDA.sum((st.rx_unwrap .- rx0).^2 .+ (st.ry_unwrap .- ry0).^2) / N))
+                    push!(msd_num, Float64(CUDA.sum((by_id(st, st.rx_unwrap) .- rx0).^2 .+ (by_id(st, st.ry_unwrap) .- ry0).^2) / N))
                     push!(msd_ref, 2.0 * free_aoup_msd_1d(step, gamma, dt, temperature, taus, scales))
                 end
             end

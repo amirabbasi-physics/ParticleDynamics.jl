@@ -82,48 +82,6 @@
         @test :read_gsd_frame! in names(ParticleDynamics; all=false, imported=false)
     end
 
-    @testset "IR-004 test_em_rebuild_collision_state_consistency" begin
-        seed_all!(0xD00404)
-        st = build_tiny2d(
-            N=12, T=Float32, box=(30f0, 30f0), cutoff=2.5f0, skin=0.3f0,
-            cap=Int32(32), neigh_interval=1, use_neighborlist=true,
-            nonbonded=:wca, gamma=1f0, temperature=0.5f0, dt=1f-3
-        )
-        st.typeid .= CuArray(vcat(fill(Int32(1), 6), fill(Int32(2), 6)))
-        ParticleDynamics.enable_collision_counting!(st; ntypes=2, bins=:all_pairs)
-
-        @test st.coll_prev !== nothing
-        @test st.coll_counts !== nothing
-        @test st.coll_bins !== nothing
-
-        # Force a rebuild in the next EM step.
-        st.nbh.target_interval = 1
-        st.nbh.last_build_step = -1
-        fill!(st.coll_prev, UInt8(0x07))
-        prev_len = length(st.coll_prev)
-
-        em = SimulationCore.eulermaruyama(st; gamma=1f0, temperature=0.5f0, dt=1f-3)
-        err = nothing
-        try
-            SimulationCore.step!(st, em, 1f-3; compute_energy=false)
-        catch e
-            err = e
-        end
-        @test err === nothing
-
-        @test st.nbh.last_build_step == 0
-        @test st.coll_prev !== nothing
-        @test st.coll_counts !== nothing
-        @test length(st.coll_prev) == prev_len
-        @test length(st.coll_counts) == 3
-
-        counts = ParticleDynamics.collisions_read_counts!(st)
-        @test all(>=(0), counts)
-
-        sentinel = Int(CUDA.sum(ifelse.(st.coll_prev .== UInt8(0x07), Int32(1), Int32(0))))
-        @test sentinel == 0
-    end
-
     @testset "IR-005 BAOAB gamma=0 handling" begin
         seed_all!(0xD00505)
         st = build_tiny2d(

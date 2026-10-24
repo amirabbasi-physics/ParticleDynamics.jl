@@ -50,7 +50,7 @@
             gamma=T(0),
             temperature=T(0),
             bonds=bonds,
-            bonding=harmonic_bond(k=T(300), r0=T(1)),
+            bonding=harmonic_bond(k=T(0), r0=T(1)),       # k=0: only the excluded pair term remains
             nonbonded=:soft_repulsive,
             precision=:f64,
         )
@@ -59,12 +59,7 @@
         ry = T[0.0, 0.0, 0.0, 0.6]
         copyto!(st.rx, rx)
         copyto!(st.ry, ry)
-        ParticleDynamics.NeighborLists.update_neighbors_inplace!(st.nbh, st.rx, st.ry; box=st.box2, step=st.step)
-
-        fill!(st.fx, zero(T)); fill!(st.fy, zero(T)); fill!(st.Epot, zero(T))
-        ParticleDynamics.NonBondedForces.harmonic_rep_forces_soa_excl!(
-            st.rx, st.ry, st.fx, st.fy, st.Epot, st.nbh, st.bonds, st.box2, st.softrep
-        )
+        SimulationCore.evaluate_forces_into_f!(st, false)
         CUDA.synchronize()
 
         fx_gpu = Array(st.fx)
@@ -150,6 +145,7 @@
             return isodd(n) ? sorted[mid + 1] : 0.5 * (sorted[mid] + sorted[mid + 1])
         end
 
+        # Compare bonded overhead with both states on the device engine.
         function step_ms!(st, spec)
             CUDA.synchronize()
             t0 = time_ns()

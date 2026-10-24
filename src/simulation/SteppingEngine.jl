@@ -1,104 +1,26 @@
-"""
-    _swap_force_slots!(st)
-
-Swap the active force slot (`f`) and reference force slot (`f0`).
-"""
-function _swap_force_slots!(st::SimulationState)
-    st.f0x, st.fx = st.fx, st.f0x
-    st.f0y, st.fy = st.fy, st.f0y
-    if _is_3d(st)
-        st.f0z, st.fz = st.fz, st.f0z
-    end
-    return nothing
-end
-
-"""
-    _swap_midpoint_position_slots!(st)
-
-Swap physical coordinates (`r`) with midpoint scratch coordinates (`v`) used by
-Brownian midpoint-style integrators.
-"""
-function _swap_midpoint_position_slots!(st::SimulationState)
-    st.rx, st.vx = st.vx, st.rx
-    st.ry, st.vy = st.vy, st.ry
-    if _is_3d(st)
-        st.rz, st.vz = st.vz, st.rz
-    end
-    return nothing
-end
-
-"""
-    prepare_previous_force_buffers!(st, spec)
-
-Prepare any force-buffer reuse needed before stage execution.
-"""
-function prepare_previous_force_buffers!(st::SimulationState,
-                                         spec::IntegratorSpec)
-    return nothing
-end
+include("NVEFusion.jl")
 
 
-"""
-    ensure_reference_forces_ready!(st, spec, compute_energy, freeze_spring)
 
-Ensure the required reference force buffers for the selected integrator are
-initialized before stage execution.
-"""
-function ensure_reference_forces_ready!(st::SimulationState,
-                                        spec::IntegratorSpec,
-                                        compute_energy::Bool,
-                                        freeze_spring::Bool)
-    return nothing
-end
 
-function ensure_reference_forces_ready!(st::SimulationState,
-                                        spec::Union{VVSpec,BAOABSpec,BAOASpec,GSMSpec,NVESpec,NHCSpec,CSVRSpec},
-                                        compute_energy::Bool,
-                                        freeze_spring::Bool)
-    if st.force_valid && st.force_freeze_spring == freeze_spring
-        _swap_force_slots!(st)
-        st.force_valid = false
-    else
-        evaluate_forces_into_f0!(st, compute_energy; freeze_spring=freeze_spring)
-    end
-    return nothing
-end
 
-function ensure_reference_forces_ready!(st::SimulationState,
-                                        spec::Union{BrownianSpec,EMSpec},
-                                        compute_energy::Bool,
-                                        freeze_spring::Bool)
-    if !st.force_valid || st.force_freeze_spring != freeze_spring
-        evaluate_forces_into_f!(st, compute_energy; freeze_spring=freeze_spring)
-    end
-    return nothing
-end
 
-"""
-    finalize_step_accounting!(st, spec, compute_energy)
 
-Perform integrator-independent end-of-step bookkeeping.
-"""
-function finalize_step_accounting!(st::SimulationState,
-                                   spec::IntegratorSpec,
-                                   compute_energy::Bool)
-    return nothing
-end
 
-function finalize_step_accounting!(st::SimulationState{T},
-                                   spec::Union{NVESpec{T},NHCSpec{T},CSVRSpec{T}},
-                                   compute_energy::Bool) where {T<:AbstractFloat}
-    # Deterministic thermostatted MD paths do not define per-particle
-    # stochastic heat/work channels, and none of their kernels write `dq`/`dU`.
-    # The buffers only need clearing when the previous step was taken by an
-    # integrator that populated them; clearing every step costs two full-N
-    # sweeps in the hot loop.
-    if st.last_integrator != integrator_id(spec)
-        fill!(st.dq, zero(T))
-        fill!(st.dU, zero(T))
-    end
-    return nothing
-end
+
+# Device-engine hooks; `ParticleDynamics.DeviceEngine` adds methods for its engine.
+# `_engine_boundary!` checks device status at an explicit host boundary.
+_engine_boundary!(::Nothing, st) = nothing
+# ELL rows `(flat, counts)` of the engine that owns the state (`flat[t*N + i]`), or nothing.
+_engine_neighbor_rows(engine) = nothing
+# Box change for the engine that owns the state (`set_box!`); no-op without one.
+_engine_set_box!(engine, st, box) = nothing
+# Any force invalidation: the engine no longer knows why forces are invalid.
+_engine_invalidated!(engine) = nothing
+# Settle and discard the engine that owns the state (its arrays are the state's).
+_drop_engine!(::Nothing, st) = nothing
+# Why no engine evaluates the state (DeviceEngine adds the reasons).
+_evaluation_refusal(st, freeze_spring) = "unsupported configuration"
 
 """
     finalize_step_counter!(st, integrator_id)
@@ -112,73 +34,31 @@ function finalize_step_counter!(st::SimulationState,
     return nothing
 end
 
-"""
-    run_integrator_step!(st, spec, dt; compute_energy=true)
-
-Shared stage-driven step engine. Integrator-independent orchestration lives
-here, while stage-specific work is delegated through the integrator protocol.
-"""
-function run_integrator_step!(st::SimulationState{T},
-                              spec::IntegratorSpec{T},
-                              dt::T;
-                              compute_energy::Bool=true) where {T<:AbstractFloat}
-    isfinite(dt) && dt > zero(T) || throw(ArgumentError("dt must be finite and positive"))
-    validate_integrator_inputs!(spec, st, dt)
-
-    try
-        freeze_active = _freeze_active!(st)
-        freeze_hold = freeze_active && st.freeze_mode == FREEZE_HOLD
-        freeze_spring = freeze_active && st.freeze_mode == FREEZE_SPRING
-
-        rebuild_needed = _spatial_reorder_active(st, spec) || plan_neighbor_rebuild!(st, dt)
-        apply_neighbor_rebuild_if_needed!(st, spec, rebuild_needed)
-
-        prepare_previous_force_buffers!(st, spec)
-        ensure_reference_forces_ready!(st, spec, compute_energy, freeze_spring)
-        ensure_integrator_workspace!(spec, st)
-
-        for stage_tag in stage_sequence(spec)
-            _trace_integrator_stage!(st, spec, stage_tag;
-                                     force_evaluated=(stage_tag == :force),
-                                     rebuild_applied=rebuild_needed)
-            execute_integrator_stage!(spec, st, dt, stage_tag;
-                                      compute_energy=compute_energy,
-                                      freeze_hold=freeze_hold,
-                                      freeze_spring=freeze_spring)
-        end
-
-        finalize_step_accounting!(st, spec, compute_energy)
-        finalize_step_counter!(st, integrator_id(spec))
-    catch
-        invalidate_forces!(st)
-        rethrow()
-    end
-    return nothing
-end
 
 """
     step!(st, spec, dt; compute_energy=true)
 
-Canonical explicit stepping API.
+Canonical explicit stepping API. Every step runs on the device engine
+(`ParticleDynamics.DeviceEngine` adds the methods for each integrator); there is
+no staged fallback.
 """
 function step!(st::SimulationState{T},
                spec::IntegratorSpec{T},
                dt::Real;
                compute_energy::Bool=true) where {T<:AbstractFloat}
-    return run_integrator_step!(st, spec, T(dt); compute_energy=compute_energy)
+    throw(ArgumentError("integrator $(nameof(typeof(spec))) is not available on the device engine"))
 end
 
 """
     step_graph!(st, spec, dt; compute_energy=true)
 
-Graph-entry stepping API with explicit integrator selection. It currently
-shares the same stage-driven engine as [`step!`](@ref).
+Same as [`step!`](@ref): every step is a captured CUDA-graph replay on the device engine.
 """
 function step_graph!(st::SimulationState{T},
                      spec::IntegratorSpec{T},
                      dt::Real;
                      compute_energy::Bool=true) where {T<:AbstractFloat}
-    return run_integrator_step!(st, spec, T(dt); compute_energy=compute_energy)
+    return step!(st, spec, dt; compute_energy=compute_energy)
 end
 
 """

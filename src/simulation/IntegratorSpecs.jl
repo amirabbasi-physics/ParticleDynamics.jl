@@ -128,7 +128,9 @@ mutable struct CSVRParams{T<:AbstractFloat}
     mass::T
     target_temperature::Vector{T}
     tau::Vector{T}
+    interval::Int    # coupling interval in steps (GROMACS nsttcouple); 1 = every step
 end
+CSVRParams{T}(mass, target_temperature, tau) where {T<:AbstractFloat} = CSVRParams{T}(mass, target_temperature, tau, 1)
 
 """
     CSVRWorkspace{T}
@@ -195,15 +197,6 @@ integrator_name(::NHCSpec) = :nose_hoover_chain
 integrator_name(::CSVRSpec) = :csvr
 integrator_name(::NVESpec) = :nve
 
-stage_sequence(::VVSpec) = (:kick1, :drift, :force, :kick2)
-stage_sequence(::BAOABSpec) = (:B1, :A1, :O, :A2, :force, :B2)
-stage_sequence(::GSMSpec) = (:B1, :A1, :O, :A2, :force, :B2)
-stage_sequence(::BAOASpec) = (:B1, :A1, :O, :A2, :force, :power, :kinetic_refresh)
-stage_sequence(::BrownianSpec) = (:midpoint_predict, :midpoint_force, :final_position, :force)
-stage_sequence(::EMSpec) = (:em_position, :force)
-stage_sequence(::NHCSpec) = (:thermostat_pre, :kick1, :drift, :force, :kick2, :thermostat_post)
-stage_sequence(::CSVRSpec) = (:kick1, :drift, :force, :kick2, :thermostat)
-stage_sequence(::NVESpec) = (:kick1, :drift, :force, :kick2)
 
 @inline function _require_positive_gamma!(gamma::CuArray{T,1}, integrator::AbstractString) where {T<:AbstractFloat}
     gmin = minimum(gamma)

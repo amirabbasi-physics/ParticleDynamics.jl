@@ -481,3 +481,31 @@ function read_gsd_frame!(file_path::AbstractString; step::Union{Nothing,Integer}
         GSDFiles.close(r)
     end
 end
+
+"""
+    read_gsd_log(path, name; frame=-1) -> Vector{Float64} or nothing
+
+Read the Float64 log chunk `name` (e.g. `"log/electrostatics/settings"`) of
+the given 1-based `frame` (`-1` = last). Frames that do not repeat the chunk
+inherit it from the closest earlier frame, following the GSD convention.
+"""
+function read_gsd_log(file_path::AbstractString, name::AbstractString; frame::Integer=-1)
+    r = GSDFiles.open_read(file_path)
+    try
+        isempty(r.index) && return nothing
+        last_idx = Int(maximum(e -> e.frame, r.index)) + 1
+        idx = frame == -1 ? last_idx : Int(frame)
+        1 <= idx <= last_idx || throw(ArgumentError("Frame $(frame) is out of range for $(file_path)."))
+        for i in idx:-1:1
+            ents = GSDFiles._entries_for_frame(r, UInt64(i - 1))
+            e = GSDFiles._maybe_one(r, ents, name)
+            e === nothing && continue
+            e.type == UInt8(10) || throw(ArgumentError("GSD chunk $(name) is not Float64."))
+            seek(r.io, e.location)
+            return read!(r.io, Vector{Float64}(undef, Int(e.N) * max(1, Int(e.M))))
+        end
+        return nothing
+    finally
+        GSDFiles.close(r)
+    end
+end

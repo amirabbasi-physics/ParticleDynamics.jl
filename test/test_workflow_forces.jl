@@ -81,8 +81,8 @@ end
     @test st.epsilon_pair !== nothing
     @test st.rcut_pair !== nothing
     @test size(st.sigma_pair) == (2, 2)
-    @test SimulationCore._nonbonded_interaction(st).coefficients isa ParticleDynamics.NonBondedInteractions.PairMatrixCoefficients{Float64}
-    @test SimulationCore._nonbonded_interaction(st).exclusions isa ParticleDynamics.NonBondedInteractions.BondExclusions
+    @test ParticleDynamics.DeviceEngine.pair_model(st)[1] isa Union{ParticleDynamics.DeviceEngine.PairMatrixLJ,ParticleDynamics.DeviceEngine.PairMatrixWCA}
+    @test st.bonds !== nothing && st.exclude_bonded
 
     harmonic = HarmonicBondForce(k=300.0, r0=1.1)
     compiled_bond = ParticleDynamics.Workflow.compile_forces(system, [harmonic]; precision=:f64)

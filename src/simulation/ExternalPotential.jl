@@ -28,6 +28,10 @@ evaluation:
   values are not meaningful) and zero `st.virial_nonbonded`. External
   potentials do not provide a virial; pressure observables are unsupported
   while a provider is attached.
+
+User restraints act on top of the provider: an active freeze tether
+(`freeze_particles!(...; mode=:spring)`) adds its force (and, with energies, its
+energy) after this call; held particles (`mode=:hold`) stay fixed.
 """
 function external_forces! end
 
@@ -36,7 +40,8 @@ function external_forces! end
 
 Route all subsequent force evaluations of `st` through `pot`. Requirements:
 
-- bond-free state (external potentials replace bonded terms too), and
+- no bonded terms (legacy bonds or typed families: external potentials replace
+  bonded terms too), and
 - `spatial_reorder=false` at build time: reordering permutes storage order,
   which would silently break the provider's particle↔index correspondence.
 
@@ -45,8 +50,12 @@ Use [`detach_external_potential!`](@ref) to restore the internal force path.
 function attach_external_potential!(st::SimulationState, pot::AbstractExternalPotential)
     st.bonds === nothing ||
         error("external potentials replace all force terms; states with bonds are unsupported")
+    st.bonded === nothing ||
+        error("external potentials replace all force terms; detach the typed bonded terms first (detach_bonded_terms!)")
     st.tag === nothing ||
         error("external potentials require spatial_reorder=false (storage order must stay fixed)")
+    st.electrostatics === nothing ||
+        error("external potentials replace all force terms and cannot be combined with long-range electrostatics; call detach_electrostatics! first")
     invalidate_forces!(st)
     st.external_potential = pot
     return st

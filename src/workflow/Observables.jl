@@ -241,6 +241,12 @@ function prepare_observables!(sim, observables=sim.observables)
     return sim
 end
 
+# The engine reorders particle storage (slot k holds particle `st.tag[k]`), so
+# references kept across steps are stored in particle-id order and gathered back
+# into the current slot order when evaluated.
+_by_particle_id(st, x) = x === nothing ? nothing : (st.tag === nothing ? copy(x) : (y = similar(x); y[st.tag] = x; y))
+_in_slot_order(st, ref) = ref === nothing ? nothing : (st.tag === nothing ? ref : ref[st.tag])
+
 function _refresh_reference_observable!(sim, obs::Observable, ctx::Dict{Symbol,Any})
     st = sim.state
     st === nothing && return ctx
@@ -248,15 +254,15 @@ function _refresh_reference_observable!(sim, obs::Observable, ctx::Dict{Symbol,A
     if obs isa MSDObservable
         ctx[:reference_step] = st.step
         ctx[:reference_time] = _workflow_time(sim)
-        ctx[:reference_rx] = copy(rx)
-        ctx[:reference_ry] = copy(ry)
-        ctx[:reference_rz] = rz === nothing ? nothing : copy(rz)
+        ctx[:reference_rx] = _by_particle_id(st, rx)
+        ctx[:reference_ry] = _by_particle_id(st, ry)
+        ctx[:reference_rz] = _by_particle_id(st, rz)
     elseif obs isa VACFObservable
         ctx[:reference_step] = st.step
         ctx[:reference_time] = _workflow_time(sim)
-        ctx[:reference_vx] = copy(st.vx)
-        ctx[:reference_vy] = copy(st.vy)
-        ctx[:reference_vz] = st.vz === nothing ? nothing : copy(st.vz)
+        ctx[:reference_vx] = _by_particle_id(st, st.vx)
+        ctx[:reference_vy] = _by_particle_id(st, st.vy)
+        ctx[:reference_vz] = _by_particle_id(st, st.vz)
     end
     return ctx
 end
@@ -269,6 +275,8 @@ function _reset_interval_buffers!(sim)
     fill!(st.Ekin_accum, zero(T))
     fill!(st.virial_accum, zero(T))
     fill!(st.virial_tensor_accum, zero(T))
+    fill!(st.virial_global_accum, zero(T))
+    st.rigid_water === nothing || fill!(st.rigid_water.virial_accum, zero(T))
     if sim.lowlevel_integrator !== nothing
         SimulationCore.reset_bath_exchange_accumulators!(st, sim.lowlevel_integrator)
     else
@@ -304,12 +312,16 @@ function _thermodynamic_data(sim, obs::ThermodynamicObservable)
     n = _group_count(sim, filter)
     kinetic = Filters.sum(st.Ekin, st, filter)
     potential = Filters.sum(st.Epot, st, filter)
-    virial = Filters.sum(st.virial, st, filter)
+    virial = _group_virial(st, filter, n, false)
     dof = dim * n
+    if st.rigid_water !== nothing
+        n == length(st.rx) || throw(ArgumentError("Rigid-water temperature requires a whole-system group"))
+        dof = SimulationCore.kinetic_dof(st)
+    end
     temperature = dof == 0 ? zero(eltype(st.rx)) : (2 * kinetic / dof)
     kinetic_acc = Filters.sum(st.Ekin_accum, st, filter)
     potential_acc = Filters.sum(st.Epot_accum, st, filter)
-    virial_acc = Filters.sum(st.virial_accum, st, filter)
+    virial_acc = _group_virial(st, filter, n, true)
     return (
         temperature = temperature,
         kinetic_energy = kinetic,
@@ -345,10 +357,51 @@ end
 function _virial_data(sim, obs::VirialObservable)
     st = sim.state::SimulationState
     filter = _group_filter(sim, obs.group)
+    n = _group_count(sim, filter)
     return (
-        virial = Filters.sum(st.virial, st, filter),
-        virial_accumulated = Filters.sum(st.virial_accum, st, filter),
+        virial = _group_virial(st, filter, n, false),
+        virial_accumulated = _group_virial(st, filter, n, true),
     )
+end
+
+# Per-particle virial sum of a group. The global (reciprocal electrostatic)
+# virial has no per-particle decomposition: it is added for groups covering
+# every particle, and the value is NaN for strict subgroups (requests for it
+# are rejected in `sample_observable`).
+function _group_virial(st::SimulationState, filter, n::Integer, accumulated::Bool)
+    local_sum = Filters.sum(accumulated ? st.virial_accum : st.virial, st, filter)
+    if st.rigid_water !== nothing
+        n == length(st.rx) || return oftype(local_sum, NaN)
+        local_sum += SimulationCore.constraint_virial_trace(st; accumulated)
+    end
+    SimulationCore.has_global_virial(st) || return local_sum
+    n == length(st.rx) || return oftype(local_sum, NaN)
+    return local_sum + SimulationCore.global_virial_trace(st; accumulated=accumulated)
+end
+
+# Energies/virials sampled from stale buffers would silently describe earlier
+# coordinates; refresh them for the current configuration first.
+function _refresh_energies_for!(sim, obs::Observable, fields)
+    st = sim.state::SimulationState
+    st.energy_valid && return nothing
+    observable_requires_energy(obs, collect(Symbol, fields)) || return nothing
+    obs isa BathExchangeObservable && return nothing     # integrator-owned accounting
+    SimulationCore.ensure_energies!(st)
+    return nothing
+end
+
+_observable_field_uses_virial(::ThermodynamicObservable, field::Symbol) = field in (:virial, :virial_accumulated)
+_observable_field_uses_virial(::VirialObservable, ::Symbol) = true
+_observable_field_uses_virial(::Observable, ::Symbol) = false
+
+function _reject_subgroup_global_virial(sim, obs::Observable, fields)
+    st = sim.state::SimulationState
+    (SimulationCore.has_global_virial(st) || st.rigid_water !== nothing) || return nothing
+    hasproperty(obs, :group) || return nothing
+    any(field -> _observable_field_uses_virial(obs, field), fields) || return nothing
+    filter = _group_filter(sim, getfield(obs, :group))
+    _group_count(sim, filter) == length(st.rx) && return nothing
+    throw(ArgumentError("Observable $(observable_name(obs)) requests a subgroup virial, but electrostatic or rigid-water virials require a whole-system group. Use all particles or omit the virial fields."))
 end
 
 function _collision_pair_labels(sim)
@@ -390,10 +443,11 @@ function _msd_data(sim, obs::MSDObservable)
     count = _group_count(sim, filter)
     count == 0 && throw(ArgumentError("MSDObservable group $(observable_name(obs)) selects no particles."))
     rx, ry, rz = _position_views(st)
+    x0, y0, z0 = (_in_slot_order(st, ctx[k]) for k in (:reference_rx, :reference_ry, :reference_rz))
     dr2 = if rz === nothing
-        (rx .- ctx[:reference_rx]).^2 .+ (ry .- ctx[:reference_ry]).^2
+        (rx .- x0).^2 .+ (ry .- y0).^2
     else
-        (rx .- ctx[:reference_rx]).^2 .+ (ry .- ctx[:reference_ry]).^2 .+ (rz .- ctx[:reference_rz]).^2
+        (rx .- x0).^2 .+ (ry .- y0).^2 .+ (rz .- z0).^2
     end
     elapsed_steps = st.step - get(ctx, :reference_step, st.step)
     elapsed_time = _workflow_time(sim) - get(ctx, :reference_time, _workflow_time(sim))
@@ -411,10 +465,11 @@ function _vacf_data(sim, obs::VACFObservable)
     filter = _group_filter(sim, obs.group)
     count = _group_count(sim, filter)
     count == 0 && throw(ArgumentError("VACFObservable group $(observable_name(obs)) selects no particles."))
+    vx0, vy0, vz0 = (_in_slot_order(st, ctx[k]) for k in (:reference_vx, :reference_vy, :reference_vz))
     corr = if st.vz === nothing
-        st.vx .* ctx[:reference_vx] .+ st.vy .* ctx[:reference_vy]
+        st.vx .* vx0 .+ st.vy .* vy0
     else
-        st.vx .* ctx[:reference_vx] .+ st.vy .* ctx[:reference_vy] .+ st.vz .* ctx[:reference_vz]
+        st.vx .* vx0 .+ st.vy .* vy0 .+ st.vz .* vz0
     end
     elapsed_steps = st.step - get(ctx, :reference_step, st.step)
     elapsed_time = _workflow_time(sim) - get(ctx, :reference_time, _workflow_time(sim))
@@ -444,6 +499,8 @@ end
 function sample_observable(sim, obs::Observable; fields=nothing)
     sim.state === nothing && throw(ArgumentError("Workflow observables require a prepared SimulationState."))
     selected = _normalize_observable_fields(obs, fields)
+    _reject_subgroup_global_virial(sim, obs, selected)
+    _refresh_energies_for!(sim, obs, selected)
     data = _observable_data(sim, obs)
     values = map(field -> begin
         hasproperty(data, field) || throw(ArgumentError("Observable $(observable_name(obs)) does not provide field $(field)."))

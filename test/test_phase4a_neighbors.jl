@@ -22,8 +22,8 @@
 
         CUDA.fill!(st_dense.fx, 0.0); CUDA.fill!(st_dense.fy, 0.0); CUDA.fill!(st_dense.Epot, 0.0)
         CUDA.fill!(st_allpairs.fx, 0.0); CUDA.fill!(st_allpairs.fy, 0.0); CUDA.fill!(st_allpairs.Epot, 0.0)
-        ParticleDynamics.NonBondedForces.lj_forces_soa!(st_dense.rx, st_dense.ry, st_dense.fx, st_dense.fy, st_dense.Epot, st_dense.nbh, st_dense.box2, st_dense.pair_lj)
-        ParticleDynamics.NonBondedForces.lj_forces_soa!(st_allpairs.rx, st_allpairs.ry, st_allpairs.fx, st_allpairs.fy, st_allpairs.Epot, st_allpairs.nbh, st_allpairs.box2, st_allpairs.pair_lj)
+        SimulationCore.evaluate_forces_into_f!(st_dense, true)   # device engine (staged kernels removed)
+        SimulationCore.evaluate_forces_into_f!(st_allpairs, true)   # device engine (staged kernels removed)
 
         fdx = Array(st_dense.fx) .- Array(st_allpairs.fx)
         fdy = Array(st_dense.fy) .- Array(st_allpairs.fy)
@@ -55,8 +55,8 @@
 
         CUDA.fill!(st_dense.fx, 0.0); CUDA.fill!(st_dense.fy, 0.0); CUDA.fill!(st_dense.Epot, 0.0)
         CUDA.fill!(st_stencil.fx, 0.0); CUDA.fill!(st_stencil.fy, 0.0); CUDA.fill!(st_stencil.Epot, 0.0)
-        ParticleDynamics.NonBondedForces.lj_forces_soa!(st_dense.rx, st_dense.ry, st_dense.fx, st_dense.fy, st_dense.Epot, st_dense.nbh, st_dense.box2, st_dense.pair_lj)
-        ParticleDynamics.NonBondedForces.lj_forces_soa!(st_stencil.rx, st_stencil.ry, st_stencil.fx, st_stencil.fy, st_stencil.Epot, st_stencil.nbh, st_stencil.box2, st_stencil.pair_lj)
+        SimulationCore.evaluate_forces_into_f!(st_dense, true)   # device engine (staged kernels removed)
+        SimulationCore.evaluate_forces_into_f!(st_stencil, true)   # device engine (staged kernels removed)
 
         fdx = Array(st_dense.fx) .- Array(st_stencil.fx)
         fdy = Array(st_dense.fy) .- Array(st_stencil.fy)

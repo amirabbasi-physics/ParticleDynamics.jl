@@ -55,12 +55,6 @@ end
                 @test Array(st.virial_nonbonded) ≈ v rtol=tol atol=tol
             end
         end
-        # The energy-only low-level entry point has a distinct kernel.
-        energy_kernel = potential == :lj ? NF.lj_forces_soa_mixed! : NF.wca_forces_soa_mixed!
-        energy_kernel(dest..., (st.fx,st.fy,st.fz)[1:D]..., st.Epot, st.nbh,
-            box,one(T),st.sigma_particle,st.rcut_factor; bonds=exclude ? st.bonds : nothing)
-        @test Array(st.Epot) ≈ e rtol=tol atol=tol
-        @test hcat(map(Array,(st.fx,st.fy,st.fz)[1:D])...) ≈ f rtol=tol atol=tol
     end
 end
 

@@ -11,6 +11,9 @@ module Definitions
 using CUDA
 using StaticArrays
 
+include("geometry/PeriodicDisplacement.jl")
+include("gpu/RelaxedAtomics.jl")
+
 export IntX, Dim2, Dim3, Box2, Box3,
        LJParams, wrap_pbc2!, wrap_pbc3!, clamp_cap,
        HarmonicBondParams, FENEParams,
@@ -278,5 +281,16 @@ value when tuning `gamma`.
 function gamma_reduced(diffusive_time::Real, inertial_time::Real)
     return sqrt(diffusive_time / inertial_time)
 end
+
+"""
+    box_lengths(box, Val(D)) -> NTuple{D}
+
+Periodic box lengths inside a kernel. `box` is either a tuple (a box fixed when the
+kernel was launched or captured) or the device geometry vector of a run (device-resident
+box): its first D entries are the current lengths, so captured
+graphs stay valid when the box changes.
+"""
+@inline box_lengths(b::Tuple, ::Val{D}) where {D} = b
+@inline box_lengths(g::AbstractVector, ::Val{D}) where {D} = ntuple(i -> @inbounds(g[i]), Val(D))
 
 end # module

@@ -384,7 +384,11 @@ Write one frame of `st` to the open GSD handle `h` at the given `step`.
 Positions, and (unless the last integrator step was position-only) velocities,
 are always written. `diameter`, `mass`, and `charge` accept `nothing` (use GSD
 defaults), a scalar, or a per-particle-or-per-type vector (expanded from
-per-type values via `types_names`).
+per-type values via `types_names`). With `charge=nothing`, a charged state
+writes `st.charge`. While a long-range electrostatics solver is attached, the
+frame also records its exact settings (`log/electrostatics/settings`) and
+exception list (`log/electrostatics/exceptions`) for restarts; see
+`electrostatics_from_gsd`.
 Set `write_forces`, `write_unwrapped`, or `write_virial` to additionally store
 forces, unwrapped positions (requires `unwrapped_positions=true` in
 [`build_simulation`](@ref)), or the virial tensor. Output is written in
@@ -393,7 +397,10 @@ build-time particle order regardless of any internal spatial reordering.
 function write_gsd_frame!(h, st; diameter=nothing, mass=nothing, charge=nothing,
                           types_names=["A"], step::Int=0,
                           write_forces::Bool=false, write_unwrapped::Bool=false,
-                          write_virial::Bool=false, sync_on_write::Bool=false)
+                          write_virial::Bool=false, sync_on_write::Bool=false,
+                          logs=())
+    hasproperty(st, :rigid_water) && st.rigid_water !== nothing &&
+        throw(ArgumentError("GSD rigid-water constraint serialization is not implemented; refusing a frame that loses its constraints"))
     T = eltype(st.rx)
     N = length(st.rx)
     tag = hasproperty(st, :tag) ? st.tag : nothing
@@ -463,7 +470,19 @@ function write_gsd_frame!(h, st; diameter=nothing, mass=nothing, charge=nothing,
     end
     GSDFiles.write_particles_mass!(h, masses)
     charges = _particle_property_values(charge, tid_host, types_names, N, T)
+    if charges === nothing && hasproperty(st, :charge) && st.charge !== nothing
+        charges = T.(Array(u(st.charge)))
+    end
     charges === nothing || GSDFiles.write_particles_charge!(h, charges)
+    if hasproperty(st, :electrostatics) && st.electrostatics !== nothing
+        rec = Electrostatics.settings_record(st.electrostatics)
+        # on-disk GSD type 10 = double (written raw, like the virial chunk)
+        GSDFiles.write_chunk_raw!(h.user, "log/electrostatics/settings"; type_code=UInt8(10),
+                                  N=length(rec), M=1, data=rec)
+        exc = Electrostatics.exceptions_record(st.electrostatics)
+        isempty(exc) || GSDFiles.write_chunk_raw!(h.user, "log/electrostatics/exceptions"; type_code=UInt8(10),
+                                                  N=length(exc) ÷ 3, M=3, data=exc)
+    end
     GSDFiles.write_particles_position!(h, T.(posM))
     if write_velocities
         GSDFiles.write_particles_velocity!(h, T.(velM))
@@ -574,6 +593,11 @@ function write_gsd_frame!(h, st; diameter=nothing, mass=nothing, charge=nothing,
         else
             GSDFiles.write_bonds_N!(h, 0)
         end
+    end
+    # Extra Float64 log chunks (`name => values`), e.g. restart records.
+    for (name, values) in logs
+        data = Float64.(collect(values))
+        GSDFiles.write_chunk_raw!(h.user, String(name); type_code=UInt8(10), N=length(data), M=1, data=data)
     end
     GSDFiles.end_frame!(h)
     if sync_on_write

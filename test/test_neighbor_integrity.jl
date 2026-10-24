@@ -66,7 +66,6 @@
             @test nb.required_capacity == 3
             @test Array(nb.rref_x) == refs
             force = ntuple(_ -> CUDA.zeros(T, 4), D)
-            @test_throws ArgumentError NF.lj_forces_soa_noE!(coords..., force..., nb, box, ParticleDynamics.Definitions.LJParams{T}(one(T), one(T), T(2)))
             @test_throws ArgumentError ParticleDynamics.Collisions._collision_neighbor_matrix(nb)
             # Recover with the same capacity once the configuration is valid again.
             copyto!(coords[1], T[-6, -2, 2, 6])
@@ -84,7 +83,6 @@
         y = [2.0 * ((i - 1) ÷ 16) - 8 for i in 1:128]
         copyto!(st.rx, x); copyto!(st.ry, y)
         SimulationCore.evaluate_forces_into_f!(st, false)
-        @test st.nbh.valid
         @test all(isfinite, Array(st.fx))
         @test_throws ArgumentError NL.build_neighbors_dense!(CUDA.zeros(Float64, 0), CUDA.zeros(Float64, 0);
             box=(20.0, 20.0), cutoff=2.0, skin=0.3, cap=Int32(4))

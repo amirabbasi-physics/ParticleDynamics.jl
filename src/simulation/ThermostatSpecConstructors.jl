@@ -228,20 +228,23 @@ function nosehooverchain(st::SimulationState{T};
 end
 
 """
-    csvr(st; temperature=1, tau=1, mass=st.mass) -> CSVRSpec
-    csvr(st; temperatures, taus, mass=st.mass) -> CSVRSpec
+    csvr(st; temperature=1, tau=1, mass=st.mass, interval=1) -> CSVRSpec
+    csvr(st; temperatures, taus, mass=st.mass, interval=1) -> CSVRSpec
 
 Create a deterministic MD integrator using the Bussi canonical-sampling through
 velocity rescaling (CSVR) thermostat. The thermostat acts on one or more baths
 defined by filter assignments, with one global velocity-rescaling factor drawn
-per bath and per timestep.
+per bath every `interval` steps (GROMACS `nsttcouple`), each coupling integrating
+the thermostat over `interval·dt`.
 """
 function csvr(st::SimulationState{T};
               temperature::Union{Nothing,Real}=nothing,
               tau::Union{Nothing,Real}=nothing,
               temperatures::Union{Nothing,AbstractVector{<:Real}}=nothing,
               taus::Union{Nothing,AbstractVector{<:Real}}=nothing,
-              mass::Real=st.mass) where {T<:AbstractFloat}
+              mass::Real=st.mass,
+              interval::Integer=1) where {T<:AbstractFloat}
+    interval >= 1 || throw(ArgumentError("CSVR coupling interval must be ≥ 1."))
     if temperatures !== nothing && temperature !== nothing
         throw(ArgumentError("Provide either `temperature` or `temperatures`, not both."))
     end
@@ -275,6 +278,6 @@ function csvr(st::SimulationState{T};
         τb > zero(T) || throw(ArgumentError("CSVR tau for bath $(b) must be > 0."))
     end
 
-    params = CSVRParams{T}(massT, temp_vec, tau_vec)
+    params = CSVRParams{T}(massT, temp_vec, tau_vec, Int(interval))
     return CSVRSpec{T}(params, _new_csvr_workspace(Backends.storage_backend(st), T, nbaths, length(st.rx)))
 end

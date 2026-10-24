@@ -11,14 +11,15 @@ end
     dz = mic_fast(coords[3][i] - coords[3][j], box[3]/2, box[3])
     return muladd(dx, dx, muladd(dy, dy, dz*dz))
 end
-function _fene_domain_kernel!(invalid, coords, index, flat, counts, box, R02)
+function _fene_domain_kernel!(invalid, coords, index, flat, counts, box, R02, tag, slot_of)
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     i > length(index) && return
-    @inbounds for t in 0:Int(counts[i]-1)
-        j = flat[index[i]+t+1]
+    row = _brow(i, tag)
+    @inbounds for t in 0:Int(counts[row]-1)
+        j = _bslot(flat[index[row]+t+1], slot_of)
         r2 = _fene_r2(coords, i, j, box)
         if !(isfinite(r2) && r2 < R02)
-            CUDA.@atomic invalid[1] = min(invalid[1], Int32(i))
+            CUDA.@atomic invalid[1] = min(invalid[1], Int32(row))   # the particle id
         end
     end
     return
@@ -33,7 +34,7 @@ function _require_fene_domain!(coords, bonds, box, params)
     invalid = CUDA.fill(typemax(Int32), 1)
     threads = min(256, N)
     CUDA.@cuda threads=threads blocks=cld(N, threads) _fene_domain_kernel!(
-        invalid, coords, bonds.index, bonds.flat, bonds.counts, box, R02)
+        invalid, coords, bonds.index, bonds.flat, bonds.counts, box, R02, nothing, nothing)
     first_invalid = only(Array(invalid))
     first_invalid == typemax(Int32) || throw(DomainError(first_invalid,
         "FENE bond incident on particle $first_invalid has nonfinite length or r >= R0=$(params.R0). Reduce the timestep or correct the configuration; forces are not clamped."))
@@ -54,7 +55,7 @@ function _fene2_E!(
     fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, E::CuDeviceVector{T},
     index::CuDeviceVector{Int32}, flat::CuDeviceVector{Int32}, counts::CuDeviceVector{Int32},
     Lx::T, Ly::T, halfLx::T, halfLy::T,
-    k::T, R0::T) where {T<:AbstractFloat}
+    k::T, R0::T, tag, slot_of) where {T<:AbstractFloat}
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     N = length(rx)
     if i > N
@@ -65,11 +66,12 @@ function _fene2_E!(
     accx = zero(T)
     accy = zero(T)
     eacc = zero(T)
-    base = index[i]
-    nb = counts[i]
+    row = _brow(i, tag)
+    base = index[row]
+    nb = counts[row]
     R02 = R0*R0
     @inbounds for t in 0:Int(nb - 1)
-        j = flat[base + t + 1]
+        j = _bslot(flat[base + t + 1], slot_of)
         dx = mic_fast(xi - rx[j], halfLx, Lx)
         dy = mic_fast(yi - ry[j], halfLy, Ly)
         r2 = muladd(dx, dx, dy * dy)
@@ -92,7 +94,7 @@ function _fene2_EV!(
     fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, E::CuDeviceVector{T}, V::CuDeviceMatrix{T},
     index::CuDeviceVector{Int32}, flat::CuDeviceVector{Int32}, counts::CuDeviceVector{Int32},
     Lx::T, Ly::T, halfLx::T, halfLy::T,
-    k::T, R0::T) where {T<:AbstractFloat}
+    k::T, R0::T, tag, slot_of) where {T<:AbstractFloat}
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     N = length(rx)
     if i > N
@@ -106,11 +108,12 @@ function _fene2_EV!(
     vxx = zero(T)
     vyy = zero(T)
     vxy = zero(T)
-    base = index[i]
-    nb = counts[i]
+    row = _brow(i, tag)
+    base = index[row]
+    nb = counts[row]
     R02 = R0*R0
     @inbounds for t in 0:Int(nb - 1)
-        j = flat[base + t + 1]
+        j = _bslot(flat[base + t + 1], slot_of)
         dx = mic_fast(xi - rx[j], halfLx, Lx)
         dy = mic_fast(yi - ry[j], halfLy, Ly)
         r2 = muladd(dx, dx, dy * dy)
@@ -142,7 +145,7 @@ function _fene3_E!(
     fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, fz::CuDeviceVector{T}, E::CuDeviceVector{T},
     index::CuDeviceVector{Int32}, flat::CuDeviceVector{Int32}, counts::CuDeviceVector{Int32},
     Lx::T, Ly::T, Lz::T, halfLx::T, halfLy::T, halfLz::T,
-    k::T, R0::T) where {T<:AbstractFloat}
+    k::T, R0::T, tag, slot_of) where {T<:AbstractFloat}
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     N = length(rx)
     if i > N
@@ -155,11 +158,12 @@ function _fene3_E!(
     accy = zero(T)
     accz = zero(T)
     eacc = zero(T)
-    base = index[i]
-    nb = counts[i]
+    row = _brow(i, tag)
+    base = index[row]
+    nb = counts[row]
     R02 = R0*R0
     @inbounds for t in 0:Int(nb - 1)
-        j = flat[base + t + 1]
+        j = _bslot(flat[base + t + 1], slot_of)
         dx = mic_fast(xi - rx[j], halfLx, Lx)
         dy = mic_fast(yi - ry[j], halfLy, Ly)
         dz = mic_fast(zi - rz[j], halfLz, Lz)
@@ -185,7 +189,7 @@ function _fene3_EV!(
     fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, fz::CuDeviceVector{T}, E::CuDeviceVector{T}, V::CuDeviceMatrix{T},
     index::CuDeviceVector{Int32}, flat::CuDeviceVector{Int32}, counts::CuDeviceVector{Int32},
     Lx::T, Ly::T, Lz::T, halfLx::T, halfLy::T, halfLz::T,
-    k::T, R0::T) where {T<:AbstractFloat}
+    k::T, R0::T, tag, slot_of) where {T<:AbstractFloat}
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     N = length(rx)
     if i > N
@@ -204,11 +208,12 @@ function _fene3_EV!(
     vxy = zero(T)
     vxz = zero(T)
     vyz = zero(T)
-    base = index[i]
-    nb = counts[i]
+    row = _brow(i, tag)
+    base = index[row]
+    nb = counts[row]
     R02 = R0*R0
     @inbounds for t in 0:Int(nb - 1)
-        j = flat[base + t + 1]
+        j = _bslot(flat[base + t + 1], slot_of)
         dx = mic_fast(xi - rx[j], halfLx, Lx)
         dy = mic_fast(yi - ry[j], halfLy, Ly)
         dz = mic_fast(zi - rz[j], halfLz, Lz)
@@ -250,7 +255,7 @@ function _fene2_noE!(
     fx::CuDeviceVector{T}, fy::CuDeviceVector{T},
     index::CuDeviceVector{Int32}, flat::CuDeviceVector{Int32}, counts::CuDeviceVector{Int32},
     Lx::T, Ly::T, halfLx::T, halfLy::T,
-    k::T, R0::T) where {T<:AbstractFloat}
+    k::T, R0::T, tag, slot_of) where {T<:AbstractFloat}
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     N = length(rx)
     if i > N
@@ -260,11 +265,12 @@ function _fene2_noE!(
     yi = ry[i]
     accx = zero(T)
     accy = zero(T)
-    base = index[i]
-    nb = counts[i]
+    row = _brow(i, tag)
+    base = index[row]
+    nb = counts[row]
     R02 = R0*R0
     @inbounds for t in 0:Int(nb - 1)
-        j = flat[base + t + 1]
+        j = _bslot(flat[base + t + 1], slot_of)
         dx = mic_fast(xi - rx[j], halfLx, Lx)
         dy = mic_fast(yi - ry[j], halfLy, Ly)
         r2 = muladd(dx, dx, dy * dy)
@@ -285,7 +291,7 @@ function _fene3_noE!(
     fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, fz::CuDeviceVector{T},
     index::CuDeviceVector{Int32}, flat::CuDeviceVector{Int32}, counts::CuDeviceVector{Int32},
     Lx::T, Ly::T, Lz::T, halfLx::T, halfLy::T, halfLz::T,
-    k::T, R0::T) where {T<:AbstractFloat}
+    k::T, R0::T, tag, slot_of) where {T<:AbstractFloat}
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     N = length(rx)
     if i > N
@@ -297,11 +303,12 @@ function _fene3_noE!(
     accx = zero(T)
     accy = zero(T)
     accz = zero(T)
-    base = index[i]
-    nb = counts[i]
+    row = _brow(i, tag)
+    base = index[row]
+    nb = counts[row]
     R02 = R0*R0
     @inbounds for t in 0:Int(nb - 1)
-        j = flat[base + t + 1]
+        j = _bslot(flat[base + t + 1], slot_of)
         dx = mic_fast(xi - rx[j], halfLx, Lx)
         dy = mic_fast(yi - ry[j], halfLy, Ly)
         dz = mic_fast(zi - rz[j], halfLz, Lz)
@@ -347,11 +354,11 @@ function fene_forces_soa!(
         rx, ry, fx, fy, E,
         bonds.index, bonds.flat, bonds.counts,
         Lx, Ly, halfLx, halfLy,
-        params.k, params.R0)
+        params.k, params.R0, nothing, nothing)
     k(rx, ry, fx, fy, E,
       bonds.index, bonds.flat, bonds.counts,
       Lx, Ly, halfLx, halfLy,
-      params.k, params.R0; threads, blocks)
+      params.k, params.R0, nothing, nothing; threads, blocks)
     return nothing
 end
 
@@ -372,11 +379,11 @@ function fene_forces_soa!(
         rx, ry, fx, fy, E, V,
         bonds.index, bonds.flat, bonds.counts,
         Lx, Ly, halfLx, halfLy,
-        params.k, params.R0)
+        params.k, params.R0, nothing, nothing)
     k(rx, ry, fx, fy, E, V,
       bonds.index, bonds.flat, bonds.counts,
       Lx, Ly, halfLx, halfLy,
-      params.k, params.R0; threads, blocks)
+      params.k, params.R0, nothing, nothing; threads, blocks)
     return nothing
 end
 
@@ -402,11 +409,11 @@ function fene_forces_soa_noE!(
         rx, ry, fx, fy,
         bonds.index, bonds.flat, bonds.counts,
         Lx, Ly, halfLx, halfLy,
-        params.k, params.R0)
+        params.k, params.R0, nothing, nothing)
     k(rx, ry, fx, fy,
       bonds.index, bonds.flat, bonds.counts,
       Lx, Ly, halfLx, halfLy,
-      params.k, params.R0; threads, blocks)
+      params.k, params.R0, nothing, nothing; threads, blocks)
     return nothing
 end
 
@@ -428,11 +435,11 @@ function fene_forces_soa!(
         rx, ry, rz, fx, fy, fz, E,
         bonds.index, bonds.flat, bonds.counts,
         Lx, Ly, Lz, halfLx, halfLy, halfLz,
-        params.k, params.R0)
+        params.k, params.R0, nothing, nothing)
     k(rx, ry, rz, fx, fy, fz, E,
       bonds.index, bonds.flat, bonds.counts,
       Lx, Ly, Lz, halfLx, halfLy, halfLz,
-      params.k, params.R0; threads, blocks)
+      params.k, params.R0, nothing, nothing; threads, blocks)
     return nothing
 end
 
@@ -454,11 +461,11 @@ function fene_forces_soa!(
         rx, ry, rz, fx, fy, fz, E, V,
         bonds.index, bonds.flat, bonds.counts,
         Lx, Ly, Lz, halfLx, halfLy, halfLz,
-        params.k, params.R0)
+        params.k, params.R0, nothing, nothing)
     k(rx, ry, rz, fx, fy, fz, E, V,
       bonds.index, bonds.flat, bonds.counts,
       Lx, Ly, Lz, halfLx, halfLy, halfLz,
-      params.k, params.R0; threads, blocks)
+      params.k, params.R0, nothing, nothing; threads, blocks)
     return nothing
 end
 
@@ -480,10 +487,10 @@ function fene_forces_soa_noE!(
         rx, ry, rz, fx, fy, fz,
         bonds.index, bonds.flat, bonds.counts,
         Lx, Ly, Lz, halfLx, halfLy, halfLz,
-        params.k, params.R0)
+        params.k, params.R0, nothing, nothing)
     k(rx, ry, rz, fx, fy, fz,
       bonds.index, bonds.flat, bonds.counts,
       Lx, Ly, Lz, halfLx, halfLy, halfLz,
-      params.k, params.R0; threads, blocks)
+      params.k, params.R0, nothing, nothing; threads, blocks)
     return nothing
 end

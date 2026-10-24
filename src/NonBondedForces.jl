@@ -1,27 +1,20 @@
 module NonBondedForces
+# Pair math and the kernels the device engine reuses: periodic differences, the
+# Lennard-Jones pair term, half-virial rows, the serial single-lane LJ ELL kernels
+# and the bonded-pair cache used by collision counting. Every pair force runs in the
+# device engine (`ParticleDynamics.DeviceEngine`); the staged per-potential force
+# kernels and their dispatch (`NonBondedInteractions`) were removed with the staged
+# engine.
 
 using CUDA
 using ..Definitions
-using ..NeighborLists  # so we can dispatch on NeighborLists.NeighborMatrix
+using ..Definitions: periodic_delta
+using ..NeighborLists
 using ..NeighborLists: _ell_index
 using ..BondedForces   # for BondList in exclusions
 
-export lj_forces_soa!, lj_forces_soa_noE!,
-       wca_forces_soa!, wca_forces_soa_noE!,
-       harmonic_rep_forces_soa!, harmonic_rep_forces_soa_noE!
-
 include("nonbonded/PairMath.jl")
 include("nonbonded/BondExclusionsCUDA.jl")
-include("nonbonded/LJAllPairsCUDA.jl")
-include("nonbonded/WCAAllPairsCUDA.jl")
-include("nonbonded/SoftRepulsiveAllPairsCUDA.jl")
-include("nonbonded/LJELLCUDA.jl")
-include("nonbonded/MixedTraversalCUDA.jl")
-include("nonbonded/LJMixedCUDA.jl")
-include("nonbonded/LJPairMatrixCUDA.jl")
-include("nonbonded/WCAELLCUDA.jl")
-include("nonbonded/WCAMixedCUDA.jl")
-include("nonbonded/WCAPairMatrixCUDA.jl")
-include("nonbonded/SoftRepulsiveELLCUDA.jl")
+include("nonbonded/LJELLEngineKernels.jl")
 
 end # module

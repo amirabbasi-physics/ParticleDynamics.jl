@@ -24,17 +24,14 @@
             1.01 1.60;
             1.60 1.01
         ]
-        sigma_pair = CuArray(sigma_pair_h)
-        epsilon_pair = CuArray(epsilon_pair_h)
-        rcut_pair = CuArray(rcut_pair_h)
+        st.sigma_pair = CuArray(sigma_pair_h)
+        st.epsilon_pair = CuArray(epsilon_pair_h)
+        st.rcut_pair = CuArray(rcut_pair_h)
 
         CUDA.fill!(st.fx, 0.0)
         CUDA.fill!(st.fy, 0.0)
         CUDA.fill!(st.Epot, 0.0)
-        ParticleDynamics.NonBondedForces.wca_forces_soa_pairs!(
-            st.rx, st.ry, st.fx, st.fy, st.Epot,
-            st.nbh, st.box2, st.typeid, sigma_pair, epsilon_pair, rcut_pair
-        )
+        SimulationCore.evaluate_forces_into_f!(st, true)   # device engine (staged kernels removed)
 
         fx = Array(st.fx)
         dx = -1.0
@@ -54,7 +51,7 @@
         CUDA.fill!(st.fx, 0.0)
         CUDA.fill!(st.fy, 0.0)
         CUDA.fill!(st.Epot, 0.0)
-        ParticleDynamics.NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.nbh, st.box2, st.pair_lj)
+        SimulationCore.evaluate_forces_into_f!(st, true)   # device engine (staged kernels removed)
         fx0 = Array(st.fx)
         fy0 = Array(st.fy)
         e0 = Float64(CUDA.sum(st.Epot))
@@ -67,7 +64,7 @@
         CUDA.fill!(st.fx, 0.0)
         CUDA.fill!(st.fy, 0.0)
         CUDA.fill!(st.Epot, 0.0)
-        ParticleDynamics.NonBondedForces.lj_forces_soa!(st.rx, st.ry, st.fx, st.fy, st.Epot, st.nbh, st.box2, st.pair_lj)
+        SimulationCore.evaluate_forces_into_f!(st, true)   # device engine (staged kernels removed)
         fx1 = Array(st.fx)
         fy1 = Array(st.fy)
         e1 = Float64(CUDA.sum(st.Epot))

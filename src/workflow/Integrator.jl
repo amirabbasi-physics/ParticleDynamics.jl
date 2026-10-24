@@ -107,7 +107,7 @@ function ActiveOrnsteinUhlenbeck(group; gamma, tau=nothing, noise_scale=nothing,
 end
 
 """
-    Integrator(; dt, scheme=nothing, forces=Force[], methods=Method[], metadata=Dict())
+    Integrator(; dt, scheme=nothing, forces=Force[], methods=Method[], metadata=Dict(), barostat=nothing)
 
 High-level workflow integrator object. It owns the timestep, force objects,
 methods, and thermostat-bearing methods that define the simulation dynamics.
@@ -118,6 +118,9 @@ methods, and thermostat-bearing methods that define the simulation dynamics.
     forces::Vector{Force} = Force[]
     methods::Vector{Method} = Method[]
     metadata::Dict{Symbol,Any} = Dict{Symbol,Any}()
+    # Global pressure control (`StochasticCellRescaling`, `MonteCarloBarostat`);
+    # `nothing` keeps the box fixed.
+    barostat = nothing
 end
 
 struct CompiledIntegrator

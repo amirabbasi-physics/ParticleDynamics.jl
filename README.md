@@ -8,7 +8,7 @@
 [![CI](https://github.com/amirabbasi-physics/ParticleDynamics.jl/actions/workflows/ci-cpu.yml/badge.svg)](https://github.com/amirabbasi-physics/ParticleDynamics.jl/actions/workflows/ci-cpu.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-`ParticleDynamics.jl` is a GPU-native Julia package for particle-based simulations with CUDA, including integrations for MACE and Orb machine-learned interatomic potentials. It provides a high-level workflow API for building a particle system, attaching forces and methods, sampling observables, writing outputs, and running staged simulations without hand-written timestep loops.
+`ParticleDynamics.jl` is a GPU-native Julia package for particle-based simulations with CUDA, including native GPU long-range electrostatics (smooth PME, PPPM and Ewald summation with prolates) and integrations for MACE and Orb machine-learned interatomic potentials. It provides a high-level workflow API for building a particle system, attaching forces and methods, sampling observables, writing outputs, and running simulations without hand-written timestep loops. Every step runs on a device-resident CUDA-graph engine.
 
 The existing low-level engine remains available for expert workflows and tests.
 That surface is centered on `build_simulation`, `step!`, integrator builders,
@@ -125,14 +125,48 @@ The workflow API is the recommended interface for normal scripts and examples.
 The following exports are still supported for expert users who want direct
 control over GPU buffers and stepping:
 
-- `SimulationState`, `build_simulation`, `step!`, `step_graph!`
+- `SimulationState`, `build_simulation`, `step!` (`step_graph!` is an alias)
 - `velocityverlet`, `baoab`, `baoa`, `gsm`, `eulerheun`, `eulermaruyama`, `nosehooverchain`, `csvr`
 - `collect_step_observables`, `reset_bath_exchange_accumulators!`
 - `gsd_open`, `gsd_close`, `write_gsd_frame!`, `read_gsd_frame!`
+- `attach_electrostatics!`, `detach_electrostatics!`, `set_charges!`, `electrostatic_energy`
 - `Filters`, `ParticleGroups`, and `ParticleDynamics.SimulationCore`
 
 Use that surface when you need custom orchestration, kernel debugging, or very
 fine-grained control that the workflow facade intentionally hides.
+
+## Long-range electrostatics (PME, PPPM, ESP)
+
+Charged systems use particle-mesh Coulomb solvers that run entirely on the
+GPU (CUDA kernels plus cuFFT): smooth particle-mesh Ewald (`PME`), P3M with
+optimal influence functions and analytic or ik differentiation (`PPPM`), and
+Ewald summation with prolates (`ESP`, Liang et al., Nat. Commun. 2026). All
+three share one mesh engine. Units are the caller's
+(`U = C qᵢqⱼ/r`, `C = coulomb_prefactor/εᵣ`). Energies, forces and the full
+virial tensor (including the reciprocal-space strain derivative) are validated
+against an independent Ewald reference; exceptions, a neutralising
+background, spatial reordering and GSD restarts are supported.
+
+```julia
+system = ParticleSystem(pos; box=(L, L, L), types=[:Na, :Cl], typeids=typeids,
+                        masses=Dict(:Na => 22.99, :Cl => 35.45),
+                        charges=Dict(:Na => 1.0, :Cl => -1.0))
+forces = [
+    LennardJones(epsilon=0.01, sigma=2.8, cutoff=9.0, pairs=:neighborlist,
+                 neighborlist=CellList(capacity=512)),
+    PME(coulomb_prefactor=14.399645, real_cutoff=9.0,   # Å, eV, e
+        real_space_tolerance=1e-5, mesh_spacing=1.0, order=5),
+    # or PPPM(...; differentiation=:ik), or ESP(...; tolerance=1e-5)
+]
+```
+
+At matched measured force error on an RTX 3090 (64 000 ions, Δ = 1e-5), ESP
+needs a 63³ mesh and 1.6 ms per force call, against 375³ and 12.5 ms for
+PME. `tune_electrostatics` picks the cheapest setting that meets a measured
+accuracy target. See the
+[electrostatics manual](docs/src/manual/electrostatics.md) for the
+conventions, accuracy tables, cross-checks against GROMACS and LAMMPS, and
+parameter guidance.
 
 ## Machine-learned potentials (MACE, Orb)
 
@@ -218,11 +252,21 @@ The docs now distinguish:
 julia --project -e 'using Pkg; Pkg.instantiate(); Pkg.test()'
 ```
 
+The GPU suite needs a CUDA device and takes about 30–45 minutes on an RTX 3090.
+Comparisons against historical reference data run only when that data is
+available (`PD_GOLDEN_ROOT`); otherwise they are reported as skipped and the run
+is partial validation. See [`test/README.md`](test/README.md) for the options,
+including `PD_REQUIRE_GOLDEN=1` for full validation.
+
 ## Current limitations
 
 - CUDA is the main supported backend.
-- Angles, dihedrals, impropers, electrostatics, and broader force-field terms
-  are future work unless explicitly implemented in the current low-level engine.
+- Bonded terms cover bonds, angles, dihedrals and impropers (see the
+  changelog); CMAP terms and general holonomic constraints beyond rigid
+  three-site water are not implemented.
+- Long-range electrostatics covers 3D orthorhombic periodic boxes with
+  tin-foil boundary conditions on a single GPU; slab, triclinic and
+  multi-GPU electrostatics are not implemented.
   For molecular systems, the machine-learned potential path (see
   "Machine-learned potentials" above) sidesteps these terms entirely: the
   MLIP carries the intramolecular chemistry.

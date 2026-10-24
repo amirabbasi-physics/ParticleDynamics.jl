@@ -140,15 +140,7 @@ function _workflow_needs_unwrapped_positions(sim)
     return false
 end
 
-function _default_build_force_kwargs(::Type{T}) where {T<:AbstractFloat}
-    return Dict{Symbol,Any}(
-        :nonbonded => :wca,
-        :epsilon => zero(T),
-        :sigma => one(T),
-        :cutoff => T(SimulationCore.WCA_RC_FACTOR),
-        :use_neighborlist => false,
-    )
-end
+_default_build_force_kwargs(::Type{T}) where {T<:AbstractFloat} = _no_nonbonded_kwargs(T)
 
 function _copy_system_into_state!(st::SimulationState, system::ParticleSystem)
     SimulationCore.invalidate_forces!(st)
@@ -310,6 +302,7 @@ function prepare!(sim)
                                                                 materialized_groups=materialized)
         end
     end
+    _prepare_barostat!(sim)
     _validate_writer_state_requirements(sim)
     prepare_observables!(sim)
     prepare_writers!(sim)
@@ -358,6 +351,7 @@ function _build_stage_integrator(sim, stage::Stage)
         forces=sim.integrator.forces,
         methods=sim.integrator.methods,
         metadata=copy(sim.integrator.metadata),
+        barostat=sim.integrator.barostat,
     )
     compiled = compile_integrator(sim.system, stage_integrator; precision=sim.precision)
     spec = build_lowlevel_integrator(compiled,
@@ -435,6 +429,7 @@ function run!(sim, stage::Stage)
             step!(st, local_spec, local_dt; compute_energy=compute_energy)
             sim.metadata[:workflow_time] = _workflow_time(sim) + local_dt
             executed += 1
+            _barostat_event!(sim, st)
 
             output_status = write_scheduled_outputs!(sim, st.step)
             output_status.interval_consumed && _reset_interval_buffers!(sim)

@@ -71,7 +71,6 @@ Advanced helpers that are intentionally not part of the default import surface
 live under `ParticleDynamics.SimulationCore`, for example
 `ParticleDynamics.SimulationCore.zero_forces!`,
 `ParticleDynamics.SimulationCore.accumulate_energies!`,
-`ParticleDynamics.SimulationCore.run_integrator_step!`,
 `ParticleDynamics.SimulationCore.thermostatted_dof`, and
 `ParticleDynamics.SimulationCore.thermostatted_particle_mask`.
 

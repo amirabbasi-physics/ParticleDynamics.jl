@@ -34,35 +34,7 @@ function _kernel_copy_refs_3d!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz:
 end
 
 # Accumulate the squared displacement from the reference coordinates.
-function _kernel_accum_dr2_2d!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
-                               rref_x::CuDeviceVector{T}, rref_y::CuDeviceVector{T},
-                               dr2::CuDeviceVector{T},
-                               halfLx::T, halfLy::T, Lx::T, Ly::T) where {T<:AbstractFloat}
-    i = (blockIdx().x-1)*blockDim().x + threadIdx().x
-    N = length(rx); if i > N; return; end
-    @inbounds begin
-        dx = mic_fast(rx[i] - rref_x[i], halfLx, Lx)
-        dy = mic_fast(ry[i] - rref_y[i], halfLy, Ly)
-        dr2[i] = muladd(dx, dx, dy*dy)
-    end
-    return
-end
 
-function _kernel_accum_dr2_3d!(rx::CuDeviceVector{T}, ry::CuDeviceVector{T}, rz::CuDeviceVector{T},
-                               rref_x::CuDeviceVector{T}, rref_y::CuDeviceVector{T}, rref_z::CuDeviceVector{T},
-                               dr2::CuDeviceVector{T},
-                               halfLx::T, halfLy::T, halfLz::T,
-                               Lx::T, Ly::T, Lz::T) where {T<:AbstractFloat}
-    i = (blockIdx().x-1)*blockDim().x + threadIdx().x
-    N = length(rx); if i > N; return; end
-    @inbounds begin
-        dx = mic_fast(rx[i] - rref_x[i], halfLx, Lx)
-        dy = mic_fast(ry[i] - rref_y[i], halfLy, Ly)
-        dz = mic_fast(rz[i] - rref_z[i], halfLz, Lz)
-        dr2[i] = muladd(dx, dx, muladd(dy, dy, dz*dz))
-    end
-    return
-end
 
 # ============================================================================
 # Update in place
@@ -228,6 +200,104 @@ end
 # Update needed? logic
 # ============================================================================
 
+# All 256 threads participate, including threads beyond the particle count.
+# A shared-memory tree avoids depending on CUDA's private reduction helpers.
+@inline function _displacement_block_max(value::T) where {T}
+    partial = CUDA.CuStaticSharedArray(T, 256)
+    tid = threadIdx().x
+    @inbounds partial[tid] = value
+    sync_threads()
+    offset = 128
+    while offset > 0
+        if tid <= offset
+            @inbounds partial[tid] = max(partial[tid], partial[tid + offset])
+        end
+        sync_threads()
+        offset ÷= 2
+    end
+    @inbounds return partial[1]
+end
+
+function _displacement_partial_kernel!(scratch::CuDeviceVector{T}, coords, refs,
+                                       box::NTuple{D,T}) where {D,T}
+    i = (blockIdx().x - 1)*blockDim().x + threadIdx().x
+    value = zero(T)
+    if i <= length(coords[1])
+        @inbounds begin
+            dx = mic_fast(coords[1][i] - refs[1][i], T(0.5)*box[1], box[1])
+            dy = mic_fast(coords[2][i] - refs[2][i], T(0.5)*box[2], box[2])
+            if D == 3
+                dz = mic_fast(coords[3][i] - refs[3][i], T(0.5)*box[3], box[3])
+                value = muladd(dx, dx, muladd(dy, dy, dz*dz))
+            else
+                value = muladd(dx, dx, dy*dy)
+            end
+        end
+    end
+    largest = _displacement_block_max(value)
+    if threadIdx().x == 1
+        @inbounds scratch[blockIdx().x] = largest
+    end
+    return
+end
+
+function _displacement_finish_kernel!(scratch::CuDeviceVector{T}, count::Int32) where {T}
+    value = zero(T)
+    i = threadIdx().x
+    while i <= count
+        @inbounds value = max(value, scratch[i])
+        i += blockDim().x
+    end
+    # The block barrier in the reduction ensures every input has been read
+    # before thread 1 overwrites scratch[1] with the final result.
+    largest = _displacement_block_max(value)
+    if threadIdx().x == 1
+        @inbounds scratch[1] = largest
+    end
+    return
+end
+
+function _max_displacement2!(scratch::CuArray{T,1}, coords::Tuple, refs::Tuple,
+                              box::NTuple{D,T}) where {D,T}
+    blocks = cld(length(coords[1]), 256)
+    CUDA.@cuda threads=256 blocks=blocks _displacement_partial_kernel!(scratch, coords, refs, box)
+    if blocks > 1
+        CUDA.@cuda threads=256 blocks=1 _displacement_finish_kernel!(scratch, Int32(blocks))
+    end
+    # Reuse the neighbor workspace rather than allocating reduction outputs
+    # and partials every force evaluation. The scalar transfer is still needed
+    # for the host's rebuild decision, with no weakening of list coverage.
+    return CUDA.@allowscalar scratch[1]
+end
+
+# Fuse the displacement map into CUDA's reduction. The previous implementation
+# materialized N squared distances with a separate kernel before reducing them.
+# Keep the same minimum-image arithmetic and host-visible maximum: force-time
+# coverage and adaptive rebuild decisions are unchanged. Retained as a
+# diagnostic/reference implementation for the preallocated reduction above.
+function _max_displacement2(rx, ry, rref_x, rref_y, box::NTuple{2,T}) where {T}
+    Lx, Ly = box
+    halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly
+    displacement2 = function (x, y, x0, y0)
+        dx = mic_fast(x - x0, halfLx, Lx)
+        dy = mic_fast(y - y0, halfLy, Ly)
+        muladd(dx, dx, dy*dy)
+    end
+    return mapreduce(displacement2, max, rx, ry, rref_x, rref_y; init=zero(T))
+end
+
+function _max_displacement2(rx, ry, rz, rref_x, rref_y, rref_z, box::NTuple{3,T}) where {T}
+    Lx, Ly, Lz = box
+    halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly; halfLz = T(0.5)*Lz
+    displacement2 = function (x, y, z, x0, y0, z0)
+        dx = mic_fast(x - x0, halfLx, Lx)
+        dy = mic_fast(y - y0, halfLy, Ly)
+        dz = mic_fast(z - z0, halfLz, Lz)
+        muladd(dx, dx, muladd(dy, dy, dz*dz))
+    end
+    return mapreduce(displacement2, max, rx, ry, rz, rref_x, rref_y, rref_z; init=zero(T))
+end
+
 """
     update_needed!(nbh, rx, ry[, rz]; skin, Lx, Ly[, Lz], step)
 
@@ -240,14 +310,7 @@ also controlled by `neigh_interval`; it cannot disable force-time safety checks.
 function update_needed!(nbh::CellListNeighborMatrix{T}, rx::CuArray{T,1}, ry::CuArray{T,1};
                         skin::Real, Lx::T, Ly::T, step::Int) where {T<:AbstractFloat}
     nbh.valid || return true
-    threads, blocks = _launchdims(length(rx))
-    halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly
-    k = CUDA.@cuda launch=false _kernel_accum_dr2_2d!(rx, ry, nbh.rref_x, nbh.rref_y, nbh.dr2,
-                                                      halfLx, halfLy, Lx, Ly)
-    k(rx, ry, nbh.rref_x, nbh.rref_y, nbh.dr2,
-      halfLx, halfLy, Lx, Ly; threads, blocks)
-
-    max_dr2 = maximum(nbh.dr2)
+    max_dr2 = _max_displacement2!(nbh.dr2, (rx, ry), (nbh.rref_x, nbh.rref_y), (Lx, Ly))
     threshold = T(0.25) * T(skin) * T(skin)
     rebuild_needed = (max_dr2 > threshold) || ((step - nbh.last_build_step) >= nbh.target_interval)
     if rebuild_needed
@@ -263,20 +326,8 @@ end
 function update_needed!(nbh::CellListNeighborMatrix{T}, rx::CuArray{T,1}, ry::CuArray{T,1}, rz::CuArray{T,1};
                         skin::Real, Lx::T, Ly::T, Lz::T, step::Int) where {T<:AbstractFloat}
     nbh.valid || return true
-    threads, blocks = _launchdims(length(rx))
-    halfLx = T(0.5)*Lx; halfLy = T(0.5)*Ly; halfLz = T(0.5)*Lz
-    k = CUDA.@cuda launch=false _kernel_accum_dr2_3d!(rx, ry, rz,
-                                                      nbh.rref_x, nbh.rref_y, nbh.rref_z::CuArray{T,1},
-                                                      nbh.dr2,
-                                                      halfLx, halfLy, halfLz,
-                                                      Lx, Ly, Lz)
-    k(rx, ry, rz,
-      nbh.rref_x, nbh.rref_y, nbh.rref_z::CuArray{T,1},
-      nbh.dr2,
-      halfLx, halfLy, halfLz,
-      Lx, Ly, Lz; threads, blocks)
-
-    max_dr2 = maximum(nbh.dr2)
+    max_dr2 = _max_displacement2!(nbh.dr2, (rx, ry, rz),
+                                 (nbh.rref_x, nbh.rref_y, nbh.rref_z::CuArray{T,1}), (Lx, Ly, Lz))
     threshold = T(0.25) * T(skin) * T(skin)
     rebuild_needed = (max_dr2 > threshold) || ((step - nbh.last_build_step) >= nbh.target_interval)
     if rebuild_needed
@@ -288,4 +339,3 @@ function update_needed!(nbh::CellListNeighborMatrix{T}, rx::CuArray{T,1}, ry::Cu
     end
     return rebuild_needed
 end
-

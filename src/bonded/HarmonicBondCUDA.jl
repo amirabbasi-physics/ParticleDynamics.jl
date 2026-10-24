@@ -2,12 +2,15 @@
 # Harmonic kernels
 # ------------------------------------------------------------------
 
+# Each bond appears in both endpoint rows of the symmetric BondList, so every
+# visit stores half of the pair energy (as the FENE kernels do).
+
 function _harmonic2_E!(
     rx::CuDeviceVector{T}, ry::CuDeviceVector{T},
     fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, E::CuDeviceVector{T},
     index::CuDeviceVector{Int32}, flat::CuDeviceVector{Int32}, counts::CuDeviceVector{Int32},
     Lx::T, Ly::T, halfLx::T, halfLy::T,
-    k::T, r0::T) where {T<:AbstractFloat}
+    k::T, r0::T, tag, slot_of) where {T<:AbstractFloat}
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     N = length(rx)
     if i > N
@@ -18,10 +21,11 @@ function _harmonic2_E!(
     accx = zero(T)
     accy = zero(T)
     eacc = zero(T)
-    base = index[i]
-    nb = counts[i]
+    row = _brow(i, tag)
+    base = index[row]
+    nb = counts[row]
     @inbounds for t in 0:Int(nb - 1)
-        j = flat[base + t + 1]
+        j = _bslot(flat[base + t + 1], slot_of)
         dx = mic_fast(xi - rx[j], halfLx, Lx)
         dy = mic_fast(yi - ry[j], halfLy, Ly)
         r2 = muladd(dx, dx, dy * dy)
@@ -31,7 +35,7 @@ function _harmonic2_E!(
             f_over_r = -k * diff / r
             accx += f_over_r * dx
             accy += f_over_r * dy
-            eacc += T(0.5) * k * diff * diff
+            eacc += T(0.5) * (T(0.5) * k * diff * diff)
         end
     end
     fx[i] += accx
@@ -45,7 +49,7 @@ function _harmonic2_EV!(
     fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, E::CuDeviceVector{T}, V::CuDeviceMatrix{T},
     index::CuDeviceVector{Int32}, flat::CuDeviceVector{Int32}, counts::CuDeviceVector{Int32},
     Lx::T, Ly::T, halfLx::T, halfLy::T,
-    k::T, r0::T) where {T<:AbstractFloat}
+    k::T, r0::T, tag, slot_of) where {T<:AbstractFloat}
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     N = length(rx)
     if i > N
@@ -59,10 +63,11 @@ function _harmonic2_EV!(
     vxx = zero(T)
     vyy = zero(T)
     vxy = zero(T)
-    base = index[i]
-    nb = counts[i]
+    row = _brow(i, tag)
+    base = index[row]
+    nb = counts[row]
     @inbounds for t in 0:Int(nb - 1)
-        j = flat[base + t + 1]
+        j = _bslot(flat[base + t + 1], slot_of)
         dx = mic_fast(xi - rx[j], halfLx, Lx)
         dy = mic_fast(yi - ry[j], halfLy, Ly)
         r2 = muladd(dx, dx, dy * dy)
@@ -74,7 +79,7 @@ function _harmonic2_EV!(
             fyij = f_over_r * dy
             accx += fxij
             accy += fyij
-            eacc += T(0.5) * k * diff * diff
+            eacc += T(0.5) * (T(0.5) * k * diff * diff)
             dvxx, dvyy, dvxy = _half_virial2(dx, dy, fxij, fyij)
             vxx += dvxx
             vyy += dvyy
@@ -95,7 +100,7 @@ function _harmonic3_E!(
     fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, fz::CuDeviceVector{T}, E::CuDeviceVector{T},
     index::CuDeviceVector{Int32}, flat::CuDeviceVector{Int32}, counts::CuDeviceVector{Int32},
     Lx::T, Ly::T, Lz::T, halfLx::T, halfLy::T, halfLz::T,
-    k::T, r0::T) where {T<:AbstractFloat}
+    k::T, r0::T, tag, slot_of) where {T<:AbstractFloat}
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     N = length(rx)
     if i > N
@@ -108,10 +113,11 @@ function _harmonic3_E!(
     accy = zero(T)
     accz = zero(T)
     eacc = zero(T)
-    base = index[i]
-    nb = counts[i]
+    row = _brow(i, tag)
+    base = index[row]
+    nb = counts[row]
     @inbounds for t in 0:Int(nb - 1)
-        j = flat[base + t + 1]
+        j = _bslot(flat[base + t + 1], slot_of)
         dx = mic_fast(xi - rx[j], halfLx, Lx)
         dy = mic_fast(yi - ry[j], halfLy, Ly)
         dz = mic_fast(zi - rz[j], halfLz, Lz)
@@ -123,7 +129,7 @@ function _harmonic3_E!(
             accx += f_over_r * dx
             accy += f_over_r * dy
             accz += f_over_r * dz
-            eacc += T(0.5) * k * diff * diff
+            eacc += T(0.5) * (T(0.5) * k * diff * diff)
         end
     end
     fx[i] += accx
@@ -138,7 +144,7 @@ function _harmonic3_EV!(
     fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, fz::CuDeviceVector{T}, E::CuDeviceVector{T}, V::CuDeviceMatrix{T},
     index::CuDeviceVector{Int32}, flat::CuDeviceVector{Int32}, counts::CuDeviceVector{Int32},
     Lx::T, Ly::T, Lz::T, halfLx::T, halfLy::T, halfLz::T,
-    k::T, r0::T) where {T<:AbstractFloat}
+    k::T, r0::T, tag, slot_of) where {T<:AbstractFloat}
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     N = length(rx)
     if i > N
@@ -157,10 +163,11 @@ function _harmonic3_EV!(
     vxy = zero(T)
     vxz = zero(T)
     vyz = zero(T)
-    base = index[i]
-    nb = counts[i]
+    row = _brow(i, tag)
+    base = index[row]
+    nb = counts[row]
     @inbounds for t in 0:Int(nb - 1)
-        j = flat[base + t + 1]
+        j = _bslot(flat[base + t + 1], slot_of)
         dx = mic_fast(xi - rx[j], halfLx, Lx)
         dy = mic_fast(yi - ry[j], halfLy, Ly)
         dz = mic_fast(zi - rz[j], halfLz, Lz)
@@ -175,7 +182,7 @@ function _harmonic3_EV!(
             accx += fxij
             accy += fyij
             accz += fzij
-            eacc += T(0.5) * k * diff * diff
+            eacc += T(0.5) * (T(0.5) * k * diff * diff)
             dvxx, dvyy, dvzz, dvxy, dvxz, dvyz = _half_virial3(dx, dy, dz, fxij, fyij, fzij)
             vxx += dvxx
             vyy += dvyy
@@ -203,7 +210,7 @@ function _harmonic2_noE!(
     fx::CuDeviceVector{T}, fy::CuDeviceVector{T},
     index::CuDeviceVector{Int32}, flat::CuDeviceVector{Int32}, counts::CuDeviceVector{Int32},
     Lx::T, Ly::T, halfLx::T, halfLy::T,
-    k::T, r0::T) where {T<:AbstractFloat}
+    k::T, r0::T, tag, slot_of) where {T<:AbstractFloat}
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     N = length(rx)
     if i > N
@@ -213,10 +220,11 @@ function _harmonic2_noE!(
     yi = ry[i]
     accx = zero(T)
     accy = zero(T)
-    base = index[i]
-    nb = counts[i]
+    row = _brow(i, tag)
+    base = index[row]
+    nb = counts[row]
     @inbounds for t in 0:Int(nb - 1)
-        j = flat[base + t + 1]
+        j = _bslot(flat[base + t + 1], slot_of)
         dx = mic_fast(xi - rx[j], halfLx, Lx)
         dy = mic_fast(yi - ry[j], halfLy, Ly)
         r2 = muladd(dx, dx, dy * dy)
@@ -237,7 +245,7 @@ function _harmonic3_noE!(
     fx::CuDeviceVector{T}, fy::CuDeviceVector{T}, fz::CuDeviceVector{T},
     index::CuDeviceVector{Int32}, flat::CuDeviceVector{Int32}, counts::CuDeviceVector{Int32},
     Lx::T, Ly::T, Lz::T, halfLx::T, halfLy::T, halfLz::T,
-    k::T, r0::T) where {T<:AbstractFloat}
+    k::T, r0::T, tag, slot_of) where {T<:AbstractFloat}
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     N = length(rx)
     if i > N
@@ -249,10 +257,11 @@ function _harmonic3_noE!(
     accx = zero(T)
     accy = zero(T)
     accz = zero(T)
-    base = index[i]
-    nb = counts[i]
+    row = _brow(i, tag)
+    base = index[row]
+    nb = counts[row]
     @inbounds for t in 0:Int(nb - 1)
-        j = flat[base + t + 1]
+        j = _bslot(flat[base + t + 1], slot_of)
         dx = mic_fast(xi - rx[j], halfLx, Lx)
         dy = mic_fast(yi - ry[j], halfLy, Ly)
         dz = mic_fast(zi - rz[j], halfLz, Lz)
@@ -297,11 +306,11 @@ function harmonic_forces_soa!(
         rx, ry, fx, fy, E,
         bonds.index, bonds.flat, bonds.counts,
         Lx, Ly, halfLx, halfLy,
-        params.k, params.r0)
+        params.k, params.r0, nothing, nothing)
     k(rx, ry, fx, fy, E,
       bonds.index, bonds.flat, bonds.counts,
       Lx, Ly, halfLx, halfLy,
-      params.k, params.r0; threads, blocks)
+      params.k, params.r0, nothing, nothing; threads, blocks)
     return nothing
 end
 
@@ -320,11 +329,11 @@ function harmonic_forces_soa!(
         rx, ry, fx, fy, E, V,
         bonds.index, bonds.flat, bonds.counts,
         Lx, Ly, halfLx, halfLy,
-        params.k, params.r0)
+        params.k, params.r0, nothing, nothing)
     k(rx, ry, fx, fy, E, V,
       bonds.index, bonds.flat, bonds.counts,
       Lx, Ly, halfLx, halfLy,
-      params.k, params.r0; threads, blocks)
+      params.k, params.r0, nothing, nothing; threads, blocks)
     return nothing
 end
 
@@ -349,11 +358,11 @@ function harmonic_forces_soa_noE!(
         rx, ry, fx, fy,
         bonds.index, bonds.flat, bonds.counts,
         Lx, Ly, halfLx, halfLy,
-        params.k, params.r0)
+        params.k, params.r0, nothing, nothing)
     k(rx, ry, fx, fy,
       bonds.index, bonds.flat, bonds.counts,
       Lx, Ly, halfLx, halfLy,
-      params.k, params.r0; threads, blocks)
+      params.k, params.r0, nothing, nothing; threads, blocks)
     return nothing
 end
 
@@ -373,11 +382,11 @@ function harmonic_forces_soa!(
         rx, ry, rz, fx, fy, fz, E,
         bonds.index, bonds.flat, bonds.counts,
         Lx, Ly, Lz, halfLx, halfLy, halfLz,
-        params.k, params.r0)
+        params.k, params.r0, nothing, nothing)
     k(rx, ry, rz, fx, fy, fz, E,
       bonds.index, bonds.flat, bonds.counts,
       Lx, Ly, Lz, halfLx, halfLy, halfLz,
-      params.k, params.r0; threads, blocks)
+      params.k, params.r0, nothing, nothing; threads, blocks)
     return nothing
 end
 
@@ -397,11 +406,11 @@ function harmonic_forces_soa!(
         rx, ry, rz, fx, fy, fz, E, V,
         bonds.index, bonds.flat, bonds.counts,
         Lx, Ly, Lz, halfLx, halfLy, halfLz,
-        params.k, params.r0)
+        params.k, params.r0, nothing, nothing)
     k(rx, ry, rz, fx, fy, fz, E, V,
       bonds.index, bonds.flat, bonds.counts,
       Lx, Ly, Lz, halfLx, halfLy, halfLz,
-      params.k, params.r0; threads, blocks)
+      params.k, params.r0, nothing, nothing; threads, blocks)
     return nothing
 end
 
@@ -421,10 +430,10 @@ function harmonic_forces_soa_noE!(
         rx, ry, rz, fx, fy, fz,
         bonds.index, bonds.flat, bonds.counts,
         Lx, Ly, Lz, halfLx, halfLy, halfLz,
-        params.k, params.r0)
+        params.k, params.r0, nothing, nothing)
     k(rx, ry, rz, fx, fy, fz,
       bonds.index, bonds.flat, bonds.counts,
       Lx, Ly, Lz, halfLx, halfLy, halfLz,
-      params.k, params.r0; threads, blocks)
+      params.k, params.r0, nothing, nothing; threads, blocks)
     return nothing
 end

@@ -100,7 +100,6 @@
         for sym in (
             :zero_forces!,
             :accumulate_energies!,
-            :run_integrator_step!,
             :thermostatted_dof,
             :thermostatted_particle_mask,
         )
@@ -110,12 +109,9 @@
         for sym in (
             :zero_forces!,
             :accumulate_energies!,
-            :run_integrator_step!,
             :thermostatted_dof,
             :thermostatted_particle_mask,
             :evaluate_forces_into_f!,
-            :evaluate_forces_into_f0!,
-            :evaluate_midpoint_forces_into_f0!,
         )
             @test isdefined(ParticleDynamics.SimulationCore, sym)
             @test !Base.isexported(ParticleDynamics.SimulationCore, sym)
@@ -212,7 +208,6 @@
 
     @testset "Integrator-spec controls and observables" begin
         spec = SimulationCore.velocityverlet(st; gamma=1f0, temperature=1f0, dt=dt)
-        @test ParticleDynamics.IntegratorInterfaces.stage_sequence(spec) == (:kick1, :drift, :force, :kick2)
 
         Filters.set_friction!(spec, st, 1.5f0; filter=cold_filter)
         g_spec = Array(spec.params.gamma)
@@ -269,7 +264,6 @@
 
     @testset "NVE controls" begin
         nve_spec = SimulationCore.nve(st; dt=dt)
-        @test ParticleDynamics.IntegratorInterfaces.stage_sequence(nve_spec) == (:kick1, :drift, :force, :kick2)
         @test ParticleDynamics.IntegratorInterfaces.integrator_name(nve_spec) == :nve
         @test_throws ArgumentError Filters.set_friction!(nve_spec, 1.0f0)
         @test_throws ArgumentError Filters.set_temperature!(nve_spec, dt, 1.0f0)
@@ -279,8 +273,6 @@
 
     @testset "NHC controls" begin
         nhc = SimulationCore.nosehooverchain(st; temperature=1.0f0, tau=0.5f0, chain_length=4, substeps=3)
-        @test ParticleDynamics.IntegratorInterfaces.stage_sequence(nhc) ==
-              (:thermostat_pre, :kick1, :drift, :force, :kick2, :thermostat_post)
         @test nhc.params.propagator == SimulationCore.NHC_PROPAGATOR_GROMACS
 
         old_q = copy(nhc.params.chain_masses)
@@ -318,8 +310,6 @@
 
     @testset "CSVR controls" begin
         csvr_spec = SimulationCore.csvr(st; temperature=1.0f0, tau=0.5f0)
-        @test ParticleDynamics.IntegratorInterfaces.stage_sequence(csvr_spec) ==
-              (:kick1, :drift, :force, :kick2, :thermostat)
 
         Filters.set_thermostat_temperature!(csvr_spec, 1.1f0)
         @test all(abs.(csvr_spec.params.target_temperature .- 1.1f0) .< 1f-6)

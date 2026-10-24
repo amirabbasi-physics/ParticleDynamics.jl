@@ -37,7 +37,6 @@
     vv_zero = SimulationCore.velocityverlet(st_vv; gamma=0.0, temperature=0.0, dt=dt)
 
     @test ParticleDynamics.IntegratorInterfaces.integrator_name(nve) == :nve
-    @test ParticleDynamics.IntegratorInterfaces.stage_sequence(nve) == (:kick1, :drift, :force, :kick2)
 
     for _ in 1:6
         SimulationCore.step!(st_nve, nve, dt; compute_energy=true)

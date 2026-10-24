@@ -32,5 +32,7 @@ include("neighbors/DenseNeighborCUDA.jl")
 include("neighbors/StencilNeighborCUDA.jl")
 include("neighbors/NeighborAllocation.jl")
 include("neighbors/NeighborUpdateCUDA.jl")
+include("neighbors/DeviceNeighborCUDA.jl")
+include("neighbors/DeviceConditionalGraph.jl")
 
 end # module NeighborLists

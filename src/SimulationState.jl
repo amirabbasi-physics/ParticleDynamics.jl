@@ -30,6 +30,21 @@ Key fields that user code may read or mutate:
   the force kernels. The scalar `virial` field stores the trace of `W` for
   backward compatibility with existing examples. These buffers are refreshed on
   force evaluations with `compute_energy=true`.
+- `virial_global`, `virial_global_accum`: global virial terms without a
+  per-particle decomposition (the reciprocal-space electrostatic tensor).
+  System totals ([`virial_tensor`](@ref), [`collect_step_observables`](@ref))
+  include them.
+- `vdw_modifier`: Lennard-Jones energy convention at the cutoff, `:none` or
+  `:potential_shift` (see [`set_vdw_modifier!`](@ref)).
+- `nonbonded_backend`, `cluster`, `cluster_config`: short-range traversal
+  selected with [`set_nonbonded_backend!`](@ref) and its lazily built engine.
+- `charge`: optional per-particle charges; `electrostatics`: optional
+  long-range Coulomb solver attached with [`attach_electrostatics!`](@ref).
+- `energy_valid`: true only while the energy and virial buffers belong to the
+  current coordinates, i.e. after a force evaluation with
+  `compute_energy=true` and before any position change or
+  `invalidate_forces!`. Force-only evaluations clear it. Workflow observables
+  refresh stale energies before sampling.
 - `typeid`: per-particle type ids used by `Filters` and mixed-size LJ kernels.
 - `freeze_*`: optional buffers used by the freeze/tether helpers in `Filters`.
 - `coll_*`: optional buffers that appear when collision counting is enabled via
@@ -145,6 +160,46 @@ mutable struct SimulationState{T<:AbstractFloat}
     coll_ref_x::Union{Nothing,CuArray{T,1}}
     coll_ref_y::Union{Nothing,CuArray{T,1}}
     coll_ref_z::Union{Nothing,CuArray{T,1}}
+    # Per-particle charges in the caller's charge unit (`nothing` = uncharged).
+    charge::Union{Nothing,CuArray{T,1}}
+    # Long-range electrostatics solver (opt-in). Typed `Any` on purpose: it is
+    # dispatched once per force evaluation behind a function barrier.
+    electrostatics::Any
+    # Global (not per-particle) configurational virial contributions, currently
+    # the reciprocal-space electrostatic tensor, in `virial_components` order.
+    virial_global::CuArray{T,1}
+    virial_global_accum::CuArray{T,1}
+    # True only while `Epot`/virial buffers describe the current coordinates
+    # (set by force evaluations with `compute_energy=true`).
+    energy_valid::Bool
+    # Short-range nonbonded traversal: `:ell` (per-particle neighbor rows) or
+    # `:cluster` (cluster-pair engine, `ClusterPairs`). The engine is typed
+    # `Any` and created lazily behind a function barrier; `cluster_config`
+    # keeps the skin, prune buffer and the dense-list settings to restore.
+    nonbonded_backend::Symbol
+    cluster::Any
+    cluster_config::Any
+    # Typed bonded families (`BondedForces.BondedTerms`) added after the
+    # legacy uniform bond kernels; `nothing` when absent. Typed `Any` and
+    # dispatched behind a function barrier once per force evaluation.
+    bonded::Any
+    # Optional rigid-water integration workspace; conservative forces stay
+    # separate from constraint impulses and the pressure estimator.
+    rigid_water::Any
+    # Device-resident engine (`ParticleDynamics.DeviceEngine`) currently advancing
+    # this state through captured CUDA graphs, or `nothing`. While set, it owns
+    # the particle arrays' update order; staged entry points release it first.
+    engine::Any
+    # Lennard-Jones energy at the cutoff: `:none` (plain truncation) or
+    # `:potential_shift` (u(r) − u(r_c) per pair; forces and virials unchanged).
+    vdw_modifier::Symbol
+    # Inverse of `tag` (build-time particle id → storage slot) for sorted states with
+    # topology: bonded tables keep ids; kernels map them through `tag`/`slot_of`.
+    # Allocated on demand (`_slot_of!`); the device engine refreshes it at every sort.
+    slot_of::Union{Nothing,CuArray{Int32,1}}
+    # Device-resident pressure control (`attach_pressure_control!`): a barostat the device
+    # engine applies inside its step graphs every `interval` steps, or `nothing`.
+    pressure_control::Any
 end
 
 """
@@ -159,8 +214,52 @@ require force invalidation.
 """
 function invalidate_forces!(st::SimulationState)
     st.force_valid = false
+    st.energy_valid = false
+    _engine_invalidated!(st.engine)
     return st
 end
+
+const VDW_MODIFIERS = (:none, :potential_shift)
+
+"""
+    set_vdw_modifier!(st, modifier) -> st
+
+Lennard-Jones energy convention at the cutoff (GROMACS `vdw-modifier`):
+`:none` truncates the pair energy at `r_c`; `:potential_shift` uses
+`u(r) − u(r_c)` for every pair inside its cutoff (per pair cutoff with pair
+matrices). Forces and virials are identical for both; energies differ by
+`u(r_c)` per pair inside the cutoff. Energy-driven samplers (Monte Carlo volume
+moves) and energy comparisons depend on the choice. Only Lennard-Jones states
+take `:potential_shift` (cell-list and cluster backends). Energies are invalidated.
+"""
+function set_vdw_modifier!(st::SimulationState, modifier::Symbol)
+    modifier in VDW_MODIFIERS || throw(ArgumentError("vdw_modifier must be one of $(VDW_MODIFIERS)"))
+    modifier === :none || st.nb_kind == NB_KIND_LJ ||
+        throw(ArgumentError("vdw_modifier=:$(modifier) applies to Lennard-Jones (nonbonded=:lj) only"))
+    st.vdw_modifier === modifier && return st
+    _drop_engine!(st.engine, st)
+    st.vdw_modifier = modifier
+    invalidate_forces!(st)
+    return st
+end
+vdw_modifier(st::SimulationState) = st.vdw_modifier
+
+function _slot_of_kernel!(slot_of, tag)
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    i <= length(tag) && (@inbounds slot_of[tag[i]] = Int32(i))
+    return nothing
+end
+"""`slot_of` filled from the current `tag` (allocated on first use); `nothing` without tags."""
+function _slot_of!(st::SimulationState)
+    st.tag === nothing && return nothing
+    N = length(st.tag)
+    (st.slot_of === nothing || length(st.slot_of) != N) && (st.slot_of = CuArray{Int32}(undef, N))
+    CUDA.@cuda threads=256 blocks=cld(N, 256) _slot_of_kernel!(st.slot_of, st.tag)
+    return st.slot_of
+end
+"""Particle topology (legacy bonds or typed bonded terms) present."""
+_has_topology(st::SimulationState) = st.bonds !== nothing || st.bonded !== nothing
+_lj_shifted(st::SimulationState) = st.vdw_modifier === :potential_shift
 
 @inline backend(st::SimulationState) = storage_backend(st.rx)
 Backends.storage_backend(st::SimulationState) = backend(st)
