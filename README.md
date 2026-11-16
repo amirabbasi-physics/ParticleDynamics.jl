@@ -1,40 +1,39 @@
 <p align="center">
-  <img src="ParticleDynamics.png" alt="ParticleDynamics.jl logo" width="360">
+  <img src="ParticleDynamics.png" alt="ParticleDynamics logo" width="360">
 </p>
 
-# ParticleDynamics.jl
+# ParticleDynamics
 
 [![Documentation](https://img.shields.io/badge/docs-dev-blue.svg)](https://amirabbasi-physics.github.io/ParticleDynamics.jl/dev/)
 [![CI](https://github.com/amirabbasi-physics/ParticleDynamics.jl/actions/workflows/ci-cpu.yml/badge.svg)](https://github.com/amirabbasi-physics/ParticleDynamics.jl/actions/workflows/ci-cpu.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-`ParticleDynamics.jl` is a GPU-native Julia package for particle-based simulations with CUDA, including native GPU long-range electrostatics (smooth PME, PPPM and Ewald summation with prolates) and integrations for MACE and Orb machine-learned interatomic potentials. It provides a high-level workflow API for building a particle system, attaching forces and methods, sampling observables, writing outputs, and running simulations without hand-written timestep loops. Every step runs on a device-resident CUDA-graph engine.
+`ParticleDynamics` is a GPU-native Julia package for particle-based simulations with CUDA, including native GPU long-range electrostatics (smooth PME, PPPM and Ewald summation with prolates) and integrations for MACE and Orb machine-learned interatomic potentials. It provides a high-level workflow API for building a particle system, attaching forces and methods, sampling observables, writing outputs, and running simulations without hand-written timestep loops. Every step runs on a device-resident CUDA-graph engine.
 
-The existing low-level engine remains available for expert workflows and tests.
-That surface is centered on `build_simulation`, `step!`, integrator builders,
-and `ParticleDynamics.SimulationCore`.
+Beyond pair fluids and bead-spring polymers it covers typed bonded terms
+(bonds, angles, dihedrals, impropers), rigid three-site water, energy
+minimization (FIRE, steepest descent) and constant pressure (Monte Carlo
+volume moves, stochastic cell rescaling).
 
 ## Version
 
-The current release is **0.6.10**.
+The development version is **0.7.0**.
 For changes, see the [changelog](CHANGELOG.md),
 [integrator manual](docs/src/manual/integrators.md), and
 [force manual](docs/src/manual/forces.md).
 
 ## GPU requirement
 
-This package currently targets CUDA-backed simulations.
+Simulations run on a CUDA-capable NVIDIA GPU. There is no CPU backend.
 
 ```julia
 using CUDA
 CUDA.functional() || error("ParticleDynamics requires CUDA.functional() == true")
 ```
 
-There is no production CPU simulation backend yet.
-
 ## Installation
 
-ParticleDynamics.jl is registered in the Julia General registry:
+ParticleDynamics is registered in the Julia General registry:
 
 ```julia
 using Pkg
@@ -48,6 +47,9 @@ using Pkg
 Pkg.develop(path="/path/to/ParticleDynamics")
 Pkg.instantiate()
 ```
+
+The workflow below describes the development version. Use a checkout with
+`julia --project` to run it against the matching source.
 
 ## Quickstart
 
@@ -118,22 +120,6 @@ reset_observables!(sim)
 reset_step!(sim, 0)
 run!(sim, Stage(:production, steps=1_000))
 ```
-
-## Low-level / expert API
-
-The workflow API is the recommended interface for normal scripts and examples.
-The following exports are still supported for expert users who want direct
-control over GPU buffers and stepping:
-
-- `SimulationState`, `build_simulation`, `step!` (`step_graph!` is an alias)
-- `velocityverlet`, `baoab`, `baoa`, `gsm`, `eulerheun`, `eulermaruyama`, `nosehooverchain`, `csvr`
-- `collect_step_observables`, `reset_bath_exchange_accumulators!`
-- `gsd_open`, `gsd_close`, `write_gsd_frame!`, `read_gsd_frame!`
-- `attach_electrostatics!`, `detach_electrostatics!`, `set_charges!`, `electrostatic_energy`
-- `Filters`, `ParticleGroups`, and `ParticleDynamics.SimulationCore`
-
-Use that surface when you need custom orchestration, kernel debugging, or very
-fine-grained control that the workflow facade intentionally hides.
 
 ## Long-range electrostatics (PME, PPPM, ESP)
 
@@ -224,16 +210,10 @@ directly.
 julia --project scripts/examples_smoke.jl
 ```
 
-Optional heavier smoke case:
-
-```bash
-NEQSIM_SMOKE_HEAVY=1 julia --project scripts/examples_smoke.jl
-```
-
 ## Documentation
 
 Hosted documentation:
-[amirabbasi-physics.github.io/ParticleDynamics.jl](https://amirabbasi-physics.github.io/ParticleDynamics.jl/dev/)
+[ParticleDynamics documentation](https://amirabbasi-physics.github.io/ParticleDynamics.jl/dev/)
 
 Build docs locally:
 
@@ -241,10 +221,11 @@ Build docs locally:
 julia --project=docs -e 'using Pkg; Pkg.instantiate(); include("docs/make.jl")'
 ```
 
-The docs now distinguish:
+The docs are organized as:
 
-- workflow-first onboarding in `docs/src/quickstart.md`
-- low-level expert material under `docs/src/manual/`
+- a first simulation and a guided examples collection
+- practical guides to interactions, dynamics, measurements and output
+- the workflow API reference
 
 ## Running tests
 
@@ -260,7 +241,7 @@ including `PD_REQUIRE_GOLDEN=1` for full validation.
 
 ## Current limitations
 
-- CUDA is the main supported backend.
+- CUDA is the only backend; a CUDA-capable NVIDIA GPU is required.
 - Bonded terms cover bonds, angles, dihedrals and impropers (see the
   changelog); CMAP terms and general holonomic constraints beyond rigid
   three-site water are not implemented.
@@ -270,8 +251,8 @@ including `PD_REQUIRE_GOLDEN=1` for full validation.
   For molecular systems, the machine-learned potential path (see
   "Machine-learned potentials" above) sidesteps these terms entirely: the
   MLIP carries the intramolecular chemistry.
-- `ForceField` is a future-compatible container, but compiled support is still
-  limited to the force families already backed by the existing kernels.
+- `ForceField` is a plain container of workflow forces; it adds no force
+  families beyond those listed in the manual.
 - Bitwise-identical trajectories are not guaranteed across GPUs or toolchains;
   reproducibility should be judged at the statistical level.
 

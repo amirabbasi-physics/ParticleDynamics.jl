@@ -23,7 +23,7 @@ function _build_vv_params(st::SimulationState{T};
         corr = _device_corr_time_buffer(backend, T, N, noise_corr_time)
         ou = _build_single_mode_ou(backend, T, noise, corr, dt)
     end
-    return LangevinIntegrators.VVParams{T}(γ, T(mass), noise; dt=T(dt), corr_time=corr, ou=ou)
+    return VVParams{T}(γ, T(mass), noise; dt=T(dt), corr_time=corr, ou=ou)
 end
 
 function _build_baoab_params(st::SimulationState{T};
@@ -37,7 +37,7 @@ function _build_baoab_params(st::SimulationState{T};
                           noise_corr_time=noise_corr_time,
                           ou_scales=ou_scales,
                           mass=mass, dt=dt)
-    return LangevinIntegrators.BAOABParams{T}(vv.gamma, vv.mass, vv.noise_scale; dt=vv.dt, corr_time=vv.corr_time, ou=vv.ou)
+    return BAOABParams{T}(vv.gamma, vv.mass, vv.noise_scale; dt=vv.dt, corr_time=vv.corr_time, ou=vv.ou)
 end
 
 """
@@ -83,7 +83,7 @@ end
     baoa(st; gamma, temperature, noise_corr_time=nothing, ou_scales=nothing,
          mass=st.mass, dt=st.dt) -> BAOASpec
 
-Legacy BAOA variant (no final B kick).
+BAOA variant of [`baoab`](@ref) without the final B kick.
 """
 function baoa(st::SimulationState{T};
               gamma::Union{AbstractVector{<:Real},Real},
@@ -102,7 +102,7 @@ end
     gsm(st; gamma, temperature, noise_corr_time=nothing, ou_scales=nothing,
         mass=st.mass, dt=st.dt) -> GSMSpec
 
-Construct a GSM spec (used by `examples/TwoT_2D_LD_GSM.jl`).
+Construct a GSM spec.
 """
 function gsm(st::SimulationState{T};
              gamma::Union{AbstractVector{<:Real},Real},

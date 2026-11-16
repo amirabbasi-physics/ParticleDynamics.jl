@@ -10,17 +10,26 @@ with three particle-mesh solvers that share one mesh engine:
 | [`PPPM`](@ref)`(differentiation=:ik)` | P3M, optimal influence function | Gaussian | B-spline | reciprocal-space field | 1 forward, 3 inverse |
 | [`ESP`](@ref) | Ewald summation with prolates | prolate (PSWF) | prolate window | analytic | 1 forward, 1 inverse |
 
-Every step of a force evaluation runs on the device: real-space pairs,
-exception corrections, charge spreading, cuFFT R2C/C2R transforms with
-preallocated plans, the spectral solve (with Float64 energy and virial
-reductions), and the force gather. Host code validates the input, generates
-coefficients and plans transforms at setup only. A warmed force call performs
-no device allocations.
+The solvers run on the GPU and combine with the short-range interactions
+in your integrator.
 
 Supported scope: 3D orthorhombic periodic boxes, conducting (tin-foil)
 boundary conditions, uniform relative permittivity, fixed charges, a single
 GPU, Float32 or Float64. 2D, slab, triclinic and open-boundary electrostatics
 are rejected at construction.
+
+## Choose a solver
+
+PME and PPPM use B-spline assignment; ESP uses a prolate window and can use a
+smaller FFT grid for a given measured accuracy. The best choice depends on
+system size, charge distribution and accuracy target. A smaller mesh alone
+does not guarantee a faster complete simulation: spreading, pair forces and
+integration also cost time.
+
+Use representative configurations to check force, energy and pressure errors.
+For ESP, `tolerance` controls a parameter rule rather than a guaranteed bound
+on measured force error; the [parameter guidance](#Choosing-parameters) below
+explains its precision limits.
 
 ## Quick example
 
@@ -105,11 +114,14 @@ wave function ψ₀ᶜ on `[0, 1]`, so the real-space part vanishes exactly at
 ### Mesh
 
 Charges are assigned per node with the window `W` (B-spline of order `P`, or
-the prolate window `ψ₀ᶜ¹(2x/P)`), transformed with an unnormalised forward
+the prolate window `ψ₀ᶜ¹(2x/P) − ψ₀ᶜ¹(1)`), transformed with an unnormalised forward
 FFT, multiplied by the influence function `G` (which contains `C/V`) and
 transformed back with an unnormalised inverse. The mesh energy is
 `½ Σ G|b̂|²`; analytic-differentiation forces are the exact gradient of this
-discrete energy. Influence functions:
+discrete energy. The constant `ψ₀ᶜ¹(1)` makes the prolate weights vanish at
+the edge of the support of the window, so that the mesh energy is continuous
+when a particle moves into the next mesh cell, as it is for B-splines.
+Influence functions:
 
 - SPME: `G = (C/V) ĝ(k) Π_d D_d`, with SPME's exact discrete B-spline factor `D`;
 - P3M-AD/ik: Hockney–Eastwood optimal alias sums for the selected derivative;
@@ -117,30 +129,16 @@ discrete energy. Influence functions:
   prolate window transform (`influence=:optimal`). With
   `influence=:deconvolution` it is the plain `ĝ/φ̂²` of the paper's eq. (9).
 
-## Energies, virials and observables
+## Energies and measurements
 
-- **Per-particle energies.** Real-space and exception pair energies are split
-  ½/½. The mesh contributes `½ qᵢ uᵢ` (`uᵢ` = interpolated mesh potential),
-  which sums exactly to the mesh energy. The self energy is local, and a
-  neutralising background is distributed in proportion to `qᵢ Q`. System
-  totals (`sum(st.Epot)`, thermodynamic observables, NHC/CSVR extended
-  Hamiltonians) therefore include electrostatics automatically. Subgroup
-  energies follow this documented convention.
-- **Virial.** Real-space and exception virials are per-particle (in
-  `virial_nonbonded`). The reciprocal-space tensor is the strain derivative of
-  the discrete mesh energy at fixed fractional coordinates. It has no
-  per-particle decomposition and is stored globally in `st.virial_global`.
-  [`virial_tensor`](@ref)`(st)` and full-system observables include it;
-  `virial_tensor(st; part=:reciprocal)` returns it alone. Group observables
-  that request a virial for a strict subgroup raise an error while
-  electrostatics is attached. Per-particle GSD virial output contains the
-  local terms only.
-- **Diagnostics.** [`electrostatic_energy`](@ref) returns the real, self,
-  reciprocal and background components plus the reciprocal virial at the
-  current coordinates.
+Thermodynamic observables include electrostatic energy automatically. Pair
+energies are shared equally between the two particles; the mesh assigns energy
+through each particle's interpolated potential. Subgroup energies follow this
+convention.
 
-Energies and virials are refreshed on force evaluations with
-`compute_energy=true`, like every other term in the engine.
+The reciprocal-space virial belongs to the whole system and has no per-particle
+decomposition. Request virial measurements on the full particle group when
+electrostatics is present. Per-particle GSD virials contain the local terms only.
 
 ## Exceptions
 
@@ -159,21 +157,12 @@ and `scaled_pairs=[(i, j, s), …]`.
 `−C π Q²/(2α²V)` (Gaussian) or `−C π r_c² m₂ Q²/V` (prolate). It contributes
 the same amount to each diagonal virial component and adds no force.
 
-## Lifecycle, reordering and restarts
+## Save and continue
 
-- The solver holds no particle-array pointers; positions, charges and force
-  slots are passed on every call. Force-slot swaps, Brownian midpoint
-  evaluations and spatial reordering are therefore safe. Charges are permuted
-  with their particles. Reordering is suspended while exception rows are
-  attached.
-- [`set_charges!`](@ref) replaces charges and re-checks the net-charge
-  policy. [`detach_electrostatics!`](@ref) removes the solver.
-- GSD frames written while a solver is attached store `particles/charge` and
-  `log/electrostatics/settings` (method, prefactor, εᵣ, cutoff, α or shapes,
-  order, mesh, alias order, net-charge policy, precision), plus
-  `log/electrostatics/exceptions`. `ParticleSystem.from_gsd(path)` restores
-  the charges, and [`electrostatics_from_gsd`](@ref) returns the exact
-  descriptor. FFT plans and workspaces are rebuilt on load.
+GSD output records charges, electrostatics settings and exceptions.
+`ParticleSystem.from_gsd(path)` restores the particle configuration;
+`electrostatics_from_gsd(path)` returns the saved force descriptor for your
+new integrator. See [continuing a simulation](restarts.md).
 
 ## Choosing parameters
 
@@ -186,28 +175,25 @@ Parameters are explicit; nothing is tuned behind the user's back.
 - **ESP.** `tolerance = ε` sets the split shape (`ψ₀ᶜ(1) = ε` for the
   L²-normalised prolate), the window shape (from `ε/2`), the window width
   (Table 2 of Liang et al. 2026: 5, 5, 6, 7, 8 for ε = 1e-3 … 1e-5) and
-  `mesh_spacing = π r_c / c`. The measured force error is typically 1–2 ε and
+  `mesh_spacing = π r_c / c`. The measured force error is 0.4–2.5 ε in our tests and
   does **not** decrease further when only the mesh is refined: the prolate
   window's alias level is fixed in grid units. To reach a target Δ, tighten ε
   (e.g. ε ≈ Δ/2) instead of the mesh.
-- **Measured targeting.** [`tune_electrostatics`](@ref)`(st, force; target)`
-  finds the cheapest mesh (PME/PPPM) or tolerance (ESP) whose *measured*
-  error against a high-accuracy ESP reference at the same cutoff meets
-  `target`. It returns an explicit descriptor, so nothing is retuned silently
-  on restart.
-- **Fastest setting.** `tune_electrostatics(st, force; target,
-  objective=:time)` searches more knobs at the same real-space cutoff:
-  - for PME/PPPM, the order (4–6 / 5–7), the Ewald α (real-space tail
-    `target × 0.01 … 0.3`) and the mesh;
-  - for ESP, ε and the window width.
 
-  It measures each candidate through the state's own force evaluation
-  (vdW term and [nonbonded backend](forces.md) included) and returns the
-  fastest one that meets `target`, with the full candidate table.
-
-  The Float32 reference is an order-6 PME on a fine grid. Float32 ESP
-  references at very tight ε are not accurate enough, because wide prolate
-  windows amplify single-precision rounding.
+  The window also has to be resolved by the precision `T` of the state. The
+  influence function divides by the squared window transform, so a window
+  that decays too far inside the mesh band amplifies round-off. The bound is
+  `(φ̂(π)/φ̂(0))² ≥ 0.02 eps(T)^(2/3)` at the mesh Nyquist frequency: 4.8e-7
+  in Float32, 7.3e-13 in Float64. Where the `ε/2` shape falls below it
+  (Float32: ε ≈ 3.3e-5–4.5e-5 and ε below about 6e-6; Float64: ε below about
+  3e-9), the default window shape is the smallest one that meets the bound,
+  at the same width. An explicit `window_shape` below the bound is refused
+  when the solver is built. Float32 forces reach about 2e-6 relative accuracy
+  at best, whatever ε; tighter targets need a Float64 state.
+Test accuracy on representative configurations before production. Compare
+forces against a more accurate calculation, then check energy conservation and
+the observables that matter to your system. A requested tolerance alone is
+not a measured force-error bound.
 
 Measured accuracy against an independent converged Ewald sum (Float64, 120
 random charges, `r_c = 4`):
@@ -229,93 +215,14 @@ Forces agree to the 6-digit precision of the GROMACS trajectory dump. Against
 LAMMPS `pppm 1e-9`, all three methods differ by the same 1.6e-7 (energy) and
 6e-7 (forces), which is LAMMPS's own discretisation error at that setting.
 
-## Performance
-
-`scripts/bench_electrostatics.jl` times the solvers at matched *measured*
-force error. It uses a dense ±1 e ion melt in Å/eV units, Coulomb only,
-r_c = 9 Å, Float32, an RTX 3090 and spatially ordered storage; each entry is
-one force call:
-
-| N | Δ | SPME | P3M-AD | P3M-ik | ESP |
-|---|---|---|---|---|---|
-| 64 000 | 1e-4 | 1.14 ms (150³) | 1.09 ms (150³) | 1.15 ms (120³) | 0.74 ms (50³) |
-| 64 000 | 1e-5 | 12.5 ms (375³) | 12.5 ms (375³) | 6.7 ms (270³) | 1.6 ms (63³) |
-| 512 000 | 1e-4 | 13.5 ms (300³) | 13.5 ms (300³) | 14.0 ms (240³) | 7.6 ms (100³) |
-| 512 000 | 1e-5 | mesh > 400³ | mesh > 400³ | mesh > 400³ | 13.5 ms (125³) |
-
-ESP's advantage comes from its much smaller FFT grid and grows with the
-accuracy target. Spreading and gathering walk particles in the cell list's
-spatial order, so they stay efficient for any storage order. The real-space
-kernel profits from spatial reordering (NVE), like the vdW kernels.
-
-### Historical component timings with other engines
-
-The test is equilibrated SPC/E water (the series of Liang et al. 2026) with
-O–O Lennard-Jones and Coulomb at r_c = 1 nm, on one RTX 3090. Every engine
-runs in its production precision and at a *measured* accuracy target:
-relative RMS Coulomb force error Δ against a Float64 reference, checked on a
-held-out configuration. ParticleDynamics uses the [cluster-pair
-backend](forces.md) with the setting returned by
-`tune_electrostatics(...; objective=:time)`. Times are milliseconds.
-
-* ParticleDynamics: one complete force evaluation (LJ + Coulomb).
-* GROMACS 2026.2: one GPU-resident MD step (`-update gpu`), production
-  Verlet buffer. In brackets, the step minus its CPU pair search.
-* OpenMM 8.5.1: one CUDA Verlet step (force + integration).
-
-| N | Δ | GROMACS | OpenMM | PD PME | PD PPPM-AD | PD ESP |
-|---|---|---|---|---|---|---|
-| 24 000 | 1e-3 | 0.160 (0.115) | 0.215 | 0.191 | 0.229 | 0.216 |
-| 24 000 | 1e-4 | 0.196 (0.137) | 0.272 | 0.230 | 0.238 | 0.326 |
-| 192 000 | 1e-3 | 1.14 (0.81) | 1.54 | 0.98 | 1.04 | 0.93 |
-| 192 000 | 1e-4 | 1.27 (0.96) | 2.24 | 1.09 | 1.17 | 1.06 |
-| 648 000 | 1e-3 | 3.92 (2.72) | 5.14 | 2.69 | 2.87 | 2.33 |
-| 648 000 | 1e-4 | 4.38 (3.20) | 10.1 | 3.51 | 3.27 | 3.03 |
-| 1 029 000 | 1e-3 | 6.24 (4.37) | 9.58 | 4.21 | 4.48 | 3.69 |
-| 1 029 000 | 1e-4 | 7.31 (5.44) | 15.5 | 6.07 | 6.01 | 4.86 |
-
-LAMMPS 2026 (KOKKOS/CUDA, mixed precision, `pppm`) takes 25.2 ms (Δ = 1e-3)
-and 52.7 ms (1e-4) at 1M atoms, against 5.5 and 11.2 ms for PD PPPM-ik.
-
-These historical rows measure different amounts of work. The PD values exclude
-integration, coupling, list rebuilds and re-pruning, while the other engines time
-simulation steps. Subtracting GROMACS's CPU pair-search time does not make the work
-equivalent. The table describes component costs; it does not establish a complete
-simulation speedup or equilibrium accuracy. Use the complete-step benchmark suites
-with matched observation schedules, validated list policies and ensemble checks
-for those comparisons.
-
-`benchmark/electrostatics/` holds the harness (`run_water.jl`,
-`run_tuned.jl`, `run_openmm.jl`) and its method notes.
-
-## Low-level API
-
-```julia
-st = build_simulation(N=N, box=(L, L, L), nonbonded=:none, cutoff=rc,
-                      precision=:f64, charges=q)
-copyto!(st.rx, x); copyto!(st.ry, y); copyto!(st.rz, z)
-attach_electrostatics!(st, PME(coulomb_prefactor=1.0, real_cutoff=rc, alpha=1.0,
-                               mesh=(32, 32, 32)); exceptions=[(1, 2, 0.0)])
-SimulationCore.evaluate_forces_into_f!(st, true)
-electrostatic_energy(st)
-```
-
-`build_simulation(...; neighbor_cutoff=rc)` widens the neighbor list of a vdW
-state to the Coulomb cutoff; `attach_electrostatics!` also widens a dense list
-automatically.
+## Solver reference
 
 ```@docs
 ParticleDynamics.PME
 ParticleDynamics.PPPM
 ParticleDynamics.ESP
-ParticleDynamics.attach_electrostatics!
-ParticleDynamics.detach_electrostatics!
-ParticleDynamics.set_charges!
-ParticleDynamics.charges
-ParticleDynamics.electrostatic_energy
+ParticleDynamics.ElectrostaticsForce
 ParticleDynamics.electrostatics_from_gsd
-ParticleDynamics.tune_electrostatics
-ParticleDynamics.Electrostatics.ElectrostaticsSpec
 ```
 
 ## Provenance

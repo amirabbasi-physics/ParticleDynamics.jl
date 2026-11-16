@@ -43,7 +43,7 @@ VirialObservable(group; name::Symbol=:virial) = VirialObservable(group=group, na
 """
     CollisionObservable(; name=:collisions)
 
-Compute collision-count diagnostics from the low-level collision counters.
+Compute collision counts and rates for the simulation.
 """
 @kwdef struct CollisionObservable <: Observable
     name::Symbol = :collisions
@@ -202,12 +202,6 @@ function _group_count(sim, filter)
     return Filters.count(st, filter)
 end
 
-function _mean_group_value(src, sim, filter)
-    count = _group_count(sim, filter)
-    count == 0 && return zero(eltype(src))
-    return Filters.sum(src, sim.state, filter) / count
-end
-
 function _ensure_observable_context!(sim, obs::Observable)
     registry = _ensure_observable_registry!(sim)
     key = _observable_key(obs)
@@ -290,6 +284,13 @@ function _reset_interval_buffers!(sim)
     return sim
 end
 
+"""
+    reset_observables!(sim) -> sim
+
+Start a new observation interval: zero the accumulated energies, virials,
+bath-exchange sums and collision counts, and take the current step as the
+reference for interval averages and for MSD and VACF observables.
+"""
 function reset_observables!(sim)
     _reset_interval_buffers!(sim)
     registry = get(sim.metadata, :workflow_observables, Dict{Any,Dict{Symbol,Any}}())

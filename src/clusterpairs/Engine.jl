@@ -90,7 +90,6 @@ function ClusterPairEngine(::Type{T}, N::Integer, box::NTuple{3,<:Real}; lj=noth
            coulomb
     exo, exj, exs = exceptions === nothing ? (nothing, nothing, nothing) : exceptions
     list = ClusterPairList(N, box, T)
-    list.prune_only = PRUNE_ONLY[]
     return ClusterPairEngine{T,typeof(coul)}(list, ljk, lj_excluded, ljp, ntypes, s6t, s12t, lrc2u, irc6,
                                              coulomb !== nothing, coul, T(selfc), T(rmax), T(skin), T(prune_buffer),
                                              exo, exj, exs, CuMatrix{T}(undef, 0, 3), CuVector{T}(undef, 0),
@@ -210,15 +209,14 @@ function compute_forces!(eng::ClusterPairEngine{T}, rx, ry, rz, q, fx, fy, fz, E
 end
 
 # Pair pass over the working list (`Val(false)`) or the whole outer list with
-# pruning (`Val(true)`). `skip` > 0: the pass does nothing when `counts[skip]`
-# is set on the device (graph steps: the plain pass yields to the pruning pass).
-function enqueue_pairs!(eng::ClusterPairEngine{T}, compute_energy::Bool, ::Val{PRUNE}; skip::Integer=0,
+# pruning (`Val(true)`, the eager `compute_forces!` after `update_list!`).
+function enqueue_pairs!(eng::ClusterPairEngine{T}, compute_energy::Bool, ::Val{PRUNE};
                         trace::Bool=false) where {T,PRUNE}
     L = eng.list
     rp2 = (eng.rmax + eng.prune_buffer)^2
     lst = PRUNE ? (L.scio, L.cjf, L.m8f, L.xido) : (L.sciw, L.cjw, L.m8w, L.xidw)
     args = (eng.fc, eng.Ec, eng.Vc, L.xs, L.ys, L.zs, L.qs, L.ts, L.s6, L.s12, lst..., L.masks,
-            L.counts, Int32(skip), L.geom, eng.ljp, eng.ntypes, eng.lrc2u, eng.irc6, eng.coul)
+            L.counts, L.geom, eng.ljp, eng.ntypes, eng.lrc2u, eng.irc6, eng.coul)
     _launch_cluster_kernel!(args, L.m8o, rp2, Val(eng.ljk), Val(eng.lj_excluded), Val(eng.coulomb),
                             Val(compute_energy), Val(true), Val(PRUNE), L.NSmax, eng.vtrace, Val(trace))
     return nothing
@@ -349,42 +347,20 @@ end
 """Rebuild body (conditional on `counts[CL_BUILD]`)."""
 enqueue_build!(eng::ClusterPairEngine, rx, ry, rz) = (build!(eng.list, rx, ry, rz; exo=eng.exo, exj=eng.exj, exs=eng.exs); nothing)
 
-"""Pruning by a distance-only pass (then the plain pass computes forces on the new working list)
-instead of a force pass over the whole outer list (default for newly created engines; `false`
-restores the fused force-and-prune pass). Its working list is a superset of the fused pass's
-(widened radius, see `_prune_only_kernel!`). 10k water NPT, five paired runs: 1.02× faster with
-buffered lists, 1.03× with exact lists."""
-const PRUNE_ONLY = Ref(true)
-
-"""Pruning body (conditional on `counts[CL_PRUNE]`): prune reference, pruning pass (forces over the
-outer list, or distances only with `eng.list.prune_only`), compaction. With distance-only
-pruning the caller must subsequently enqueue the plain pair pass before scattering."""
-function enqueue_prune!(eng::ClusterPairEngine{T}, rx, ry, rz, compute_energy::Bool; trace::Bool=false,
-                        mark::Union{Nothing,Bool}=nothing) where {T}
+"""Pruning body (conditional on `counts[CL_PRUNE]`): prune reference, distance-only pruning pass
+over the outer list (`_prune_only_kernel!`), compaction. The pass computes no forces: the caller
+enqueues the plain pair pass on the new working list before scattering."""
+function enqueue_prune!(eng::ClusterPairEngine{T}, rx, ry, rz; mark::Union{Nothing,Bool}=nothing) where {T}
     L = eng.list
     # Fixed list intervals decide by schedule, so graph steps skip the prune references.
     # Evaluations outside the schedule decide by displacement from them (`enqueue_decide!(…;
     # fixed=false)`) and pass `mark=true`.
     (mark === nothing ? L.nstlist == 0 : mark) && mark_pruned!(L, rx, ry, rz)
-    if L.prune_only
-        NS = L.NSmax; k = _split_factor(NS)
-        @cuda threads=SUPER blocks=NS * k _prune_only_kernel!(L.m8o, L.xs, L.ys, L.zs, L.scio, L.cjf, L.m8f, L.xido, L.masks,
-                                                              L.counts, L.geom, T(eng.rmax + eng.prune_buffer)^2, Int32(k))
-    else
-        enqueue_pairs!(eng, compute_energy, Val(true); trace)
-    end
+    NS = L.NSmax; k = _split_factor(NS)
+    @cuda threads=SUPER blocks=NS * k _prune_only_kernel!(L.m8o, L.xs, L.ys, L.zs, L.scio, L.cjf, L.m8f, L.xido, L.masks,
+                                                          L.counts, L.geom, T(eng.rmax + eng.prune_buffer)^2, Int32(k))
     compact!(L, L.m8o, L.sciw, L.cjw, L.m8w, L.xidw)
     return nothing
-end
-
-"""Graph sections and suffix of one device-decided short-range evaluation."""
-function graph_sections(eng::ClusterPairEngine, rx, ry, rz, q, typ, fx, fy, fz, Epot, V, compute_energy::Bool)
-    L = eng.list
-    sections = [(() -> enqueue_decide!(eng, rx, ry, rz), L.counts, CL_BUILD, () -> enqueue_build!(eng, rx, ry, rz)),
-                (() -> _pack!(eng, rx, ry, rz, q, typ), L.counts, CL_PRUNE, () -> enqueue_prune!(eng, rx, ry, rz, compute_energy))]
-    suffix = () -> (enqueue_pairs!(eng, compute_energy, Val(false); skip=L.prune_only ? 0 : CL_PRUNE);
-                    enqueue_scatter!(eng, rx, ry, rz, q, fx, fy, fz, Epot, V, compute_energy))
-    return sections, suffix
 end
 
 const _SM_COUNT = Ref(0)

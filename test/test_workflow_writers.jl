@@ -285,3 +285,84 @@ end
         @test Array(a.state.vx) ≈ Array(b.state.vx)
     end
 end
+
+@testset "Workflow InMemoryWriter" begin
+    system = _workflow_writer_system(N=8, T=Float64)
+    _, _, _, groups = _workflow_writer_groups()
+    st = build_tiny2d(N=8, T=Float64, nonbonded=:wca, temperature=0.2, dt=1e-3)
+    copyto!(st.typeid, system.typeids)
+    x0 = Array(by_id(st, st.rx))
+    @test_throws ArgumentError InMemoryWriter(fields=[:pressure])
+    @test_throws ArgumentError InMemoryWriter(fields=Symbol[])
+    mem = InMemoryWriter(every=2, write_start=true, fields=[:positions, :velocities, :forces, :energy, :virial])
+    sim = _workflow_writer_sim(system, groups, st; writers=[mem])
+    @test ParticleDynamics.Workflow.active_writer_requires_energy(prepare!(sim), 2)
+    run!(sim, Stage(:first, steps=6; progress=false))
+    d = recorded_data(mem)
+    @test d.step == [0, 2, 4, 6]
+    @test size(d.positions) == size(d.velocities) == size(d.forces) == (8, 2, 4)
+    @test d.positions[:, 1, 1] == x0
+    @test d.positions[:, 1, end] == Array(by_id(st, st.rx)) && d.positions[:, 2, end] == Array(by_id(st, st.ry))
+    @test d.velocities[:, 2, end] == Array(by_id(st, st.vy))
+    @test d.forces[:, 1, end] == Array(by_id(st, st.fx))
+    @test d.kinetic_energy[end] ≈ sum(Array(st.Ekin)) && d.potential_energy[end] ≈ sum(Array(st.Epot))
+    W = virial_tensor(st)
+    @test d.virial[:, :, end] ≈ [W.xx W.xy; W.xy W.yy]
+    # Frames accumulate over stages; the start frame is written once per session.
+    run!(sim, Stage(:second, steps=2; progress=false))
+    @test recorded_data(mem).step == [0, 2, 4, 6, 8]
+    @test length(recorded_data(mem).kinetic_energy) == 5
+    empty!(mem)
+    @test isempty(recorded_data(mem).step) && size(recorded_data(mem).positions, 3) == 0
+end
+
+@testset "InMemoryWriter keeps particle-id order (Brownian, sorted storage)" begin
+    mktempdir() do tmp
+        n = 12; N = n^3; L = n * 1.25; a = L / n
+        lattice = [((i + 0.5) * a - L / 2, (j + 0.5) * a - L / 2, (k + 0.5) * a - L / 2)
+                   for i in 0:n-1 for j in 0:n-1 for k in 0:n-1]
+        shuffle!(MersenneTwister(11), lattice)          # input order unrelated to space
+        system = ParticleSystem(lattice; box=PeriodicBox((L, L, L)), types=[:C],
+                                typeids=fill(Int32(1), N), masses=Dict(:C => 1.0))
+        group = Group(:all, AllSelection())
+        path = joinpath(tmp, "bd.gsd")
+        mem = InMemoryWriter(every=200, fields=[:positions, :forces, :energy])
+        # Workflow builds keep storage unsorted; a supplied state with spatial
+        # reordering exercises the permuted slot -> particle mapping.
+        function sorted_state()
+            st = SimulationCore.build_simulation(; N, box=(L, L, L), nonbonded=:wca, epsilon=10.0, sigma=1.0,
+                cutoff=2^(1 / 6), skin=0.4, cap=Int32(100), neigh_interval=10, temperature=1.0,
+                dt=2.5e-4, precision=:f32, spatial_reorder=true, reorder_interval=100)
+            for (d, a) in enumerate((st.rx, st.ry, st.rz))
+                copyto!(a, Float32[p[d] for p in lattice])
+            end
+            return st
+        end
+        make(writers) = Simulation(system; groups=Groups(group), writers=writers, precision=Float32,
+            state=sorted_state(),
+            integrator=Integrator(dt=2.5e-4, scheme=EulerHeun(),
+                forces=[WCA(epsilon=10.0, sigma=1.0, pairs=:neighborlist,
+                            neighborlist=CellList(buffer=0.4, capacity=100, rebuild_interval=10))],
+                methods=[Brownian(group; gamma=10.0, kT=1.0)]))
+        sim = make([mem, GSDWriter(path; every=200, write_start=false, diameter=1.0)])
+        run!(sim, Stage(:bd, steps=1200; progress=false))
+        st = sim.state
+        @test st.tag !== nothing && Array(st.tag) != collect(Int32, 1:N)   # storage was permuted
+        d = recorded_data(mem)
+        @test d.step == collect(200:200:1200)
+        # Particle i started on lattice[i] and has diffused far less than a spacing.
+        X0 = [p[dim] for p in lattice, dim in 1:3]
+        disp = d.positions[:, :, 1] .- X0
+        disp .-= L .* round.(disp ./ L)
+        @test maximum(abs, disp) < 0.5 * a
+        for (k, step) in enumerate(d.step)
+            frame = read_gsd_frame!(path; step=step)
+            @test d.positions[:, 1, k] ≈ frame.rx && d.positions[:, 2, k] ≈ frame.ry &&
+                  d.positions[:, 3, k] ≈ frame.rz
+        end
+        @test d.forces[:, 3, end] == Array(by_id(st, st.fz))
+        @test all(iszero, d.kinetic_energy) && all(isfinite, d.potential_energy)
+        bad = make([InMemoryWriter(every=1, fields=[:velocities])])
+        @test_throws ArgumentError run!(bad, Stage(:bd, steps=1; progress=false))
+    end
+end

@@ -4,7 +4,7 @@
 # Philox keyed on the particle tag and the device step, so it is graph-safe and
 # independent of spatial sorting.
 #
-# Staged bookkeeping is reproduced exactly (LangevinIntegrators `_baoab_*`):
+# The former staged BAOAB bookkeeping is reproduced exactly:
 #   B (both halves): v += dt/(2m)·f;  dU += v·f (power, after the kick)
 #   O: c = exp(-γ dt/m), β = noise·ξ (noise = √(2γT·dt_spec)),
 #      v' = c v + √((1-c²)/(2γ dt m))·β,  v̄ = (v+v')/2,

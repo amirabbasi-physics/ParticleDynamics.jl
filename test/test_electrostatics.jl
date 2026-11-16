@@ -89,10 +89,172 @@ const _ES_L = (14.0, 15.0, 16.0)
     pst = ES.device_stencil(pw, Float64)
     k0, wt, dw = ES.window_stencil(pst, 10.5)
     @test k0 == 8 && isapprox(wt[3], wt[4]; rtol=1e-12)                  # symmetric about the particle
-    @test isapprox(wt[3], pw.pf(1 / 6); rtol=1e-12)
+    @test isapprox(wt[3], pw.pf(1 / 6) - pw.edge; rtol=1e-12)
     D = ES.window_deconvolution(ES.BSplineWindow(4), 16)
     @test isapprox(D[1], 1.0; rtol=1e-14) && all(isfinite, D)
     @test all(isfinite, ES.window_deconvolution(ES.BSplineWindow(5), 16))  # odd-order Nyquist handled
+end
+
+@testset "Electrostatics: prolate window vanishes at the support edge" begin
+    c(eps) = ES.prolate_shape_for_tolerance(eps)
+    for (P, shape) in ((4, c(2.5e-4)), (5, c(5e-4)), (6, c(5e-5)), (8, c(5e-6)))
+        w = ES.ProlateWindow(P, shape)
+        @test w.edge == w.pf(1.0) && w.edge > 0
+        # the stencil base changes at integer u (even P) or half-integer u (odd P); the node weights
+        # just left and right of that position agree, a node missing on one side having weight 0
+        u0 = iseven(P) ? 7.0 : 7.5
+        for T in (Float64, Float32)
+            st = ES.device_stencil(w, T)
+            uL, uR = T === Float64 ? (u0 - 1e-13, u0 + 1e-13) : (prevfloat(T(u0)), T(u0))
+            kL, wL, _ = ES.window_stencil(st, uL)
+            kR, wR, _ = ES.window_stencil(st, uR)
+            @test ES._window_base(st, uL) == kL != kR == ES._window_base(st, uR)
+            nodesL = Dict(kL + j - 1 => wL[j] for j in 1:P)
+            nodesR = Dict(kR + j - 1 => wR[j] for j in 1:P)
+            jump = maximum(abs(get(nodesL, k, 0.0) - get(nodesR, k, 0.0)) for k in union(keys(nodesL), keys(nodesR)))
+            @test jump <= (T === Float64 ? 1e-10 : 2e-6)
+        end
+    end
+end
+
+# The mesh energy is continuous when a particle moves into the next mesh cell. Particle 1 is moved by
+# 1e-9 of a mesh spacing along x over two spacings in steps of h/20 (this includes the cell changes
+# at integer and half-integer mesh coordinates).
+@testset "Electrostatics: mesh energy continuous across cell changes" begin
+    C = 1.0; rc = 3.8
+    R, q = _es_cloud(200, _ES_L; seed=4)
+    mesh = (18, 18, 20)
+    h = _ES_L[1] / mesh[1]
+    for (tol, P) in ((1e-3, 5), (1e-4, 6))
+        st = _es_state(R, q, _ES_L, _esp(C, rc, tol, mesh, P))
+        E0, _, _ = _es_eval(st)
+        jump = 0.0
+        for i in 0:39
+            xs = -h + i * h / 20
+            Es = map((xs - 0.5e-9 * h, xs + 0.5e-9 * h)) do x
+                copyto!(st.rx, vcat(x, Float64.(R[1, 2:end])))
+                _es_eval(st)[1]
+            end
+            jump = max(jump, abs(Es[2] - Es[1]) / abs(E0))
+        end
+        @test jump <= 1e-9
+    end
+end
+
+@testset "Electrostatics: prolate window per-node polynomial stencil" begin
+    # value and τ-derivative of stored node polynomial h (1-based) at τ, Horner in BigFloat
+    function horner_big(c, tau, h)
+        p = big(c[end][h]); dp = big(0.0); t = big(tau)
+        for k in length(c) - 1:-1:1
+            dp = dp * t + p
+            p = p * t + big(c[k][h])
+        end
+        return Float64(p), Float64(dp)
+    end
+    wsel = ES.ProlateWindow(6, ES.prolate_shape_for_tolerance(5e-5))
+    @test_throws ArgumentError ES.device_stencil(wsel, Float32; evaluator=:horner)
+    @test ES.device_stencil(wsel, Float32; evaluator=:chebyshev) isa ES.ProlateStencil{6,Float32}
+    @test ES.device_stencil(wsel, Float32) isa ES.ProlatePolyStencil{6,Float32}
+
+    for (P, tol) in ((4, 2.5e-4), (5, 5e-4), (6, 5e-5), (8, 5e-6), (9, 1.5e-6), (13, 5e-10)), T in (Float32, Float64)
+        w = ES.ProlateWindow(P, ES.prolate_shape_for_tolerance(tol))
+        H = cld(P, 2)
+        st = ES.device_stencil(w, T)
+        cheb = ES.device_stencil(w, T; evaluator=:chebyshev)
+        ref = ES.device_stencil(w, Float64; evaluator=:chebyshev)
+        C = ES.prolate_node_polynomials(w, T)
+        @test st isa ES.ProlatePolyStencil{P,T} && ES.device_stencil(w, T; evaluator=:polynomial) isa ES.ProlatePolyStencil{P,T}
+        @test cheb isa ES.ProlateStencil{P,T}
+        @test size(C, 1) == H && length(st.c) == size(C, 2) && all(length(ck) == H for ck in st.c)
+        deg = size(C, 2) - 1
+        @test iseven(deg) && 6 <= deg <= 24
+        T === Float32 && @test deg <= size(ES.prolate_node_polynomials(w, Float64), 2) - 1
+
+        dmax = (2 / P) * maximum(y -> abs(ES.prolate_derivative(w.pf, y)), range(-1, 1; length=2001))
+        marks = vcat(T.(-2.5:0.5:3.0), T[17, 17.5, 255, 255.5])
+        us = vcat(marks, prevfloat.(marks), T.(range(-6.3, 41.7; length=301)))
+        # against the Float64 Chebyshev reference, node by node; the cells differ only where u + ½
+        # rounds up to an integer in T (odd P, u = prevfloat(0.5f0)), and the node outside the
+        # common range then carries a weight that is zero at the edge of the window support
+        ew = ed = ewpf = edpf = epw = epd = enode = efd = 0.0
+        samek0 = true
+        for u in us
+            k0, wt, dw = ES.window_stencil(st, u)
+            r0, wr, dr = ES.window_stencil(ref, Float64(u))
+            samek0 &= k0 == ES._window_base(cheb, u) && ES._window_base(st, u) == k0 &&
+                      (k0 == r0 || (k0 == r0 + 1 && u + T(0.5) != Float64(u) + 0.5))
+            _, tau = ES._prolate_cell(Val(P), u)
+            for j in 0:P - 1
+                i = k0 + j - r0
+                if 0 <= i < P
+                    ew = max(ew, abs(wt[j + 1] - wr[i + 1]))
+                    ed = max(ed, abs(dw[j + 1] - dr[i + 1]))
+                end
+                if T === Float64
+                    y = (k0 + j - u) * 2 / P
+                    ewpf = max(ewpf, abs(wt[j + 1] - (w.pf(y) - w.edge)))
+                    edpf = max(edpf, abs(dw[j + 1] + (2 / P) * ES.prolate_derivative(w.pf, y)))
+                end
+                # dw is the exact derivative of the stored polynomial (mirror nodes at −τ)
+                p, dp = j < H ? horner_big(st.c, tau, j + 1) : horner_big(st.c, -tau, P - j)
+                epw = max(epw, abs(wt[j + 1] - p))
+                epd = max(epd, abs(dw[j + 1] - (j < H ? dp : -dp)))
+                for jj in (Int32(j), j)
+                    kn, wn, dn = ES._window_node(st, u, jj)
+                    samek0 &= kn == k0
+                    enode = max(enode, abs(wn - wt[j + 1]), abs(dn - dw[j + 1]))
+                end
+            end
+            if T === Float64
+                h = 1e-5
+                if ES._window_base(st, u - h) == ES._window_base(st, u + h)
+                    _, wp, _ = ES.window_stencil(st, u + h)
+                    _, wm, _ = ES.window_stencil(st, u - h)
+                    efd = max(efd, maximum(abs.((wp .- wm) ./ 2h .- dw)))
+                end
+            end
+        end
+        @test samek0
+        @test ew <= (T === Float32 ? 2.5e-7 : 6e-14)
+        @test ed <= (T === Float32 ? 5e-7 : 3e-11) * dmax
+        @test epw <= 2eps(T) && epd <= 2eps(T)
+        @test enode <= 2eps(T)
+        if T === Float64
+            @test ewpf <= 1.5e-14 && edpf <= 3e-12 * dmax
+            @test efd <= 1e-9 * dmax                                          # dw = d(weights)/du
+        end
+
+        # mirror symmetry: weights at −τ are those at τ reversed. The centre node of an odd stencil
+        # is the only polynomial mapped onto itself; its odd coefficients are round-off of the fit,
+        # visible in Float64 only.
+        oddf64 = isodd(P) && T === Float64
+        emw = emd = 0.0
+        for m in (T(5), T(37)), k in 1:31, s in (1, -1)
+            tau = T(s * k / 64)
+            c = iseven(P) ? m + T(0.5) : m
+            _, wa, da = ES.window_stencil(st, c + tau)
+            _, wb, db = ES.window_stencil(st, c - tau)
+            emw = max(emw, maximum(abs.(reverse(wa) .- wb)))
+            emd = max(emd, maximum(abs.(reverse(da) .+ db)))
+        end
+        @test emw <= (oddf64 ? 32 : 4) * eps(T) && emd <= (oddf64 ? 1024 : 4) * eps(T)
+
+        # continuity across cell boundaries: node polynomial h at τ = ½ is node h − 1 at τ = −½
+        ctol = (T === Float32 ? 4 : 24) * eps(T)
+        @test all(abs(ES._node_poly(st.c, T(0.5), Val(h))[1] - ES._node_poly(st.c, T(-0.5), Val(h - 1))[1]) <= ctol for h in 2:H)
+        ejump = 0.0
+        for b in T.((-1, 0, 3, 29, 255)) .+ (isodd(P) ? T(0.5) : zero(T))
+            ua = prevfloat(b)
+            ka, wa, _ = ES.window_stencil(st, ua)
+            kb, wb, _ = ES.window_stencil(st, b)
+            @test kb - ka in (0, 1)
+            for j in 0:P - 1
+                i = ka + j - kb
+                0 <= i < P && (ejump = max(ejump, abs(wa[j + 1] - wb[i + 1]) - dmax * (b - ua)))
+            end
+        end
+        @test ejump <= ctol
+    end
 end
 
 @testset "Electrostatics: cuFFT wrapper normalisation" begin
@@ -533,10 +695,7 @@ end
     # mesh identities: B-spline spreading conserves charge; packed R2C = full complex FFT
     st = _es_state(R, q .+ 0.0, _ES_L, _spme(C, rc, α, (20, 22, 24), 5))
     s = st.electrostatics; ws = s.ws
-    fill!(ws.grid, 0.0)
-    K = Int32.(ws.mesh)
-    @cuda threads=128 blocks=cld(100, 128) ES._spread_kernel!(ws.grid_flat, st.rx, st.ry, st.rz, st.charge,
-        s.identity_order, _ES_L, K..., s.stencil)
+    ES.mesh_transform!(s, st.rx, st.ry, st.rz, st.charge, false, s.identity_order; part=:spread)
     G = Array(ws.grid)
     @test isapprox(sum(G), sum(q); atol=1e-12)
     mul!(ws.spec, ws.plan_fwd, ws.grid)
@@ -601,4 +760,56 @@ end
     @test_throws ArgumentError ES.ElectrostaticsSpec(coulomb_prefactor=1.0, real_cutoff=3.0,
         split=ES.ProlateSplit(3.0, ES.prolate_shape_for_tolerance(1e-6)), window=ES.ProlateWindow(12, c1),
         mesh=(24, 24, 24), influence=:esp)
+end
+
+@testset "Electrostatics: prolate window resolved by the solver precision" begin
+    WF = ParticleDynamics.Workflow
+    c(eps) = ES.prolate_shape_for_tolerance(eps)
+    @test isapprox(ES.min_nyquist_attenuation(Float32), 4.84e-7; rtol=1e-2)
+    @test isapprox(ES.min_nyquist_attenuation(Float64), 7.33e-13; rtol=1e-2)
+    w8 = ES.ProlateWindow(8, c(5e-6))                             # rule window of ε = 1e-5
+    @test isapprox(ES.window_nyquist_attenuation(w8),
+                   (ES.prolate_window_transform(w8, pi) / ES.prolate_window_transform(w8, 0.0))^2; rtol=1e-12)
+    @test isapprox(ES.window_nyquist_attenuation(w8), 3.910e-6; rtol=1e-3)
+    @test ES.window_resolved(w8, Float32) && ES.window_resolved(w8, Float64)
+    w10 = ES.ProlateWindow(10, c(5e-7))                           # rule window of ε = 1e-6
+    @test !ES.window_resolved(w10, Float32) && ES.window_resolved(w10, Float64)
+    @test !ES.window_resolved(16, c(5e-11), Float64)              # rule window of ε = 1e-10
+    @test ES.window_resolved(ES.BSplineWindow(12), Float32)
+    # the rule keeps its window shape wherever the precision resolves it
+    for eps in (1e-3, 5e-4, 1e-4, 5e-5, 1e-5), T in (Float32, Float64)
+        @test WF.esp_window_shape(eps, WF.esp_order_for_tolerance(eps), T) == c(eps / 2)
+    end
+    for eps in (1e-6, 1e-8)
+        @test WF.esp_window_shape(eps, WF.esp_order_for_tolerance(eps), Float64) == c(eps / 2)
+    end
+    # and widens it to the bound elsewhere
+    for (eps, T) in ((4.2e-5, Float32), (3e-6, Float32), (1e-6, Float32), (1e-8, Float32), (1e-10, Float64))
+        P = WF.esp_order_for_tolerance(eps)
+        c1 = WF.esp_window_shape(eps, P, T)
+        @test c1 > c(eps / 2)
+        @test ES.window_resolved(P, c1, T)
+        @test !ES.window_resolved(P, c1 - 2e-3, T)
+        @test P <= ES.max_prolate_order(c1)
+    end
+    rc = 4.0
+    f = ESP(coulomb_prefactor=1.0, real_cutoff=rc, tolerance=1e-6)
+    s32 = electrostatics_spec(f, Float32)
+    s64 = electrostatics_spec(f, Float64)
+    @test s32.window.order == s64.window.order == 10
+    @test s32.window.shape > s64.window.shape == c(5e-7)
+    @test s32.split.shape == s64.split.shape && s32.mesh_spacing == s64.mesh_spacing
+    @test electrostatics_spec(f).window.shape == s64.window.shape
+    # the solver refuses a window its precision does not resolve; the widened window
+    # reaches the accuracy of Float32 forces
+    R, q = _es_cloud(200, _ES_L; seed=11)
+    _, Fref, _ = ewald_reference(R, q, Matrix(Diagonal(collect(_ES_L))); C=1.0)
+    @test_throws ArgumentError _es_state(R, q, _ES_L, s64; T=Float32)
+    _, F64, _ = _es_eval(_es_state(R, q, _ES_L, s64))
+    _, F32, _ = _es_eval(_es_state(R, q, _ES_L, s32; T=Float32))
+    @test _relrms(F64, Fref) < 5e-6
+    @test _relrms(F32, Fref) < 1e-5
+    st32 = _es_state(R, q, _ES_L, s32; T=Float32)
+    attach_electrostatics!(st32, f)                               # descriptor path uses the state's precision
+    @test st32.electrostatics.spec.window.shape == s32.window.shape
 end

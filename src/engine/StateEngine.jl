@@ -445,8 +445,8 @@ function _capture_engine(st::SC.SimulationState{T},dt::T,spec=SC.nve(st);evaluat
     ((thermostat===nothing || (thermostat isa CSVRData && nbaths(thermostat)==1 && D==3)) &&
         all(f->fusable(f) || (model isa ChargedPairs && f isa MassFeature),features) && !(model isa NoPairs)) ||
         (s=merge(s,(;fused=false))) # other thermostats, most features and pair-free states run unfused
-    # the fused gather-kick differentiates the potential grid (16-lane AD gather): P3M-ik (and the
-    # one-thread gathers) run unfused, through `mesh_gather!`
+    # the fused gather-kick differentiates the potential grid (analytic-differentiation gather):
+    # P3M-ik runs unfused, through `mesh_gather!`
     (st.electrostatics===nothing || ES.gather_sets(st.electrostatics)) || (s=merge(s,(;fused=false)))
     # Spec-owned per-particle arrays are permuted with the particles by sorting.
     spec_real=thermostat isa Union{LangevinData,BrownianData} ? (thermostat.gamma,thermostat.noise) : ()

@@ -14,7 +14,6 @@ using ..NeighborLists: _ell_index
 using ..BondedForces   # for BondList in exclusions
 
 include("nonbonded/PairMath.jl")
-include("nonbonded/BondExclusionsCUDA.jl")
 include("nonbonded/LJELLEngineKernels.jl")
 
 end # module

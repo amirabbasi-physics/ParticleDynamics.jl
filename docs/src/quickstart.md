@@ -1,25 +1,34 @@
-# Quickstart
+# Your first simulation
 
-This page shows the recommended public workflow API. It is the interface normal
-examples and user scripts should use.
+Start with 128 repulsive particles in a periodic 2D box. A Langevin bath
+sets the temperature, and scheduled writers save measurements and a trajectory.
+The script uses reduced units with particle mass and diameter equal to one.
 
-`ParticleDynamics.jl` is currently CUDA-first, so the workflow still builds a
-GPU-resident low-level simulation under the hood. The workflow layer exists to
-hide manual `build_simulation(...)`, manual stepping loops, manual GSD open/close
-calls, and manual observable plumbing.
+## Before you start
 
-## Conceptual model
+These development docs describe version 0.7.0. Use a repository checkout so
+this guide and the installed API match:
 
-- `ParticleSystem`: positions, box, types, masses, velocities, topology
-- `Group` / `Groups`: particle selections
-- `Force`: physical interactions
-- `Integrator`: `dt`, scheme, forces, methods, thermostats
-- `Observable`: sampled quantities
-- `Writer`: scheduled output
-- `Stage`: a named block of running
-- `Simulation`: assembled workflow object
+```sh
+git clone https://github.com/amirabbasi-physics/ParticleDynamics.jl.git
+cd ParticleDynamics.jl
+julia --project -e 'using Pkg; Pkg.instantiate()'
+```
 
-## Minimal workflow
+From that directory, check that Julia can use your NVIDIA GPU:
+
+```sh
+julia --project -e 'using CUDA; CUDA.functional() || error("A working CUDA installation is required")'
+```
+
+For a registered release, use `Pkg.add("ParticleDynamics")` and documentation
+that matches that version.
+
+## Run a small fluid
+
+Save the following as `first_simulation.jl` in the checkout and run
+`julia --project first_simulation.jl`. The first run includes compilation;
+later runs in the same Julia session are faster.
 
 ```julia
 using ParticleDynamics
@@ -77,6 +86,23 @@ reset_step!(sim, 0)
 run!(sim, Stage(:production, steps=1_000))
 ```
 
+## Inspect the output
+
+The script writes two files in your working directory:
+
+| File | Contents | What to look for |
+|:--|:--|:--|
+| `obs.csv` | Temperature, kinetic energy and potential energy every 50 steps | The kinetic temperature fluctuates around the bath target after equilibration |
+| `traj.gsd` | Particle configurations every 200 steps | Motion in the periodic box; open the trajectory with a GSD-compatible viewer |
+
+The warmup uses a smaller timestep, then production uses the integrator's
+configured timestep. `reset_observables!` starts fresh measurement intervals;
+`reset_step!` restarts step numbering. Writers keep the same output session
+across the stages, so the files also contain the warmup records.
+
+This short run checks the workflow. Increase the equilibration and production
+lengths before drawing physical conclusions.
+
 ## NVE production after equilibration
 
 Pure NVE on the workflow API is expressed as `ConstantVolume(group)` with no
@@ -114,9 +140,7 @@ step 0 and sets the initial velocities explicitly on the `ParticleSystem`.
 
 ## Groups apply methods and observables
 
-Groups are currently particle selections. They are designed so the same
-high-level vocabulary can later grow to bonds, angles, or other topology
-domains without changing how users think about selection.
+Use particle types to give different groups their own dynamics or measurements.
 
 ```julia
 cold = Group(:cold, TypeSelection(:C))
@@ -146,27 +170,24 @@ Writers own file management and run on schedules:
 - `AtSteps([0, 100, 1_000])`
 - `Between(first, last; every=...)`
 
-This keeps examples free of manual `gsd_open`, `gsd_close`, `write_gsd_frame!`,
-manual CSV header logic, and direct `collect_step_observables(...)` calls.
+Choose a schedule for each writer; file opening, sampling and closing are handled
+by the simulation. See [trajectories and tables](manual/io.md).
 
-## Low-level expert API
+## Try another system
 
-The older expert API is still supported:
-
-- `build_simulation`
-- `step!`
-- `step_graph!`
-- `nve`, `velocityverlet`, `baoab`, `baoa`, `gsm`, `eulerheun`, `eulermaruyama`, `nosehooverchain`, `csvr`
-- `ParticleDynamics.SimulationCore`
-
-Use that surface if you need direct control over the GPU-resident
-`SimulationState`, debugging of stepping internals, or custom orchestration that
-the workflow layer intentionally does not expose.
+Explore [runnable examples](examples.md) for a 3D fluid, bonded polymers,
+active particles and two-temperature mixtures. The
+[workflow reference](manual/workflow.md) lists the available objects and arguments.
 
 ## Current limitations
 
-- CUDA is the main supported backend.
-- Angles, dihedrals, impropers, electrostatics, and similar force-field
-  features are future-ready in the vocabulary but not generally implemented.
-- `ForceField` is a stable container concept, but compiled support is limited to
-  the existing low-level kernels and wrappers.
+- CUDA is the only backend; a CUDA-capable NVIDIA GPU is required.
+- Bonded terms cover bonds, angles, dihedrals and impropers. CMAP terms and
+  general holonomic constraints beyond rigid three-site water are not
+  implemented.
+- Long-range electrostatics covers 3D orthorhombic periodic boxes with
+  tin-foil boundary conditions on a single GPU. Slab, triclinic and multi-GPU
+  electrostatics are not implemented.
+- Barostats are isotropic and 3D, see
+  [Bonded Terms, Minimization and NPT](manual/bonded_minimization_npt.md) for the
+  supported integrator combinations.

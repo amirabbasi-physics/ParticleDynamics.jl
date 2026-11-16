@@ -8,7 +8,7 @@ check_golden_fixtures()
 
 using CUDA
 using ParticleDynamics
-using ParticleDynamics: SimulationCore, BrownianIntegrators, LangevinIntegrators, Filters
+using ParticleDynamics: SimulationCore, Filters
 
 CUDA.allowscalar(false)
 
@@ -20,8 +20,6 @@ include("test_periodic_displacement_math.jl")
 
 include("utils.jl")
 using .TestUtils
-include("params_from_examples.jl")
-using .ParamsFromExamples
 
 @testset "ParticleDynamics.jl (GPU)" begin
     if !gpu_required()
@@ -54,10 +52,10 @@ using .ParamsFromExamples
         include("test_workflow_barostats.jl")
         include("test_gpu_residency.jl")
         include("test_bonded_exclusions.jl")
-        include("test_phase4a_forces.jl")
-        include("test_phase4a_pair_pbc.jl")
-        include("test_phase4a_neighbors.jl")
-        include("test_phase4b_stochastic.jl")
+        include("test_analytic_pair_forces.jl")
+        include("test_pair_matrix_pbc.jl")
+        include("test_neighbor_backend_parity.jl")
+        include("test_stochastic_physics.jl")
         include("test_neighbors.jl")
         include("test_neighbor_displacement.jl")
         include("test_device_neighbors_gpu.jl")
@@ -120,6 +118,6 @@ using .ParamsFromExamples
         include("test_rigid_water_gpu.jl")
         include("test_collisions.jl")
         include("test_io_gsd.jl")
-        include("test_ir_phase2.jl")
+        include("test_regressions.jl")
     end
 end

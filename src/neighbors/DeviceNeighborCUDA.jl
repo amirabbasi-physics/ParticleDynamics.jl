@@ -500,7 +500,7 @@ end
 _cell_sub(nb) = round(Int, Float64(nb.cutoff + nb.skin) / Float64(nb.cell_size))
 
 # Device-box rows: one thread per particle, the cell-row stencil with the current box lengths
-# (S1: one cell per list radius, the 27-cell kernel).
+# (one cell per list radius, the 27-cell kernel).
 function _kernel_neighbors3g!(rx::CuDeviceVector{T}, ry, rz, neighbors_index, neighbors_flat, counts, cell_offsets,
                               particle_ids_sorted, cell_of_particle, geom, nx::Int32, ny::Int32, nz::Int32, rl2::T,
                               cap::Int32, candidates, ::Val{S1}=Val(true)) where {T,S1}

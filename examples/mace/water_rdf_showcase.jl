@@ -1,4 +1,4 @@
-# Showcase: liquid water with MACE-OFF (small) in ParticleDynamics.jl.
+# Showcase: liquid water with MACE-OFF (small) in ParticleDynamics.
 #
 # 64 H2O (192 atoms) at 0.997 g/cm^3 — a molecular liquid this engine cannot
 # simulate classically (it has no angle/dihedral/electrostatics terms); the

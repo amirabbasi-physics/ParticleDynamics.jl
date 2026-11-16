@@ -75,7 +75,6 @@ end
         @test kinetic_dof(st; remove_com=true) == 3
         @test_throws ArgumentError attach_rigid_water!(st,[(1,2,3)];oh,hh)
         @test_throws ArgumentError set_cell_and_positions!(st,(2.1,2.1,2.1))
-        @test_throws ArgumentError SimulationCore._validate_rigid_integrator!(st,nothing)
         @test_throws ArgumentError SimulationCore._check_barostat_state(st,"MC")     # atom-wise (C-rescale)
         @test SimulationCore._check_barostat_state(st,"MC";molecular=true)===nothing  # molecular MC moves
         @test_throws ArgumentError minimize!(st; method=FIRE(dt_initial=0.001,dt_max=0.01),force_tolerance=1e-6,max_displacement=0.01)

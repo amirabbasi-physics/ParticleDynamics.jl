@@ -1,4 +1,4 @@
-# MACE foundation models in ParticleDynamics.jl
+# MACE foundation models in ParticleDynamics
 
 This directory connects the engine to **MACE machine-learned interatomic
 potentials** (MACE-MP-0 for materials, MACE-OFF for organic systems) through

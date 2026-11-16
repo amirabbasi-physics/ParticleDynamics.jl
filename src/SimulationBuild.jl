@@ -142,7 +142,7 @@ Key behaviors:
   rows (3D; see [`set_nonbonded_backend!`](@ref), which also documents
   `prune_buffer`).
 
-Example (mirrors `examples/2D_example.jl`, scaled down to N=4096 for testing):
+Example (2D WCA fluid, N=4096):
 
 ```julia
 st = build_simulation(N=4096, box=(250f0, 250f0),

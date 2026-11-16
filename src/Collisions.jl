@@ -17,10 +17,6 @@ export enable_collision_counting!, disable_collision_counting!,
     return dx
 end
 
-@inline function _lut_index(ti::Int32, tj::Int32, lut::CuDeviceMatrix{Int32})
-    return lut[ti, tj]
-end
-
 @inline function _bond_cache(i::Int32,
                              bindex::CuDeviceVector{Int32},
                              bflat::CuDeviceVector{Int32},
@@ -462,8 +458,8 @@ end
     enable_collision_counting!(st; ntypes=nothing, bins=:all_pairs)
 
 Attach GPU buffers that count contact-entry events (pairs whose separation
-crosses below the collision cutoff). `examples/TwoT_2D_LD_VV.jl` enables this
-with `ntypes=2` to log `cold/cold`, `cold/hot`, and `hot/hot` encounters.
+crosses below the collision cutoff). With `ntypes=2`, a two-temperature run
+logs `cold/cold`, `cold/hot`, and `hot/hot` encounters.
 
 # Arguments
 - `ntypes`: Number of particle types; defaults to `maximum(Array(st.typeid))`.
@@ -549,7 +545,7 @@ end
     collisions_reset_counts!(st)
 
 Clear the histogram without reinitializing the contact state. Handy after a
-warmup period (mirrors the procedure in `examples/TwoT_2D_LD_VV.jl`).
+warmup period.
 """
 function collisions_reset_counts!(st)
     if st.coll_enabled && st.coll_counts !== nothing
@@ -578,8 +574,7 @@ end
     set_collision_pair_cutoffs!(st, rcut_pair)
 
 Override the contact cutoff used for counting with an `ntypes×ntypes` matrix.
-Each entry stores the distance (not squared). This mirrors the `RCUT_PAIR`
-setup in `examples/3D_stencil_two_sizes.jl`.
+Each entry stores the distance (not squared).
 """
 function set_collision_pair_cutoffs!(st, rcut_pair::AbstractMatrix{<:Real})
     T = eltype(st.rx)

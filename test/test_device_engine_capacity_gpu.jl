@@ -14,7 +14,7 @@ using Test, CUDA, ParticleDynamics, Random
 const SC=ParticleDynamics.SimulationCore
 const DE=ParticleDynamics.DeviceEngine
 const NL=ParticleDynamics.NeighborLists
-include(joinpath(@__DIR__,"..","scripts","capture_staged_golden.jl"))
+include(joinpath(@__DIR__,"golden_capture.jl"))
 
 function spec_t(kind,st,T;dt)   # with temperature: the noise path is replayed too
     kind===:nve && return SC.nve(st)

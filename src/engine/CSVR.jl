@@ -204,7 +204,7 @@ end
     return z,(Float64(w3)+0.5)*2.0^-32
 end
 
-# Gamma(shape, 1) by Marsaglia–Tsang (staged `_csvr_gamma_sample`), Float64.
+# Gamma(shape, 1) by Marsaglia–Tsang, Float64.
 @inline function _csvr_gamma(shape::Float64,seed,step,b,k0::Int)
     shape>0 || return 0.0,k0
     k=k0; boost=1.0

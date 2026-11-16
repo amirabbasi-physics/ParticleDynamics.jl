@@ -153,11 +153,6 @@ function Topology(; bonds=Tuple{Int32,Int32}[],
     )
 end
 
-function _default_box(dim::Integer, ::Type{T}=Float64) where {T<:AbstractFloat}
-    dim in (2, 3) || throw(ArgumentError("ParticleSystem only supports 2D or 3D positions; got dim=$(dim)."))
-    return PeriodicBox(ntuple(_ -> one(T), dim))
-end
-
 _coerce_box(box::PeriodicBox) = box
 _coerce_box(box::Tuple) = PeriodicBox(box)
 _coerce_box(box::AbstractVector{<:Real}) = PeriodicBox(box)

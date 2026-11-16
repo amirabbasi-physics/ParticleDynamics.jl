@@ -50,7 +50,7 @@ if os.path.exists(p):
     _, (r, g) = read_csv(p)
     fig, ax = plt.subplots(figsize=(8.6, 5.2))
     ax.plot(r, g, lw=3.0, color=pd_style.NAVY, marker="o", markevery=8, ms=7,
-            label="ParticleDynamics.jl + MACE-OFF (64 H$_2$O, 10 ps NVE)")
+            label="ParticleDynamics + MACE-OFF (64 H$_2$O, 10 ps NVE)")
     # Experimental x-ray landmarks: Skinner et al., J. Chem. Phys. 138, 074506 (2013)
     ax.plot([2.80, 3.45, 4.5], [2.57, 0.84, 1.12], "s", color=pd_style.RED, ms=10,
             label="experiment (x-ray, Skinner 2013)", zorder=5)

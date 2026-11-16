@@ -1,9 +1,8 @@
 """
-    Simulation(system; groups=Groups(), integrator=nothing, observables=Observable[], writers=Writer[], device=nothing, precision=Float64, seed=nothing, state=nothing, lowlevel_integrator=nothing, prepared=false, metadata=Dict())
+    Simulation(system; groups=Groups(), integrator=nothing, observables=Observable[], writers=Writer[], device=nothing, precision=Float64, seed=nothing, metadata=Dict())
 
-High-level workflow simulation object. It owns the particle system, groups,
-integrator, observables, writers, run metadata, and optionally a prepared
-low-level [`SimulationState`](@ref).
+Assemble a particle system, groups, integrator, observables and writers into a
+simulation. Call [`run!`](@ref) to prepare it and run one or more stages.
 """
 @kwdef mutable struct Simulation
     system::ParticleSystem

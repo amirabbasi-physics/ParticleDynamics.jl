@@ -1,4 +1,4 @@
-"""MACE reference calculation (pure Python) for ParticleDynamics.jl validation.
+"""MACE reference calculation (pure Python) for ParticleDynamics validation.
 
 Builds the Si216 validation system, computes energy + forces with MACE-MP-0
 (small, float64, CUDA), and saves everything needed by the Julia side to

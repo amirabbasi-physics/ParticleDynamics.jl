@@ -1,4 +1,4 @@
-# MLIP driver benchmark: ParticleDynamics.jl vs ASE driving the SAME MACE
+# MLIP driver benchmark: ParticleDynamics vs ASE driving the SAME MACE
 # model on the SAME system. With an MLIP, throughput is dominated by model
 # inference; this measures how much driver overhead each MD loop adds on top.
 #

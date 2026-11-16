@@ -1,7 +1,7 @@
 module DeviceArgonFusionGPUChecks
 using Test, CUDA, ParticleDynamics, LinearAlgebra
-include(joinpath(@__DIR__,"../benchmark/gromacs/DeviceArgonNVE.jl"))
-include(joinpath(@__DIR__,"../benchmark/gromacs/GPUForceReference.jl"))
+include(joinpath(@__DIR__,"device_argon_nve.jl"))
+include(joinpath(@__DIR__,"gpu_force_reference.jl"))
 const DA=DeviceArgonNVE
 const NL=ParticleDynamics.NeighborLists
 
@@ -83,13 +83,12 @@ end
         graphs=DA.capture_step(run;conditional),DA.capture_step(run;conditional,energy=true)
         controls=DA.capture_step(control;conditional),DA.capture_step(control;conditional,energy=true)
         addresses=map(pointer,(run.r...,run.v...,run.f...,run.fusion.maxbits,run.fusion.ticket))
-        worst=0.0
+        worst=0.0; ftol=T===Float32 ? 2e-5 : 3e-12
         for step in 1:300
             CUDA.launch(graphs[step%25==0 ? 2 : 1]); CUDA.launch(controls[step%25==0 ? 2 : 1])
-            ref=GPUForceReference.sampled_lj_oracle_gpu(run.r...,box,ids,1,1,2.5)
-            worst=max(worst,norm(permutedims(hcat(run.f...))-ref.F)/max(norm(ref.F),1))
+            worst=max(worst,GPUForceReference.lj_force_error(run.f,run.r,box,ids,1,1,2.5,ftol))
         end
-        @test worst<=(T===Float32 ? 2e-5 : 3e-12)
+        @test worst<=ftol
         s=NL.device_neighbor_status(run.neighbors); c=NL.device_neighbor_status(control.neighbors)
         @test s.step==c.step==300 && s.checks==c.checks
         d=NL.device_neighbor_diagnostics(run.neighbors)

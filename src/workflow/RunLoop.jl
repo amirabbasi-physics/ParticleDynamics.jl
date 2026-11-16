@@ -255,9 +255,9 @@ end
 """
     prepare!(sim)
 
-Prepare a workflow [`Simulation`](@ref) by building or validating its
-low-level state, materializing groups, compiling workflow forces/integrators,
-and preparing observable and writer contexts.
+Prepare a [`Simulation`](@ref) for running: validate its configuration, resolve
+particle groups, initialize forces and dynamics, and set up measurements and
+output. Call this again after replacing the integrator.
 """
 function prepare!(sim)
     _apply_workflow_seed!(sim.seed)

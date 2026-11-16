@@ -1,4 +1,4 @@
-"""ParticleDynamics.jl house plot style.
+"""ParticleDynamics house plot style.
 
 Matches the published benchmark figures: bold sans-serif navy titles, gray
 subtitles, the fixed five-engine categorical palette, light dashed grid,
@@ -13,7 +13,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 # fixed categorical order (never reassign on filtering)
-NAVY = "#1e3a8a"      # ParticleDynamics.jl / primary series
+NAVY = "#1e3a8a"      # ParticleDynamics / primary series
 RED = "#cc3b44"       # OpenMM / experiment or reference points
 PURPLE = "#7d3cb5"    # GROMACS / tertiary
 TEAL = "#2a8f85"      # LAMMPS / quaternary

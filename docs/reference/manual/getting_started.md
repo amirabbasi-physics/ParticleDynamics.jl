@@ -1,0 +1,135 @@
+# Low-Level / Expert API
+
+This page documents the older low-level stepping surface built around
+`SimulationState`, `build_simulation`, and explicit integrator specs.
+
+Use this layer when you need direct control over GPU-resident arrays, manual
+stepping, or debugging of execution details. Normal scripts should prefer the
+workflow API shown in the [Quickstart](../../src/quickstart.md).
+
+## 1) Install and verify CUDA
+
+```julia
+using Pkg
+Pkg.add("ParticleDynamics")
+```
+
+```julia
+using CUDA
+CUDA.functional() || error("CUDA is not functional on this machine.")
+```
+
+`ParticleDynamics` is GPU-only: simulation buffers stay GPU-resident, and the
+current implementation uses CUDA-backed arrays internally.
+
+## 2) First low-level simulation (2D, tiny and fast)
+
+```julia
+using ParticleDynamics: build_simulation, step!, nve, velocityverlet, baoab, eulerheun, eulermaruyama,
+    write_xyz!, write_observables_csv!, gsd_open, gsd_close, write_gsd_frame!
+using CUDA
+
+N = 64
+dt = 2.0f-4
+sigma = 1.0f0
+rcut = Float32(2^(1/6)) * sigma  # WCA cutoff
+
+st = build_simulation(
+    N=N,
+    box=(40.0f0, 40.0f0),
+    cutoff=rcut,
+    skin=0.4f0,
+    cap=Int32(32),
+    neigh_interval=10,
+    epsilon=10.0f0,
+    sigma=sigma,
+    gamma=50.0f0,
+    temperature=1.0f0,
+    nonbonded=:wca,
+    precision=:f32,
+)
+
+# Assign a nonoverlapping configuration before the first step. The low-level
+# constructor allocates coordinates and defers building the neighbor list.
+copyto!(st.rx, Float32[2 * mod(i - 1, 8) - 7 for i in 1:N])
+copyto!(st.ry, Float32[2 * ((i - 1) ÷ 8) - 7 for i in 1:N])
+
+# Preferred stepping path: keep an explicit integrator spec and reuse it.
+vv = velocityverlet(st; gamma=50.0f0, temperature=1.0f0, dt=dt)
+for _ in 1:200
+    step!(st, vv, dt; compute_energy=false)
+end
+
+@show st.step
+```
+
+Expected result: `st.step == 200` and finite state arrays.
+
+## 3) Explicit integrator selection
+
+```julia
+# Deterministic NVE velocity Verlet
+nve_spec = nve(st; dt=dt)
+step!(st, nve_spec, dt; compute_energy=true)
+
+# Langevin BAOAB
+bao = baoab(st; gamma=50.0f0, temperature=1.0f0, dt=dt)
+step!(st, bao, dt; compute_energy=true)
+
+# Brownian Euler-Maruyama
+em = eulermaruyama(st; gamma=50.0f0, temperature=1.0f0, dt=dt)
+step!(st, em, dt; compute_energy=false)
+
+# Brownian midpoint (Euler-Heun)
+eh = eulerheun(st; gamma=50.0f0, temperature=1.0f0, dt=dt)
+step!(st, eh, dt; compute_energy=false)
+```
+
+Explicit specs are the stepping API. Stochastic parameters such as `gamma`,
+temperature, and OU correlation time belong to the integrator constructor, not
+to `SimulationState`.
+
+### Important runtime policy
+
+For stochastic paths that divide by friction, `gamma` must be strictly positive.  
+Tests enforce informative errors for invalid `gamma <= 0` usage on BAOAB/Brownian/EM paths.  
+Use `nve(st; dt=...)` for deterministic inertial dynamics instead of encoding
+NVE through zero-friction stochastic parameters.
+
+## 4) Simple output writing
+
+```julia
+write_xyz!("traj.xyz", st, st.step)
+write_observables_csv!("obs.csv", st.step; Epot=st.Epot, Ekin=st.Ekin, dq=st.dq)
+
+gsdh = gsd_open("traj.gsd")
+write_gsd_frame!(gsdh, st; diameter=1.0f0, types_names=["A"], step=st.step)
+gsd_close(gsdh)
+```
+
+## 5) Reproducibility basics
+
+```julia
+using Random, CUDA
+Random.seed!(0xBADC0DE)
+CUDA.seed!(UInt64(0xBADC0DE))
+```
+
+This gives reproducible runs at the statistical/moment level.  
+Bitwise-identical trajectories across different GPUs/toolchains are not guaranteed.
+
+Advanced orchestration helpers that are not part of the default import surface
+remain available under qualified paths such as `ParticleDynamics.SimulationCore`.
+
+## 6) Where to copy realistic parameter sets
+
+Use repository examples as templates:
+
+- `examples/3D_LJ_NVE.jl`
+- `examples/TwoT_LJ2D_LD.jl`
+- `examples/SingleT_2D_MD_CSVR.jl`
+- `examples/2D_active_OU_brownian.jl`
+- `examples/3D_BD.jl`
+- `examples/3D_polymer_melt.jl`
+
+These scripts contain production-like parameter scales; for quick iteration/tests, downscale `N` and total steps first.

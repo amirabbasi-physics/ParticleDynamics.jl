@@ -149,7 +149,7 @@ for ax in axes:
 axes[0].set_ylabel("g(r)")
 
 pd_style.title(fig, "Liquid-water partial structure: foundation MLIP vs diffraction",
-               subtitle="ParticleDynamics.jl + MACE-OFF23(S) — 64 H₂O, 300 K, fully flexible molecules, no classical force field", y=0.995)
+               subtitle="ParticleDynamics + MACE-OFF23(S) — 64 H₂O, 300 K, fully flexible molecules, no classical force field", y=0.995)
 fig.text(0.5, 0.034,
          "Neutron (25 °C curve, Fig. 4): Tromp, Postorino, Neilson, Ricci & Soper, J. Chem. Phys. 101, 6210 (1994) · "
          "X-ray: Skinner et al., J. Chem. Phys. 138, 074506 (2013)",

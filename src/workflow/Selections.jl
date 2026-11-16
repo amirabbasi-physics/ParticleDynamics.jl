@@ -37,8 +37,7 @@ end
 """
     Group(name, selection; domain=:particles)
 
-Named workflow selection. Groups target particle subsets today and are designed
-to grow into bond/angle/dihedral selections later.
+Named particle selection for methods, observables and writers.
 """
 struct Group{S<:AbstractSelectionSpec}
     name::Symbol

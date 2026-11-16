@@ -1,13 +1,5 @@
 include("NVEFusion.jl")
 
-
-
-
-
-
-
-
-
 # Device-engine hooks; `ParticleDynamics.DeviceEngine` adds methods for its engine.
 # `_engine_boundary!` checks device status at an explicit host boundary.
 _engine_boundary!(::Nothing, st) = nothing
@@ -23,24 +15,10 @@ _drop_engine!(::Nothing, st) = nothing
 _evaluation_refusal(st, freeze_spring) = "unsupported configuration"
 
 """
-    finalize_step_counter!(st, integrator_id)
-
-Finalize step counters shared across integrators.
-"""
-function finalize_step_counter!(st::SimulationState,
-                                id::UInt8)
-    st.last_integrator = id
-    st.step += 1
-    return nothing
-end
-
-
-"""
     step!(st, spec, dt; compute_energy=true)
 
 Canonical explicit stepping API. Every step runs on the device engine
-(`ParticleDynamics.DeviceEngine` adds the methods for each integrator); there is
-no staged fallback.
+(`ParticleDynamics.DeviceEngine` adds the methods for each integrator).
 """
 function step!(st::SimulationState{T},
                spec::IntegratorSpec{T},
@@ -67,7 +45,7 @@ end
 Compatibility wrapper for explicit `VVParams` stepping.
 """
 function step!(st::SimulationState{T},
-               vv::LangevinIntegrators.VVParams{T},
+               vv::VVParams{T},
                dt::Real;
                compute_energy::Bool=true) where {T<:AbstractFloat}
     return step!(st, VVSpec(vv), dt; compute_energy=compute_energy)
@@ -79,7 +57,7 @@ end
 Compatibility wrapper for explicit `BAOABParams` stepping.
 """
 function step!(st::SimulationState{T},
-               bao::LangevinIntegrators.BAOABParams{T},
+               bao::BAOABParams{T},
                dt::Real;
                compute_energy::Bool=true) where {T<:AbstractFloat}
     return step!(st, BAOABSpec(bao), dt; compute_energy=compute_energy)
@@ -91,7 +69,7 @@ end
 Compatibility wrapper for explicit Brownian midpoint stepping.
 """
 function step!(st::SimulationState{T},
-               bp::BrownianIntegrators.BrownianParams{T},
+               bp::BrownianParams{T},
                dt::Real;
                compute_energy::Bool=true) where {T<:AbstractFloat}
     return step!(st, BrownianSpec(bp), dt; compute_energy=compute_energy)
@@ -103,7 +81,7 @@ end
 Compatibility wrapper for explicit Euler-Maruyama stepping.
 """
 function step!(st::SimulationState{T},
-               em::BrownianIntegrators.EMParams{T},
+               em::EMParams{T},
                dt::Real;
                compute_energy::Bool=true) where {T<:AbstractFloat}
     return step!(st, EMSpec(em), dt; compute_energy=compute_energy)
@@ -115,7 +93,7 @@ end
 Compatibility wrapper for explicit `VVParams` graph stepping.
 """
 function step_graph!(st::SimulationState{T},
-                     vv::LangevinIntegrators.VVParams{T},
+                     vv::VVParams{T},
                      dt::Real;
                      compute_energy::Bool=true) where {T<:AbstractFloat}
     return step_graph!(st, VVSpec(vv), dt; compute_energy=compute_energy)
@@ -127,7 +105,7 @@ end
 Compatibility wrapper for explicit `BAOABParams` graph stepping.
 """
 function step_graph!(st::SimulationState{T},
-                     bao::LangevinIntegrators.BAOABParams{T},
+                     bao::BAOABParams{T},
                      dt::Real;
                      compute_energy::Bool=true) where {T<:AbstractFloat}
     return step_graph!(st, BAOABSpec(bao), dt; compute_energy=compute_energy)
@@ -139,7 +117,7 @@ end
 Compatibility wrapper for explicit Brownian midpoint graph stepping.
 """
 function step_graph!(st::SimulationState{T},
-                     bp::BrownianIntegrators.BrownianParams{T},
+                     bp::BrownianParams{T},
                      dt::Real;
                      compute_energy::Bool=true) where {T<:AbstractFloat}
     return step_graph!(st, BrownianSpec(bp), dt; compute_energy=compute_energy)
@@ -151,7 +129,7 @@ end
 Compatibility wrapper for explicit Euler-Maruyama graph stepping.
 """
 function step_graph!(st::SimulationState{T},
-                     em::BrownianIntegrators.EMParams{T},
+                     em::EMParams{T},
                      dt::Real;
                      compute_energy::Bool=true) where {T<:AbstractFloat}
     return step_graph!(st, EMSpec(em), dt; compute_energy=compute_energy)
@@ -215,16 +193,4 @@ function step!(st::SimulationState{T},
                                                  length(st.rx))),
                  dt;
                  compute_energy=compute_energy)
-end
-
-"""
-    step_bd!(st, dt, bp; compute_energy=true)
-
-Deprecated thin wrapper. Use `step!(st, bp, dt; ...)`.
-"""
-function step_bd!(st::SimulationState{T},
-                  dt::Real,
-                  bp::BrownianIntegrators.BrownianParams{T};
-                  compute_energy::Bool=true) where {T<:AbstractFloat}
-    return step!(st, bp, dt; compute_energy=compute_energy)
 end

@@ -13,7 +13,7 @@ module DeviceEngineMinimizationGPUChecks
 using Test, CUDA, ParticleDynamics, Random, LinearAlgebra
 const SC=ParticleDynamics.SimulationCore
 const DE=ParticleDynamics.DeviceEngine
-include(joinpath(@__DIR__,"..","scripts","capture_staged_golden.jl"))
+include(joinpath(@__DIR__,"golden_capture.jl"))
 include(joinpath(@__DIR__,"pair_reference_gpu.jl"))
 
 const METHODS=(("SD",SteepestDescent(initial_step=0.05)),("FIRE",FIRE(dt_initial=0.005,dt_max=0.05,fictitious_mass=1.0)))

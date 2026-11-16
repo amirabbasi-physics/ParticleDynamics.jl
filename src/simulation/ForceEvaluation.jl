@@ -35,7 +35,7 @@ end
 A fresh evaluation at the current coordinates (forces invalidated first, then
 [`evaluate_current_configuration!`](@ref)): forces, and with `compute_energy`
 energies and virials, on the device engine that owns the state, or on an
-evaluation-only engine (the staged force driver was removed).
+evaluation-only engine.
 """
 function evaluate_forces_into_f!(st::SimulationState, compute_energy::Bool; freeze_spring::Bool=false)
     invalidate_forces!(st)

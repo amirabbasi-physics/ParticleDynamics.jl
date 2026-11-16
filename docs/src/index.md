@@ -1,106 +1,88 @@
-# ParticleDynamics.jl
-
-`ParticleDynamics.jl` is a GPU-first Julia package for non-equilibrium particle
-simulations on `CUDA.jl`. The recommended public surface is the workflow API:
-`ParticleSystem`, `Group`, `Force`, `Integrator`, `Observable`, `Writer`,
-`Stage`, `Simulation`, and `run!`.
+# ParticleDynamics
 
 ```@raw html
-<div style="padding:0.6rem 0.8rem; border-left:4px solid #d9534f; background:#fff6f6;">
-<strong>GPU-only package:</strong> a functional CUDA environment is required for simulations and test-validated behavior.
+<div class="pd-hero">
+<p class="pd-eyebrow">MOLECULAR DYNAMICS · SOFT MATTER · ACTIVE PARTICLES</p>
+<p class="pd-headline">Small particles.<br>Rich dynamics.</p>
+<p class="pd-intro">Explore fluids, polymers and driven systems with GPU particle
+simulations in Julia. Define the physics, choose what to measure, and follow your
+system from its initial configuration to a trajectory you can analyse.</p>
+</div>
+<div class="pd-paths">
+```
+
+- **[Run your first simulation →](quickstart.md)**
+  Build a small fluid and save its temperature, energy and trajectory.
+- **[Explore the examples →](examples.md)**
+  Start from a working script for molecular, Brownian or active dynamics.
+- **[Find a workflow object →](manual/workflow.md)**
+  Look up the arguments for systems, forces, integrators and writers.
+
+```@raw html
 </div>
 ```
 
-## Installation
+## What will you simulate?
 
-The current release is **0.6.10**, registered in the Julia General registry:
+| A system to explore | A place to start |
+|:--|:--|
+| **Fluids** — conservative, thermostatted or overdamped dynamics | [Lennard-Jones and Brownian examples](examples.md#Fluids) |
+| **Polymers** — bonded chains, melts and relaxation | [Polymer examples](examples.md#Polymers) |
+| **Active matter** — correlated forcing, thermal noise and diffusion | [Active-particle examples](examples.md#Active-particles) |
+| **Charged systems** — periodic Coulomb interactions with PME, PPPM or ESP | [Electrostatics guide](manual/electrostatics.md) |
+| **Driven mixtures** — particle groups coupled to different baths | [Two-temperature example](examples.md#Driven-mixtures) |
+
+## Install and begin
+
+Simulations run on a **CUDA-capable NVIDIA GPU**. Use Julia 1.10 or later with a
+working CUDA installation, then install the registered package:
 
 ```julia
 using Pkg
 Pkg.add("ParticleDynamics")
 ```
 
-See the [integrator](manual/integrators.md) and [force](manual/forces.md) manuals
-for the timestep and physical-domain requirements.
+These are the development docs for **0.7.0**; the registered release may differ.
+The [first simulation](quickstart.md) walks through the setup and a complete run.
+All physical quantities use a consistent set of units chosen by you.
 
-## Scope
+## From a model to a measurement
 
-- 2D/3D particle dynamics with periodic boundaries.
-- Deterministic MD: NVE, thermostatted NVT, and NPT with stochastic cell rescaling.
-- Langevin integrators: velocity-Verlet (default), BAOAB, BAOA, GSM.
-- Brownian integrators: midpoint (Euler-Heun style) and Euler-Maruyama.
-- Nonbonded interactions (LJ/WCA/soft-repulsive) with exact or buffered neighbor lists, GPU long-range electrostatics (PME, PPPM, Ewald summation with prolates), and machine-learned potentials (MACE, Orb).
-- Bonded interactions: bonds (harmonic/FENE), angles, dihedrals and impropers; rigid three-site water.
-- Energy minimization (FIRE, steepest descent), filters/freeze controls, collision counting, and XYZ/CSV/GSD outputs.
+A `ParticleSystem` holds your initial configuration. Forces describe its
+interactions; an `Integrator` sets the dynamics and timestep. Add observables
+and writers, assemble a `Simulation`, and run named stages for equilibration
+and production.
 
-## Workflow model
-
-- `ParticleSystem` stores positions, types, masses, box, velocities, and topology.
-- `Group` selects particles today and is designed to grow into other topology domains later.
-- `Force` objects describe physical interactions.
-- `Integrator` owns `dt`, forces, methods, and thermostats.
-- `Observable` objects compute sampled quantities.
-- `Writer` objects own scheduled output.
-- `Stage` describes a named block of running.
-- `Simulation` assembles the workflow, and `run!` owns the timestep loop.
-
-## Quick Links
-
-- Workflow start: [Quickstart](quickstart.md)
-- Expert API: [Low-Level API](manual/getting_started.md)
-- State layout: [Simulation State](manual/simulation_state.md)
-- Integrators: [Integrators](manual/integrators.md)
-- Interactions: [Forces](manual/forces.md)
-- Selection and controls: [Groups and Filters](manual/groups_filters.md)
-- Thermostat interfaces: [Thermostats](manual/thermostats.md)
-- Diagnostics: [Observables](manual/observables.md)
-- Output formats: [I/O](manual/io.md)
-- Restart reading: [Restarts](manual/restarts.md)
-- Legacy notes: [Collision Rate Notes](legacy/collision_rate.md)
-- Example inventory: `examples/README.md`
-
-## Public API map
-
-The supported top-level API is intentionally split into a workflow layer and a
-low-level expert layer.
-
-| API group | Exported symbols | Primary page |
-|---|---|---|
-| Workflow | `Simulation`, `ParticleSystem`, `Topology`, `Group`, `Groups`, `Force` objects, `Integrator`, `Observable` objects, `Writer` objects, `Stage`, `prepare!`, `run!`, `reset_step!`, `reset_observables!`, `state` | `quickstart.md` |
-| Low-level expert API | `SimulationState`, `build_simulation`, `step!`, `step_graph!`, `sync_unwrapped!`, `collect_step_observables`, `reset_bath_exchange_accumulators!`, `nve`, `velocityverlet`, `baoab`, `baoa`, `gsm`, `eulerheun`, `eulermaruyama`, `nosehooverchain`, `csvr` | `manual/getting_started.md`, `manual/simulation_state.md`, `manual/integrators.md` |
-| Parameters and physical helpers | `LJParams`, `SoftRepulsiveParams`, `HarmonicBondParams`, `FENEParams`, `BondPotential`, `HarmonicBond`, `FENEBond`, `harmonic_bond`, `fene_bond`, `StokesFrictionCoefficient`, `SphereMass`, `InertialTime`, `DiffusiveTime` | `manual/forces.md` |
-| Initialization generators | `box_from_phi_2d`, `box_from_phi_3d`, `hex_random_2d`, `hex_circle_2d`, `hex_circle_plus_random_2d`, `hex_sites_in_box_2d`, `hex_circle_in_box_2d`, `hex_slab_coexistence_2d`, `fcc_sites_in_box_3d`, `fcc_random_3d`, `fcc_slab_coexistence_3d` | `manual/getting_started.md` |
-| Writers and I/O | `write_xyz!`, `write_observables_csv!`, `gsd_open`, `gsd_close`, `write_gsd_frame!`, `read_gsd_frame!`, `InMemoryLogger`, `CSVWriter`, `XYZWriter` | `manual/io.md` |
-| Bond lists | `BondList`, `build_bondlist` | `manual/forces.md` |
-| Collision counting | `enable_collision_counting!`, `disable_collision_counting!`, `collisions_reset_counts!`, `collisions_read_counts!`, `set_collision_pair_cutoffs!` | `manual/observables.md` |
-| Selection helpers and modules | `ParticleSelection`, `ParticleGroup`, `All`, `TypeIDs`, `Indices`, `materialize`, `apply_scalar!`, `apply_values!`, `gather`, `sum_values`, plus the exported `Filters`/`BondedForces` modules for qualified access | `manual/groups_filters.md`, `manual/forces.md` |
-
-Advanced helpers that are intentionally not part of the default import surface
-live under `ParticleDynamics.SimulationCore`, for example
-`ParticleDynamics.SimulationCore.zero_forces!`,
-`ParticleDynamics.SimulationCore.accumulate_energies!`,
-`ParticleDynamics.SimulationCore.thermostatted_dof`, and
-`ParticleDynamics.SimulationCore.thermostatted_particle_mask`.
-
-## Behavior Baseline (from tests)
-
-Current tests validate:
-
-- Deterministic force/kernel properties (analytic 2-particle checks, Newton symmetry, PBC invariance, backend parity).
-- Stochastic behavior at moment level (Brownian MSD slope, Langevin equipartition, OU trend checks, weak-step trend in deterministic limit).
-- Regression/IR fixes including `gamma > 0` enforced error behavior on stochastic paths where required.
-
-## Current limitations
-
-- CUDA is the primary supported backend.
-- Angles, dihedrals, impropers, electrostatics, and broader force-field
-  concepts are future-facing vocabulary unless already implemented in the
-  existing low-level engine.
-- `ForceField` is stable as a container concept, but compiled support remains
-  limited to the force families backed by current kernels and wrappers.
-
-## Build docs locally
-
-```bash
-julia --project=docs -e 'using Pkg; Pkg.instantiate(); include("docs/make.jl")'
+```julia
+# With your system, integrator and writers defined:
+sim = Simulation(system; integrator=integrator, writers=writers)
+run!(sim, Stage(:equilibrate, steps=1_000))
+reset_observables!(sim)
+run!(sim, Stage(:production, steps=10_000))
 ```
+
+Learn how to [choose interactions](manual/forces.md),
+[control temperature](manual/thermostats.md), and
+[record measurements](manual/observables.md).
+
+## A look inside a polymer melt
+
+![A rendered polymer melt beside measured chain end-to-end distance and radius of gyration.](assets/polymer-melt.png)
+
+A configuration and recorded measurements from the Kremer–Grest showcase:
+100 chains, 3,200 beads, and chain-size measurements alongside the configuration. The reference values
+shown are rescaled from the published 25-bead chains to 32 beads using N−1.
+[Explore the polymer examples and rendering recipe](examples.md#Polymers).
+
+## Supported systems
+
+ParticleDynamics supports 2D and 3D periodic systems on a single GPU, including
+Lennard-Jones, WCA and soft-repulsive interactions, bonded models, Langevin and
+Brownian dynamics, and active Ornstein–Uhlenbeck forcing. Energy minimization
+and isotropic pressure control are also available.
+
+Long-range electrostatics requires a 3D orthorhombic periodic box. Pressure
+control has specific integrator requirements, described in the
+[bonds, minimization and pressure guide](manual/bonded_minimization_npt.md).
+General holonomic constraints beyond rigid three-site water, triclinic
+electrostatics and multi-GPU execution are not implemented.

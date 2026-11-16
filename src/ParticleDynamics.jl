@@ -3,13 +3,12 @@ GPU-accelerated non-equilibrium particle simulations with Langevin/Brownian/Mole
 
 `ParticleDynamics` provides a high-level workflow API centered on
 [`Simulation`](@ref), [`ParticleSystem`](@ref), workflow forces, methods,
-observables, writers, and staged `run!` execution on CUDA-backed state. The
-older low-level API (`build_simulation`, `step!`, explicit integrator specs,
-and `SimulationCore`) remains available for expert use.
+observables, writers, and [`run!`](@ref) with named stages. All state lives on
+the GPU (CUDA). The low-level API (`build_simulation`, `step!`, explicit
+integrator specs, and `SimulationCore`) remains available for expert use.
 
 # Example
-The snippet below mirrors the recommended workflow style used by the modern
-examples.
+The snippet below shows the workflow style used by the examples.
 
 ```julia
 using ParticleDynamics
@@ -38,10 +37,11 @@ sim = Simulation(
 run!(sim, Stage(:production, steps=200; progress=false))
 ```
 
-Use the README and `examples/` for richer setups such as two-temperature baths,
-bonded polymers, Brownian dynamics, active noise, collision histograms,
-restart workflows, and charged systems with native GPU long-range
-electrostatics ([`PME`](@ref), [`PPPM`](@ref), [`ESP`](@ref)).
+See `examples/` for two-temperature baths, bonded polymers, Brownian dynamics,
+active noise and collision histograms. The manual covers charged systems with
+long-range electrostatics ([`PME`](@ref), [`PPPM`](@ref), [`ESP`](@ref)),
+typed bonded terms, energy minimization ([`minimize!`](@ref)), constant
+pressure ([`Barostat`](@ref)) and rigid water.
 """
 module ParticleDynamics
 
@@ -56,8 +56,6 @@ include("NonBondedForces.jl")
 include("Electrostatics.jl")
 include("ClusterPairs.jl")
 include("RigidWaterConstraints.jl")
-include("LangevinIntegrators.jl")
-include("BrownianIntegrators.jl")
 include("IntegratorInterfaces.jl")
 include("Collisions.jl")
 include("ParticleGroups.jl")
@@ -98,7 +96,7 @@ using .SimulationCore: attach_bonded_terms!, detach_bonded_terms!, bonded_energy
 using .SimulationCore: minimize!, SteepestDescent, FIRE, MinimizationResult
 using .SimulationCore: set_cell_and_positions!, set_cell_and_molecules!, cell_volume, cell_supported
 using .SimulationCore: total_kinetic_energy, mechanical_pressure
-using .Writers: InMemoryLogger, CSVWriter, XYZWriter,
+using .Writers: CSVWriter, XYZWriter,
     write_xyz!, write_observables_csv!, gsd_open, gsd_close, write_gsd_frame!, read_gsd_frame!, read_gsd_log
 using .BondedForces: BondList, build_bondlist
 using .InitGenerators: box_from_phi_2d, box_from_phi_3d,
@@ -117,7 +115,7 @@ using .Workflow: Simulation, ParticleSystem, Particles, Topology, PeriodicBox,
     ConstantVolume, Langevin, Brownian, ActiveOrnsteinUhlenbeck,
     Thermostat, CSVR, NoseHooverChain,
     Observable, ThermodynamicObservable, BathExchangeObservable, VirialObservable, CollisionObservable, MSDObservable, VACFObservable,
-    Writer, TableWriter, GSDWriter,
+    Writer, TableWriter, GSDWriter, InMemoryWriter, recorded_data,
     Every, AtSteps, Between,
     Stage, prepare!, run!, reset_step!, reset_observables!, state
 
@@ -155,7 +153,7 @@ export Filters, BondedForces, ParticleGroups, Thermostats, SimulationCore,
        # Long-range electrostatics (low level)
        Electrostatics, ClusterPairs, set_nonbonded_backend!, nonbonded_backend, set_vdw_modifier!, vdw_modifier, attach_electrostatics!, detach_electrostatics!, set_charges!, charges, electrostatic_energy, set_box!,
        # Writers
-       InMemoryLogger, CSVWriter, XYZWriter,
+       CSVWriter, XYZWriter,
        write_xyz!, write_observables_csv!, gsd_open, gsd_close, write_gsd_frame!, read_gsd_frame!, read_gsd_log,
        # Bond list helper
        BondList, build_bondlist,
@@ -178,7 +176,7 @@ export Filters, BondedForces, ParticleGroups, Thermostats, SimulationCore,
        ConstantVolume, Langevin, Brownian, ActiveOrnsteinUhlenbeck,
        Thermostat, CSVR, NoseHooverChain,
        Observable, ThermodynamicObservable, BathExchangeObservable, VirialObservable, CollisionObservable, MSDObservable, VACFObservable,
-       Writer, TableWriter, GSDWriter,
+       Writer, TableWriter, GSDWriter, InMemoryWriter, recorded_data,
        Every, AtSteps, Between,
        Stage,
        prepare!, run!, reset_step!, reset_observables!, state

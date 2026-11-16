@@ -1,6 +1,6 @@
 """
 Particle-selection helpers used to assign per-group parameters (temperatures,
-frictions, correlation times) as in `examples/TwoT_2D_LD_VV.jl`.
+frictions, correlation times).
 """
 module Filters
 
@@ -10,9 +10,8 @@ using ..Backends
 import ..ParticleGroups
 import ..SimulationCore
 using ..Definitions
-using ..SimulationCore: SimulationState, IntegratorSpec, VVSpec, BAOABSpec, BAOASpec, GSMSpec, BrownianSpec, EMSpec, NVESpec, NHCSpec, CSVRSpec
-using ..BrownianIntegrators
-using ..LangevinIntegrators
+using ..SimulationCore: SimulationState, IntegratorSpec, VVSpec, BAOABSpec, BAOASpec, GSMSpec, BrownianSpec, EMSpec, NVESpec, NHCSpec, CSVRSpec,
+    VVParams, BAOABParams, BrownianParams, EMParams
 
 export Filter, All, TypeIDs, Indices, Selection,
        resolve, resolve_gpu, selection, count,
@@ -80,18 +79,18 @@ function _set_noise_from_gamma!(noise_scale::CuArray{T,1},
     return
 end
 
-function _ensure_corr_time_array(bp::BrownianIntegrators.BrownianParams{T}) where {T<:AbstractFloat}
+function _ensure_corr_time_array(bp::BrownianParams{T}) where {T<:AbstractFloat}
     if bp.corr_time === nothing
         corr = Backends.fill_vector(Backends.CUDABackend(), zero(T), length(bp.gamma))
-        return BrownianIntegrators.BrownianParams{T}(bp.gamma, bp.dt, bp.noise_scale, corr, bp.ou)
+        return BrownianParams{T}(bp.gamma, bp.dt, bp.noise_scale, corr, bp.ou)
     end
     return bp
 end
 
-function _ensure_corr_time_array(em::BrownianIntegrators.EMParams{T}) where {T<:AbstractFloat}
+function _ensure_corr_time_array(em::EMParams{T}) where {T<:AbstractFloat}
     if em.corr_time === nothing
         corr = Backends.fill_vector(Backends.CUDABackend(), zero(T), length(em.gamma))
-        return BrownianIntegrators.EMParams{T}(em.gamma, em.dt, em.noise_scale, corr, em.ou)
+        return EMParams{T}(em.gamma, em.dt, em.noise_scale, corr, em.ou)
     end
     return em
 end
@@ -130,14 +129,6 @@ _corr_time_view(spec::NVESpec) = nothing
 _corr_time_view(spec::NHCSpec) = nothing
 _corr_time_view(spec::CSVRSpec) = nothing
 
-_ou_view(spec::VVSpec) = spec.params.ou
-_ou_view(spec::Union{BAOABSpec,BAOASpec,GSMSpec}) = spec.params.ou
-_ou_view(spec::BrownianSpec) = spec.params.ou
-_ou_view(spec::EMSpec) = spec.params.ou
-_ou_view(spec::NVESpec) = nothing
-_ou_view(spec::NHCSpec) = nothing
-_ou_view(spec::CSVRSpec) = nothing
-
 _dt_view(spec::VVSpec) = spec.params.dt
 _dt_view(spec::Union{BAOABSpec,BAOASpec,GSMSpec}) = spec.params.dt
 _dt_view(spec::BrownianSpec) = spec.params.dt
@@ -145,73 +136,49 @@ _dt_view(spec::EMSpec) = spec.params.dt
 
 function _set_corr_time_view!(spec::VVSpec{T}, corr::Union{Nothing,CuArray{T,1}}) where {T<:AbstractFloat}
     p = spec.params
-    spec.params = LangevinIntegrators.VVParams{T}(p.gamma, p.mass, p.noise_scale; dt=p.dt, corr_time=corr, ou=p.ou)
+    spec.params = VVParams{T}(p.gamma, p.mass, p.noise_scale; dt=p.dt, corr_time=corr, ou=p.ou)
     return spec
 end
 
 function _set_corr_time_view!(spec::Union{BAOABSpec{T},BAOASpec{T},GSMSpec{T}}, corr::Union{Nothing,CuArray{T,1}}) where {T<:AbstractFloat}
     p = spec.params
-    spec.params = LangevinIntegrators.BAOABParams{T}(p.gamma, p.mass, p.noise_scale; dt=p.dt, corr_time=corr, ou=p.ou)
+    spec.params = BAOABParams{T}(p.gamma, p.mass, p.noise_scale; dt=p.dt, corr_time=corr, ou=p.ou)
     return spec
 end
 
 function _set_corr_time_view!(spec::BrownianSpec{T}, corr::Union{Nothing,CuArray{T,1}}) where {T<:AbstractFloat}
     p = spec.params
-    spec.params = BrownianIntegrators.BrownianParams{T}(p.gamma, p.dt, p.noise_scale, corr, p.ou)
+    spec.params = BrownianParams{T}(p.gamma, p.dt, p.noise_scale, corr, p.ou)
     return spec
 end
 
 function _set_corr_time_view!(spec::EMSpec{T}, corr::Union{Nothing,CuArray{T,1}}) where {T<:AbstractFloat}
     p = spec.params
-    spec.params = BrownianIntegrators.EMParams{T}(p.gamma, p.dt, p.noise_scale, corr, p.ou)
+    spec.params = EMParams{T}(p.gamma, p.dt, p.noise_scale, corr, p.ou)
     return spec
 end
 
 function _set_ou_view!(spec::VVSpec{T}, ou::Union{Nothing,Definitions.OUSpectrum{T}}) where {T<:AbstractFloat}
     p = spec.params
-    spec.params = LangevinIntegrators.VVParams{T}(p.gamma, p.mass, p.noise_scale; dt=p.dt, corr_time=p.corr_time, ou=ou)
+    spec.params = VVParams{T}(p.gamma, p.mass, p.noise_scale; dt=p.dt, corr_time=p.corr_time, ou=ou)
     return spec
 end
 
 function _set_ou_view!(spec::Union{BAOABSpec{T},BAOASpec{T},GSMSpec{T}}, ou::Union{Nothing,Definitions.OUSpectrum{T}}) where {T<:AbstractFloat}
     p = spec.params
-    spec.params = LangevinIntegrators.BAOABParams{T}(p.gamma, p.mass, p.noise_scale; dt=p.dt, corr_time=p.corr_time, ou=ou)
+    spec.params = BAOABParams{T}(p.gamma, p.mass, p.noise_scale; dt=p.dt, corr_time=p.corr_time, ou=ou)
     return spec
 end
 
 function _set_ou_view!(spec::BrownianSpec{T}, ou::Union{Nothing,Definitions.OUSpectrum{T}}) where {T<:AbstractFloat}
     p = spec.params
-    spec.params = BrownianIntegrators.BrownianParams{T}(p.gamma, p.dt, p.noise_scale, p.corr_time, ou)
+    spec.params = BrownianParams{T}(p.gamma, p.dt, p.noise_scale, p.corr_time, ou)
     return spec
 end
 
 function _set_ou_view!(spec::EMSpec{T}, ou::Union{Nothing,Definitions.OUSpectrum{T}}) where {T<:AbstractFloat}
     p = spec.params
-    spec.params = BrownianIntegrators.EMParams{T}(p.gamma, p.dt, p.noise_scale, p.corr_time, ou)
-    return spec
-end
-
-function _set_dt_view!(spec::VVSpec{T}, dt::T) where {T<:AbstractFloat}
-    p = spec.params
-    spec.params = LangevinIntegrators.VVParams{T}(p.gamma, p.mass, p.noise_scale; dt=dt, corr_time=p.corr_time, ou=p.ou)
-    return spec
-end
-
-function _set_dt_view!(spec::Union{BAOABSpec{T},BAOASpec{T},GSMSpec{T}}, dt::T) where {T<:AbstractFloat}
-    p = spec.params
-    spec.params = LangevinIntegrators.BAOABParams{T}(p.gamma, p.mass, p.noise_scale; dt=dt, corr_time=p.corr_time, ou=p.ou)
-    return spec
-end
-
-function _set_dt_view!(spec::BrownianSpec{T}, dt::T) where {T<:AbstractFloat}
-    p = spec.params
-    spec.params = BrownianIntegrators.BrownianParams{T}(p.gamma, dt, p.noise_scale, p.corr_time, p.ou)
-    return spec
-end
-
-function _set_dt_view!(spec::EMSpec{T}, dt::T) where {T<:AbstractFloat}
-    p = spec.params
-    spec.params = BrownianIntegrators.EMParams{T}(p.gamma, dt, p.noise_scale, p.corr_time, p.ou)
+    spec.params = EMParams{T}(p.gamma, p.dt, p.noise_scale, p.corr_time, ou)
     return spec
 end
 

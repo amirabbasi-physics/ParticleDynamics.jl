@@ -1,7 +1,7 @@
 # Shared by the thermostat device-engine tests: staged equilibrated golden records and
-# device replicas of their protocol (scripts/capture_staged_golden.jl, mode
+# device replicas of their protocol (test/golden_capture.jl, mode
 # `equilibrated`), without unwrapped coordinates (not used by the dynamics).
-# Requires capture_staged_golden.jl, Test, SHA, TOML, Statistics, Random, SC, DE.
+# Requires golden_capture.jl, Test, SHA, TOML, Statistics, Random, SC, DE.
 const EQ2D=golden_directory(:equilibrium_2d)
 # 3D v2-eq records are two-phase (rejected); 3D uses the homogeneous liquid set.
 const EQ3D=golden_directory(:equilibrium_3d)
@@ -17,7 +17,7 @@ function eq_golden(D,integ)
     end
 end
 
-# The equilibrated protocol of capture_staged_golden.jl without unwrapped
+# The equilibrated protocol of golden_capture.jl without unwrapped
 # coordinates (not used by the dynamics; not needed for the reference comparison).
 function device_replica(D,integ,seed;N=equilibrated_size(D))
     T=Float32; rng=Xoshiro(seed); Random.seed!(seed)

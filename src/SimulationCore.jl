@@ -1,3 +1,9 @@
+"""
+Low-level simulation core: `SimulationState`, force and energy evaluation,
+integrator specs, stepping, minimization and pressure control. The commonly
+used names are re-exported from `ParticleDynamics`; advanced helpers are
+reached as `ParticleDynamics.SimulationCore.name`.
+"""
 module SimulationCore
 
 using CUDA
@@ -13,15 +19,11 @@ using ..Backends
 using ..NeighborLists
 using ..NonBondedForces
 using ..BondedForces
-using ..LangevinIntegrators
-using ..BrownianIntegrators
 using ..Collisions
 using ..Electrostatics
 using ..ClusterPairs
 import ..RigidWaterConstraints
- 
 
-const NL_CHECK_STRIDE = 20  # only check NL rebuild every N steps to cut overhead
 # Weeks-Chandler-Andersen cutoff factor: r_c = 2^(1/6) * σ ≈ 1.12246 σ
 const WCA_RC_FACTOR = 1.122462048309373
 
@@ -58,9 +60,13 @@ include("SimulationState.jl")
 # -------------------------
 # Unified integrator specs
 # -------------------------
+"""
+    IntegratorSpec
+
+Alias of [`AbstractIntegratorSpec`](@ref).
+"""
 const IntegratorSpec = AbstractIntegratorSpec
 
-# Stage 8: Extract integrator specs and constructors
 include("simulation/StochasticWorkspace.jl")
 include("simulation/IntegratorSpecs.jl")
 include("simulation/LangevinSpecConstructors.jl")
@@ -95,8 +101,6 @@ end
 include("random/NoiseConstruction.jl")
 
 @inline _is_3d(st::SimulationState) = st.rz !== nothing
-
-
 
 """
     _ensure_workspace_buffers!(workspace, st; require_ou)
@@ -294,8 +298,6 @@ include("simulation/Minimization.jl")
 include("simulation/CellUpdates.jl")
 include("simulation/Barostats.jl")
 
-
-
 """
     _refresh_kinetic_buffer!(st)
 
@@ -330,8 +332,6 @@ function _refresh_kinetic_buffer!(st::SimulationState{T}, mass::T) where {T<:Abs
     return nothing
 end
 
-
-
 function _require_positive_inertial_mass!(st::SimulationState{T},
                                           integrator::AbstractString) where {T<:AbstractFloat}
     if st.mass_particle === nothing
@@ -343,8 +343,6 @@ function _require_positive_inertial_mass!(st::SimulationState{T},
     end
     return nothing
 end
-
-
 
 include("simulation/NHCStepper.jl")
 include("simulation/CSVRStepper.jl")
@@ -593,15 +591,6 @@ function _nve_kick3_kernel!(vx::CuDeviceVector{T}, vy::CuDeviceVector{T}, vz::Cu
     return
 end
 
-
-
-
-
-
-
-
-
-@inline _device_scalar(x::CuArray{T,1}) where {T<:AbstractFloat} = T(Array(x)[1])
 include("simulation/Observables.jl")
 
 end # module

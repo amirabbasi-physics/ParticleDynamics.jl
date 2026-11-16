@@ -1,8 +1,8 @@
 # Included in ParticleDynamics.DeviceEngine.
-# Dimension- and potential-generic cooperative traversal. For D=3 and UniformLJ
-# it performs the same operations in the same order as `_lj_cooperative_kernel!`
-# (periodic_delta, nested muladd r², the staged LJ terms, half-counted virials),
-# so it can replace that kernel without changing results.
+# Dimension- and potential-generic cooperative traversal: G lanes share one
+# particle's neighbor row and reduce their partial sums by warp shuffles.
+# Operation order per pair: periodic_delta, nested muladd r², the model's force
+# and energy terms, half-counted virials.
 
 @inline _r2(dr::NTuple{3,T}) where {T}=muladd(dr[1],dr[1],muladd(dr[2],dr[2],dr[3]*dr[3]))
 @inline _r2(dr::NTuple{2,T}) where {T}=muladd(dr[1],dr[1],dr[2]*dr[2])
@@ -143,7 +143,9 @@ end
     return nothing
 end
 
-# Explicit `kick` argument (never a default): see the Argon log, 9 Oct 2026.
+# Pass `kick` explicitly: a defaulted trailing argument adds a forwarding method
+# whose inner call is not inlined, copying array descriptors to a per-thread
+# stack frame (measured 7.8 -> 49 us per step at 10k particles).
 function _pair_cooperative_noE_kernel!(args...)
     @inline _pair_cooperative_kernel!(args...,Val(false),nothing)
     return nothing

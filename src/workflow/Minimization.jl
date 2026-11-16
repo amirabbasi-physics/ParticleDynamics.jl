@@ -10,8 +10,8 @@ _mobile_indices(sim, indices::AbstractVector{<:Integer}) = collect(Int, indices)
               max_iterations=10_000, max_evaluations=20_000, mobile=nothing,
               velocities=:zero) -> MinimizationResult
 
-Minimize the workflow's declared forces at fixed box (see the low-level
-[`minimize!`](@ref)). The integrator only supplies forces: `methods` may be
+Minimize the simulation's declared forces at fixed box.
+The integrator only supplies forces: `methods` may be
 empty and no thermostat runs. `mobile` is `nothing` (all particles), a `Group`,
 a selection or particle indices; other coordinates stay pinned but keep their
 interactions. MSD/VACF references are reset to the minimized configuration;

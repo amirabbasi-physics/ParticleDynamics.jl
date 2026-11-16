@@ -1,6 +1,6 @@
 # overdamped Brownian dynamics inside the graph.
-# Staged (BrownianIntegrators, SimulationCore): ξ = noise·N(0,1) with
-# noise = √(2γT·dt_spec), μ = 1/γ, positions wrapped with `_wrap_centered`.
+# Model (as the former staged path): ξ = noise·N(0,1) with
+# noise = √(2γT·dt_spec), μ = 1/γ, positions wrapped into [-L/2, L/2) (`_bd_wrap`).
 #   Euler–Maruyama: x += μ f(x) dt + μ ξ;  dq, dU += f(x)·Δx_mic
 #   Euler–Heun (midpoint, `BrownianSpec`): x_m = x + ½(μ f(x) dt + μ ξ) stored in
 #     the velocity slots; f(x_m); x = x + μ f(x_m) dt + μ ξ (same ξ);
@@ -23,7 +23,11 @@ struct BrownianData{T,V<:CuArray{T,1},I}
     seed::UInt64
 end
 
-@inline _bd_wrap(x::T,L::T) where {T}=BrownianIntegrators._wrap_centered(x,L)
+@inline function _bd_wrap(x::T,L::T) where {T}
+    y=x+T(0.5)*L
+    y-=floor(y/L)*L
+    return y-T(0.5)*L
+end
 
 @inline function _bd_noise(::Type{T},::Val{D},noise,tags,state,seed,i,fx,update::Bool) where {T,D}
     s=@inbounds noise[i]; step=UInt64(@inbounds state[NL.DN_STEP]); id=_noise_id(tags,i)

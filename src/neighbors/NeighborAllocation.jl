@@ -185,7 +185,7 @@ end
 
 Construct a [`NeighborMatrix`](@ref) with uniform cutoff `cutoff` and
 displacement buffer `skin`. The default path taken by `build_simulation`
-(`examples/2D_example.jl` uses `cutoff = 2^(1/6)σ`, `skin = cutoff/2`).
+(e.g. `cutoff = 2^(1/6)σ`, `skin = cutoff/2` for WCA).
 
 # Arguments
 - `rx, ry[, rz]`: Position components in `[-L/2, L/2)`.
@@ -193,7 +193,7 @@ displacement buffer `skin`. The default path taken by `build_simulation`
 - `cutoff`: Interaction cutoff; must be consistent with the potential (WCA or LJ).
 - `cap`: Maximum stored neighbors per particle (e.g. `Int32(250)` in the WCA example).
 - `skin`: Additional tolerance that delays rebuilds until particles move by
-  `≈ skin/2`. Chosen from the validated examples/test (0.3–0.5 σ).
+  `≈ skin/2`. Typical values are 0.3–0.5 σ.
 """
 function build_neighbors_dense!(rx::CuArray{T,1}, ry::CuArray{T,1};
                                 box::Tuple{T,T}, cutoff::Real,
@@ -217,8 +217,8 @@ end
     build_neighbors_stencil!(rx, ry[, rz]; box, rcut_particle, cap, skin)
 
 Stencil neighbor list where each particle `i` owns a cutoff `rcut_particle[i]`.
-`examples/3D_stencil_two_sizes.jl` uses this to mix `σ=5` and `σ=1` particles
-by passing per-type cutoffs computed from the Lorentz mixing rule.
+Use it to mix, e.g., `σ=5` and `σ=1` particles by passing per-type cutoffs
+computed from the Lorentz mixing rule.
 """
 function build_neighbors_stencil!(rx::CuArray{T,1}, ry::CuArray{T,1};
                                   box::Tuple{T,T},
@@ -264,9 +264,8 @@ end
     build_neighbors_stencil_by_types!(rx, ry[, rz]; box, typeid, rcut_pair, cap, skin)
 
 Variant of [`build_neighbors_stencil!`](@ref) where the per-particle cutoff is
-derived from a type–type lookup table `rcut_pair`. This mirrors the setup in
-`examples/3D_stencil_two_sizes.jl`, which supplies the 2×2 `RCUT_PAIR` matrix
-shown there.
+derived from a type–type lookup table `rcut_pair` (e.g. a 2×2 matrix for two
+particle sizes).
 """
 function build_neighbors_stencil_by_types!(rx::CuArray{T,1}, ry::CuArray{T,1};
                                            box::Tuple{T,T},

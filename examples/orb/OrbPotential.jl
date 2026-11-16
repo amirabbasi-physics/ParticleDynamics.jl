@@ -1,4 +1,4 @@
-# Orb foundation-model force provider for ParticleDynamics.jl.
+# Orb foundation-model force provider for ParticleDynamics.
 #
 # Implements the `AbstractExternalPotential` contract, mirroring
 # examples/mace/MACEPotential.jl: positions are staged host-side, forces and

@@ -2,6 +2,91 @@
 
 All notable user-visible changes to this project will be documented in this file.
 
+## 0.7.0 — unreleased
+
+### Workflow
+
+- New `InMemoryWriter` (with `recorded_data` and `empty!`): a scheduled writer
+  that keeps positions, unwrapped positions, velocities, forces, total
+  energies and the virial tensor in host memory, per-particle data in
+  particle-id order. Velocities are refused for Brownian dynamics.
+- `LennardJones` takes `vdw_modifier` (`:none`, the default, or
+  `:potential_shift`), the workflow form of the `build_simulation` keyword.
+  It also applies to a state supplied with `state=`.
+
+### Long-range electrostatics
+
+- The prolate window of `ESP` is evaluated on the device with one polynomial
+  per stencil node in Horner form; the force weights are the exact derivative
+  of the same polynomial. This replaces the Chebyshev series, which stays as
+  the reference evaluation in the tests. The window weights of a particle are
+  now shared between the threads of a warp for every window width up to 16
+  (before: up to 5). In complete NVE runs of molten NaCl with 10,648 ions on
+  an RTX 3090, the steps per second relative to the previous evaluation at
+  the same settings are 1.03 at window width 5, 1.17 at width 6 and 1.22 at
+  width 8. Forces agree with the Chebyshev reference to round-off.
+
+### Fixed
+
+- Brownian dynamics with zero masses now runs, as the workflow's Brownian
+  warning suggests. The engine accepts `mass ≥ 0`; the kinetic energy of
+  zero-mass particles is 0. Inertial integrators still require `mass > 0`,
+  and the error message no longer refers to Argon.
+- `ESP` with a tight tolerance built a prolate window that the precision of
+  the state does not resolve, and round-off entered the mesh forces: on
+  Float32 states for `tolerance` below about 6e-6 and between 3.3e-5 and
+  4.5e-5 (relative force error 7e-4 at `tolerance=1e-6`), on Float64 states
+  below about 3e-9 (1.2e-9 at `tolerance=1e-10`). The default window shape
+  now depends on the precision of the state (`electrostatics_spec(force, T)`),
+  and the solver refuses an explicit window below the bound
+  `0.02 eps(T)^(2/3)` on its squared transform at the mesh Nyquist frequency.
+  Float32 `tolerance=1e-6` now gives 2.4e-6, Float64 `tolerance=1e-10` gives
+  1.7e-10. Settings at the paper's table tolerances (1e-3 to 1e-5) are
+  unchanged. The mesh search of `tune_electrostatics` on Float32 states used
+  such an unresolved reference and is corrected by the same change.
+- `ESP`: the mesh energy jumped whenever a particle moved into the next mesh
+  cell. The prolate window was cut at the edge of its support at the value
+  ψ(1), about 0.38 × `tolerance` of its peak. The window is now
+  `ψ(2x/P) − ψ(1)`: the weights vanish at the edge, the energy is continuous
+  (jump at a cell change at `tolerance=1e-3` in Float64: 3.9e-5 relative
+  before, 1e-13 now), and the forces remain the exact gradient of the mesh
+  energy. There is no run-time cost. In NVE runs of molten NaCl (10,648 ions)
+  and SPC/E water (10,000 molecules) with exact pair lists at
+  `tolerance=1e-3`, the 95% upper bound of the drift in excess of a converged
+  PME run was up to 2.6e-5 k_BT per particle per ps (salt, 1 fs) and 1.9e-5
+  per atom (water, 1 fs); it is now below 1e-6 at every timestep tested (0.5,
+  1 and 2 fs), and the energy fluctuations are those of the PME run. Runs at
+  `tolerance ≤ 1e-4` were at the PME level before and are unchanged. The
+  force error at given settings changes: with `ESP(tolerance=ε)` it grows by
+  1.5% to 14% on these two systems (most at `tolerance=1e-3`: 1.21e-3 to
+  1.38e-3 on the salt); with explicit narrow windows on finer meshes (width
+  4–5 on 45³–63³) it stays the same or drops by up to 6%.
+
+### Removed
+
+- `InMemoryLogger`, an exported stub that recorded step numbers only. Use
+  `InMemoryWriter`.
+- The deprecated, unexported `SimulationCore.step_bd!`. Use `step!` with a
+  Brownian spec.
+- The internal `LangevinIntegrators` and `BrownianIntegrators` modules. Their
+  staged step kernels were no longer called (every step runs on the device
+  engine). The parameter types `VVParams`, `BAOABParams`, `BrownianParams` and
+  `EMParams` are unchanged and now live in `SimulationCore`.
+- The internal switches `Electrostatics.MESH_LINES`,
+  `Electrostatics.PROLATE_EVALUATOR` and `ClusterPairs.PRUNE_ONLY`, with the
+  code paths that only their non-default values reached: the
+  one-thread-per-particle and tiled charge spreading and the
+  one-thread-per-particle analytic-differentiation gather (the mesh always
+  uses 16 threads per particle), and the combined force-and-prune pass in
+  engine steps (pruning is always the distance-only pass). `device_stencil`
+  keeps its `evaluator` keyword for the Chebyshev reference.
+
+### Repository layout
+
+- Cross-engine benchmark harnesses and comparison drivers are no longer part
+  of the package repository. Test-only helpers previously kept with them now
+  live under `test/`.
+
 ## 0.6.10 — 2026-10-24
 
 `Project.toml` and `CITATION.cff` share this version; dependency compatibility
@@ -126,8 +211,7 @@ bounds are unchanged apart from the new direct `LinearAlgebra` dependency.
   per-particle σ (σᵢⱼ = (σᵢ + σⱼ)/2), LJ bond exclusions and collision
   counting.
 - Validated against an independent Ewald sum, GROMACS (double-precision PME)
-  and LAMMPS (PPPM) snapshots; `scripts/bench_electrostatics.jl` benchmarks
-  the solvers at matched measured accuracy.
+  and LAMMPS (PPPM) snapshots.
 - `LinearAlgebra` is now a direct dependency.
 - Faster list builds: the outer-list search runs one warp per (super-cluster,
   neighbouring column) instead of one warp per super-cluster, which fills the

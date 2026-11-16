@@ -1,5 +1,7 @@
 """
-Bonded interaction kernels (harmonic and FENE) used by the polymer examples.
+Bonded interactions: the uniform harmonic and FENE bond kernels, and typed
+bonded families (bonds, angles, dihedrals, impropers) with their interaction
+tables.
 """
 module BondedForces
 

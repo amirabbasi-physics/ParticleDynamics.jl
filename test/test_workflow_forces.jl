@@ -279,3 +279,35 @@ end
     @test haskey(sim.metadata, :compiled_forces)
     @test sim.metadata[:compiled_forces] isa ParticleDynamics.Workflow.CompiledForces
 end
+
+@testset "Workflow LennardJones vdw_modifier" begin
+    system = ParticleSystem([(0.0, 0.0, 0.0), (1.5, 0.0, 0.0)]; box=(20.0, 20.0, 20.0),
+                            velocities=[(0.0, 0.0, 0.0), (0.0, 0.0, 0.0)])
+    lj(m) = LennardJones(epsilon=1.0, sigma=1.0, cutoff=2.5, pairs=:all, vdw_modifier=m)
+    @test LennardJones(epsilon=1.0, sigma=1.0, cutoff=2.5).vdw_modifier === :none
+    compiled = ParticleDynamics.Workflow.compile_forces(system, [lj(:potential_shift)]; precision=:f64)
+    @test compiled.build_kwargs[:vdw_modifier] === :potential_shift
+    @test_throws ArgumentError ParticleDynamics.Workflow.compile_forces(system, [lj(:force_switch)]; precision=:f64)
+
+    group = Group(:all, AllSelection())
+    function evaluated(m; state=nothing)
+        sim = Simulation(system; groups=Groups(group), state=state, precision=Float64,
+                         integrator=Integrator(dt=1e-3, forces=[lj(m)], methods=[ConstantVolume(group)]))
+        prepare!(sim)
+        st = sim.state
+        SimulationCore.evaluate_configuration!(st, SimulationCore.EvaluationRequest(energy=true))
+        return st, sum(Array(st.Epot)), Array(st.fx)
+    end
+    st_none, e_none, f_none = evaluated(:none)
+    st_shift, e_shift, f_shift = evaluated(:potential_shift)
+    @test vdw_modifier(st_none) === :none
+    @test vdw_modifier(st_shift) === :potential_shift
+    u_rc = 4 * (2.5^-12 - 2.5^-6)
+    @test isapprox(e_none - e_shift, u_rc; rtol=1e-10)            # one pair inside the cutoff
+    @test f_shift ≈ f_none                                         # forces unchanged
+    # A supplied state picks the modifier up through the post-build hook.
+    supplied = SimulationCore.build_simulation(; N=2, box=(20.0, 20.0, 20.0), nonbonded=:lj, epsilon=1.0,
+        sigma=1.0, cutoff=2.5, temperature=0.0, dt=1e-3, precision=:f64)
+    st_supplied, _, _ = evaluated(:potential_shift; state=supplied)
+    @test st_supplied === supplied && vdw_modifier(supplied) === :potential_shift
+end

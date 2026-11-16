@@ -7,14 +7,14 @@ using ..NeighborLists
     Force
 
 Abstract workflow force descriptor. Concrete force objects describe physical
-interactions and compile onto the existing low-level engine.
+interactions to include in an integrator.
 """
 abstract type Force end
 
 """
     ForceField(; forces=Force[])
 
-Future-compatible container for a set of workflow force objects.
+Container for a set of workflow force objects.
 """
 @kwdef mutable struct ForceField
     forces::Vector{Force} = Force[]
@@ -45,7 +45,7 @@ end
 
 Cluster-pair traversal for 3D Lennard-Jones (uniform or pair table) and
 real-space Coulomb: one fused kernel over a Newton-3 list of 8×8 particle
-tiles (see [`set_nonbonded_backend!`](@ref)). The list radius is the largest
+tiles. The list radius is the largest
 interaction cutoff plus `buffer`; between rebuilds the list is pruned to the
 cutoff plus `prune_buffer` (default `buffer/2`). Bond exclusions of the vdW
 term are not supported (use `CellList`).
@@ -74,9 +74,12 @@ function PairTable(; sigma, epsilon, cutoff, type_names)
 end
 
 """
-    LennardJones(; epsilon, sigma, cutoff, pairs=:all, mode=:standard, pair_table=nothing, neighborlist=nothing)
+    LennardJones(; epsilon, sigma, cutoff, pairs=:all, mode=:standard, pair_table=nothing, neighborlist=nothing, vdw_modifier=:none)
 
-Workflow Lennard-Jones force descriptor.
+Workflow Lennard-Jones force descriptor. `vdw_modifier` sets the energy
+convention at the cutoff: `:none` truncates, `:potential_shift` uses
+`u(r) − u(r_c)` (the GROMACS default). Forces, virials and dynamics are the same
+for both; only energies differ.
 """
 @kwdef struct LennardJones <: Force
     epsilon = nothing
@@ -86,6 +89,7 @@ Workflow Lennard-Jones force descriptor.
     mode = :standard
     pair_table = nothing
     neighborlist = nothing
+    vdw_modifier::Symbol = :none
 end
 
 """
@@ -361,10 +365,21 @@ function _pair_table_kwargs(system::ParticleSystem, force, nonbonded::Symbol, ::
 end
 
 function _compile_nonbonded(system::ParticleSystem, force::LennardJones, ::Type{T}; list_floor::Real=0) where {T<:AbstractFloat}
-    if force.pair_table === nothing
-        return _uniform_lj_kwargs(force, :lj, T)
+    force.vdw_modifier in SimulationCore.VDW_MODIFIERS ||
+        throw(ArgumentError("LennardJones vdw_modifier must be one of $(SimulationCore.VDW_MODIFIERS); got :$(force.vdw_modifier)."))
+    compiled = force.pair_table === nothing ? _uniform_lj_kwargs(force, :lj, T) :
+                                             _pair_table_kwargs(system, force, :lj, T; list_floor)
+    kwargs, post, meta = compiled
+    modifier = force.vdw_modifier
+    kwargs[:vdw_modifier] = modifier
+    modifier === :none && return kwargs, post, meta
+    # A supplied state (`state=`) is not rebuilt, so the post-build hook applies the shift too.
+    shifted_post = st -> begin
+        post(st)
+        st.vdw_modifier === modifier || SimulationCore.set_vdw_modifier!(st, modifier)
+        st
     end
-    return _pair_table_kwargs(system, force, :lj, T; list_floor)
+    return kwargs, shifted_post, meta
 end
 
 function _compile_nonbonded(system::ParticleSystem, force::WCA, ::Type{T}; list_floor::Real=0) where {T<:AbstractFloat}
@@ -461,7 +476,7 @@ function compile_forces(system::ParticleSystem, forces; precision=:f64)
     post_build_hooks = Function[]
     metadata = Dict{Symbol,Any}()
 
-    elec_spec = isempty(electrostatic) ? nothing : electrostatics_spec(only(electrostatic))
+    elec_spec = isempty(electrostatic) ? nothing : electrostatics_spec(only(electrostatic), T)
     rc_coulomb = elec_spec === nothing ? 0.0 : elec_spec.real_cutoff
 
     if !isempty(nonbonded)

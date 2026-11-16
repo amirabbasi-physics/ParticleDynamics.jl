@@ -19,16 +19,6 @@
         @test Array(spec.workspace.ou_x) == ou_x0
         @test Array(spec.workspace.ou_y) == ou_y0
 
-        LangevinIntegrators.vv_prepare_noise!(
-            spec.workspace.rf_x, spec.workspace.rf_y, spec.params.noise_scale;
-            beta_z=nothing,
-            ou=spec.params.ou,
-            state_x=spec.workspace.ou_x, state_y=spec.workspace.ou_y, state_z=nothing,
-        )
-        CUDA.synchronize()
-        @test gpu_allfinite(spec.workspace.rf_x)
-        @test gpu_allfinite(spec.workspace.rf_y)
-
         Filters.set_corr_time!(spec, 0.1f0)
         CUDA.synchronize()
         @test all(abs.(Array(spec.params.corr_time) .- 0.1f0) .< 1f-6)

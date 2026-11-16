@@ -174,7 +174,6 @@ mutable struct ClusterPairList{T}
     # device decisions instead of the displacement triggers; 0 = displacement triggers (exact)
     nstlist::Int32
     nstprune::Int32
-    prune_only::Bool                # pruning by a distance-only pass (`PRUNE_ONLY`)
     ncs::Int32                      # searched column slots per super-cluster (≤ capacity of `cntS`)
     scan_scs::DeviceScan            # scan over `cntS`
 end
@@ -860,7 +859,7 @@ function ClusterPairList(N::Integer, box::NTuple{3,<:Real}, ::Type{T}) where {T}
                               es, es, es, es, es,
                               CuVector{T}(undef, N), CuVector{T}(undef, N), CuVector{T}(undef, N),
                               CuVector{T}(undef, N), CuVector{T}(undef, N), CuVector{T}(undef, N),
-                              CUDA.zeros(UInt32, 2), CUDA.pin(zeros(UInt32, 2)), false, 0, 0, Int32(0), Int32(0), false,
+                              CUDA.zeros(UInt32, 2), CUDA.pin(zeros(UInt32, 2)), false, 0, 0, Int32(0), Int32(0),
                               Int32(0), es)
 end
 

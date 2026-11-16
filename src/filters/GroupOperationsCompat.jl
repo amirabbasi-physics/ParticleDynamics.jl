@@ -6,8 +6,7 @@
     assign_scalar!(dest, st[, filter], value)
 
 Fill elements of `dest` referenced by `filter` (or all particles) with `value`.
-This underpins `set_friction!` and the temperature setup in
-`examples/TwoT_2D_LD_VV.jl`.
+This underpins `set_friction!` and `set_temperature!`.
 """
 function assign_scalar!(dest::CuArray{T,1}, idx::CuArray{Int32,1}, value::Real) where {T}
     N = length(idx)
@@ -152,8 +151,7 @@ end
 """
     sum(src, st[, filter])
 
-Sum the selected entries of `src`, returning a scalar on the host. Mirrors the
-heat/energy aggregation in `examples/TwoT_2D_LD_VV.jl`.
+Sum the selected entries of `src`, returning a scalar on the host.
 """
 function sum(src::CuArray{T,1}, idx::CuArray{Int32,1}) where {T<:Real}
     N = length(idx)

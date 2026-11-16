@@ -334,8 +334,8 @@ end
 """
     fene_forces_soa!(rx, ry[, rz], fx, fy[, fz], E, bonds, box, params)
 
-Finite extensible nonlinear elastic bonds. Matches the `fene_bond(k=300, r0=1.5)`
-configuration used in `examples/2D_polymer_bonded_BP.jl`.
+Finite extensible nonlinear elastic bonds, e.g. the `fene_bond(k=300, r0=1.5)`
+configuration.
 """
 function fene_forces_soa!(
     rx::CuArray{T,1}, ry::CuArray{T,1},

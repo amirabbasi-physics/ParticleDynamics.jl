@@ -4,11 +4,9 @@ Neighbor list builders and query utilities used by the force kernels.
 `NeighborLists` implements three strategies:
 
 - [`NeighborMatrix`](@ref) — dense cell lists with uniform cutoffs (default in
-  `build_simulation`, parameter choices mirror `examples/2D_example.jl`).
-- [`StencilNeighborMatrix`](@ref) — particle- or type-dependent cutoffs as used
-  in `examples/3D_stencil_two_sizes*.jl`.
-- [`AllPairsNeighborMatrix`](@ref) — sentinel representing O(N²) evaluation
-  (`examples/2D_allpairs_quicktest.jl`).
+  `build_simulation`).
+- [`StencilNeighborMatrix`](@ref) — particle- or type-dependent cutoffs.
+- [`AllPairsNeighborMatrix`](@ref) — sentinel representing O(N²) evaluation.
 
 Dense and stencil lists use slot-major ELL storage: slot `t` (zero based) of
 particle `i` (one based) is at `t*N + i` in `neighbors_flat`. Bond adjacency

@@ -9,8 +9,8 @@ Lightweight sentinel type indicating that all-to-all interactions should be
 computed (no neighbor list), using periodic MIC and excluding i==j.
 
 Fields are kept minimal but include `skin` so existing calls that read
-`st.nbh.skin` continue to work without changes. `examples/2D_allpairs_quicktest.jl`
-uses this type when validating the WCA path without the cell list overhead.
+`st.nbh.skin` continue to work without changes. Useful for validating a force
+path without a cell list.
 """
 struct AllPairsNeighborMatrix{T<:AbstractFloat} <: AbstractNeighborMatrix
     skin::T

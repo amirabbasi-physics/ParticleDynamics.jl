@@ -15,8 +15,7 @@ end
     accumulate_energies!(st)
 
 Add the instantaneous `Ekin`/`Epot` buffers into their per-interval accumulators.
-Called once per logging interval in `examples/TwoT_2D_LD_VV.jl` before computing
-entropy production.
+Call once per logging interval before computing entropy production.
 """
 function accumulate_energies!(st::SimulationState{T}) where {T<:AbstractFloat}
     N = length(st.Ekin)

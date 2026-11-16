@@ -54,11 +54,15 @@ function Run(r::NTuple{D,CuArray{T,1}},v::NTuple{D,CuArray{T,1}},box::NTuple{D,T
     allpairs && (build_lanes==1 && !spatial_reorder ||
         throw(ArgumentError("All-pairs rows (small boxes) use the serial builder and no sorting")))
     N=length(r[1])
-    all(length(x)==N for x in (r...,v...)) || throw(DimensionMismatch("Argon arrays differ in length"))
+    all(length(x)==N for x in (r...,v...)) || throw(DimensionMismatch("Position and velocity arrays differ in length"))
     dt,mass,sigma,epsilon=T.((dt,mass,sigma,epsilon))
-    # ε = 0 is a non-interacting system (pure stochastic dynamics), as on the staged path.
-    all(isfinite(x) && x>0 for x in (dt,mass,sigma)) && isfinite(epsilon) && epsilon>=0 ||
-        throw(ArgumentError("Invalid Argon parameters"))
+    isfinite(dt) && dt>0 || throw(ArgumentError("dt must be positive and finite; got $(dt)"))
+    # Zero mass is valid for force evaluation and overdamped dynamics (kinetic energy 0);
+    # `compile_integration!` rejects it for inertial integrators.
+    isfinite(mass) && mass>=0 || throw(ArgumentError("mass must be nonnegative and finite; got $(mass)"))
+    isfinite(sigma) && sigma>0 || throw(ArgumentError("sigma must be positive and finite; got $(sigma)"))
+    # ε = 0 is a non-interacting system (pure stochastic dynamics).
+    isfinite(epsilon) && epsilon>=0 || throw(ArgumentError("epsilon must be nonnegative and finite; got $(epsilon)"))
     # a device barostat: cells for a box up to 2% smaller (fractional device binning follows the box)
     nb=NL.DeviceNeighborWorkspace(T,N,box;cutoff,skin,cap,step,row_threads,diagnostics,allpairs,
         margin=barostat===nothing ? 1.0 : CP.GEOMETRY_SHRINK,sub=cell_sub)
@@ -293,6 +297,7 @@ _nve_drift(th)=th===nothing || th isa Union{CSVRData,NHCData}
 
 function compile_integration!(run::Run{T,G,L,D}) where {T,G,L,D}
     ws=run.neighbors; c=(run.dt/T(2))/run.mass; th=run.thermostat
+    run.mass>0 || th isa BrownianData || throw(ArgumentError("Inertial integrators require mass > 0"))
     _nve_drift(th) && _generic_nve(run) && (@cuda launch=false NL._device_if_valid!(ws.state,
         _kick_drift_unwrap_kernel!,run.r,run.v,run.f,c,run.dt,ws.geom,run.fx,run.mass))
     th===nothing && _generic_kick(run) && (@cuda launch=false NL._device_if_valid!(ws.state,
@@ -393,10 +398,9 @@ function capture_step(run::Run{T,G,L,D};conditional::Bool=true,energy::Bool=fals
     graph=if run.cluster!==nothing
         event && enqueue_crescale!(run,run.cluster;launch=false)   # compile the event kernels before capture
         energy && enqueue_virial_sample!(run,run.cluster;launch=false)
-        if virial   # compile the trace kernels (pairs, prune pass, scatter) before capture
+        if virial   # compile the trace kernels (pairs, scatter) before capture
             enqueue_virial_trace_sample!(run,run.cluster;launch=false)
             CP.enqueue_pairs!(run.cluster.eng,false,Val(false);trace=true)
-            CP.enqueue_pairs!(run.cluster.eng,false,Val(true);trace=true)
             fill!(run.cluster.eng.vtrace,0.0)
             CUDA.synchronize()
         end

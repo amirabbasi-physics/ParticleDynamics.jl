@@ -7,7 +7,7 @@ using GSDFiles
 using ..SimulationCore
 using ..Electrostatics
 
-export InMemoryLogger, CSVWriter, XYZWriter
+export CSVWriter, XYZWriter
 export write_xyz!, write_observables_csv!
 export gsd_open, gsd_close, write_gsd_frame!, read_gsd_frame!, read_gsd_log, GSDFrameData, GSDTopology
 

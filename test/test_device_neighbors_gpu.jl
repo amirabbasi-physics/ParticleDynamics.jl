@@ -2,7 +2,7 @@ module DeviceNeighborGPUChecks
 using Test, CUDA, ParticleDynamics, LinearAlgebra
 const NL = ParticleDynamics.NeighborLists
 const NB = ParticleDynamics.NonBondedForces
-include(joinpath(@__DIR__,"../benchmark/gromacs/GPUForceReference.jl"))
+include(joinpath(@__DIR__,"gpu_force_reference.jl"))
 using .GPUForceReference
 
 # 2D serial LJ over ELL rows (the staged kernel, kept here as the test's reference force).

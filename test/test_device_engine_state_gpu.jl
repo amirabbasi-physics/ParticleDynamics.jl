@@ -8,8 +8,8 @@ using Test, CUDA, ParticleDynamics, TOML, SHA, LinearAlgebra
 const SC=ParticleDynamics.SimulationCore
 const DE=ParticleDynamics.DeviceEngine
 const NL=ParticleDynamics.NeighborLists
-include(joinpath(@__DIR__,"..","scripts","capture_staged_golden.jl"))
-include(joinpath(@__DIR__,"..","benchmark","gromacs","GPUForceReference.jl"))
+include(joinpath(@__DIR__,"golden_capture.jl"))
+include(joinpath(@__DIR__,"gpu_force_reference.jl"))
 const GOLDEN=golden_directory(:deterministic)
 
 function golden(name)

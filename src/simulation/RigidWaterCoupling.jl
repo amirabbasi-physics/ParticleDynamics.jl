@@ -66,21 +66,11 @@ function kinetic_dof(st::SimulationState; remove_com::Bool=false)
     return max(0, d * length(st.rx) - nc - (remove_com ? d : 0))
 end
 
-function _validate_rigid_integrator!(st, spec)
-    st.rigid_water === nothing && return nothing
-    spec isa NVESpec || throw(ArgumentError("Rigid water currently supports only fixed-cell NVE"))
-    st.freeze_mode == FREEZE_NONE && !st.coll_enabled ||
-        throw(ArgumentError("Rigid water does not support freeze or collision controls"))
-    return nothing
-end
-
 function _save_rigid_reference!(st)
     st.rigid_water === nothing && return nothing
     RigidWaterConstraints.save_reference!(st.rigid_water.workspace, st.rx, st.ry, st.rz)
     return nothing
 end
-
-
 
 function _constraint_virial_buffer(st; accumulated::Bool=false)
     rigid = st.rigid_water
@@ -93,6 +83,14 @@ function _constraint_virial_buffer(st; accumulated::Bool=false)
     return rigid.virial
 end
 
+"""
+    constraint_virial_trace(st; accumulated=false) -> Float64
+
+Trace of the rigid-water constraint virial; `0.0` without rigid water. By
+default the constraint forces are recomputed from the current positions,
+velocities and forces. `accumulated=true` returns the sum collected by
+[`accumulate_virial!`](@ref) since the accumulators were last zeroed.
+"""
 function constraint_virial_trace(st; accumulated::Bool=false)
     st.rigid_water === nothing && return 0.0
     v = _constraint_virial_buffer(st; accumulated)

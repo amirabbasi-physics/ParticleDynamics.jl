@@ -22,7 +22,7 @@ function _build_brownian_params(st::SimulationState{T};
         corr = _device_corr_time_buffer(backend, T, N, noise_corr_time)
         ou = _build_single_mode_ou(backend, T, noise, corr, dt)
     end
-    return BrownianIntegrators.BrownianParams{T}(γ, T(dt), noise, corr, ou)
+    return BrownianParams{T}(γ, T(dt), noise, corr, ou)
 end
 
 function _build_em_params(st::SimulationState{T};
@@ -33,7 +33,7 @@ function _build_em_params(st::SimulationState{T};
                           dt::Real=st.dt) where {T<:AbstractFloat}
     bp = _build_brownian_params(st; gamma=gamma, temperature=temperature,
                                 noise_corr_time=noise_corr_time, ou_scales=ou_scales, dt=dt)
-    return BrownianIntegrators.EMParams{T}(bp.gamma, bp.dt, bp.noise_scale, bp.corr_time, bp.ou)
+    return EMParams{T}(bp.gamma, bp.dt, bp.noise_scale, bp.corr_time, bp.ou)
 end
 
 """

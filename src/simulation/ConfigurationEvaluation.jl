@@ -48,9 +48,10 @@ end
 """
     attach_bonded_terms!(st, terms) -> st
 
-Attach typed bonded families (`BondedForces.BondedTerms`) that are added after
-the legacy uniform bond kernels. Interaction tables hold build-time particle
-indices, so spatial reordering is disabled (and rejected once it happened).
+Attach typed bonded families (`BondedForces.BondedTerms`). They are evaluated in
+addition to the uniform bonds given at build time (`bonding=`, `bonds=`).
+Interaction tables hold particle ids; states with spatial reordering map them
+to storage slots through `st.tag`.
 """
 function attach_bonded_terms!(st::SimulationState, terms::BondedForces.BondedTerms)
     terms.dim == (_is_3d(st) ? 3 : 2) || throw(ArgumentError("bonded terms dimension does not match the state"))
@@ -67,6 +68,13 @@ function attach_bonded_terms!(st::SimulationState, terms::BondedForces.BondedTer
     return st
 end
 
+"""
+    detach_bonded_terms!(st) -> st
+
+Remove the typed bonded families attached with [`attach_bonded_terms!`](@ref).
+Uniform bonds given at build time (`bonding=`, `bonds=`) stay. Forces are
+invalidated.
+"""
 function detach_bonded_terms!(st::SimulationState)
     st.bonded = nothing
     invalidate_forces!(st)
@@ -130,7 +138,7 @@ end
     bonded_energy_components(st) -> Vector{Pair{Symbol,Float64}}
 
 Energy of each typed bonded family at the current coordinates (e.g.
-`:angles_HarmonicAngleKind => 3.2`). Legacy uniform bonds are part of `Epot`
+`:angles_HarmonicAngleKind => 3.2`). Uniform bonds (`bonding=`) are part of `Epot`
 only and are not listed.
 """
 function bonded_energy_components(st::SimulationState)

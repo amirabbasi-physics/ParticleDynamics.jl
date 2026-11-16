@@ -31,6 +31,11 @@ runs when you only want a smoke test.
 - `SingleT_2D_MD_CSVR.jl`
 - `TwoT_LJ2D_LD.jl`
 
+## Machine-learned potentials
+
+- `mace/`: a MACE force provider with validation scripts; see `mace/README.md`
+- `orb/`: an Orb force provider; see `orb/README.md`
+
 ## Kremer--Grest showcase movie
 
 `3D_KG_melt_showcase.jl` writes a 3,200-bead, 100-chain production trajectory,
@@ -92,5 +97,5 @@ The following files support the examples and are not meant to be run directly:
 
 - `_example_utils.jl`
 - `_free_aoup_msd_utils.jl`
-- `_restart_workflow.jl`
+- `kg_fresnel_movie.py`
 - `kg_fresnel_environment.yml`

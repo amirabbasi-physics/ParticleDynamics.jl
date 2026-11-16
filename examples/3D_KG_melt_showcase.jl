@@ -114,6 +114,15 @@ for (eps_push, sig_push, dtp) in ((10.0, 1.0, 1.0e-4), (50.0, 1.05, 1.0e-4),
     @printf("push-off eps=%5.0f sig=%.2f: min pair dist = %.3f, max bond = %.3f\n",
             eps_push, sig_push, min_pair_distance(), max_bond_length())
 end
+# The closest pair is an extreme value over all pairs and varies from run to run
+# with the thermostat noise (about 0.74-0.85 after the ramp). Hold the last rung
+# until it clears the WCA-safe distance checked below.
+for hold in 1:20
+    min_pair_distance() >= 0.80 && break
+    damped_steps!(PUSH_STEPS, 5.0e-5)
+    @printf("push-off hold %2d:           min pair dist = %.3f, max bond = %.3f\n",
+            hold, min_pair_distance(), max_bond_length())
+end
 mb = max_bond_length()
 mb < 1.4 || error("push-off left overstretched bonds (max $(mb)); aborting")
 # WCA pair energy at r=0.80 (~44 eps) is still containable by FENE (~69 eps

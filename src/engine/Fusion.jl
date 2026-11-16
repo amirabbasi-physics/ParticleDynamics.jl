@@ -324,7 +324,7 @@ function fused_conditional_graph(run;energy::Bool=false,sort::Bool=false)
         m=run.mesh; geom=run.neighbors.geom
         if MESH_OVERLAP[]   # spread, then the pair force parallel to the transforms (small kernels)
             # the spread also writes the packed (x, y, z, q) the pair kernel loads (`PACKED_XQ`)
-            xq=(PACKED_XQ[] && ES.MESH_LINES[] && length(run.r)==3) ? m.xq : nothing
+            xq=(PACKED_XQ[] && length(run.r)==3) ? m.xq : nothing
             # (a grid clear parallel to the list check measured slower: 0.0915 → 0.0934 ms/step at 10k)
             spread=NL._add_child_graph!(graph,NL.capture_graph(()->ES.mesh_transform!(m.solver,run.r...,m.q,energy,m.sorder;
                 geom,part=:spread,xq)),CC.CUgraphNode[branch])

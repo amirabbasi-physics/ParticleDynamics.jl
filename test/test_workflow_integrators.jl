@@ -288,6 +288,38 @@ end
     @test sim.lowlevel_integrator isa SimulationCore.EMSpec{Float64}
 end
 
+@testset "Workflow Brownian Runs With Zero Masses" begin
+    # Overdamped dynamics ignores masses; zero masses (uniform or per type) must run
+    # and report zero kinetic energy.
+    for masses in (0.0, Dict(:C => 0.0, :H => 0.0))
+        seed_all!(0xA2107)
+        system = _workflow_system_two_types(N=8, T=Float64, masses=masses)
+        cold, hot, _, groups = _workflow_groups_for_two_types()
+        sim = Simulation(
+            system;
+            groups=groups,
+            integrator=Integrator(
+                dt=1e-3,
+                methods=[
+                    Brownian(cold; gamma=2.0, kT=0.5),
+                    Brownian(hot; gamma=4.0, kT=1.5),
+                ],
+            ),
+            precision=Float64,
+        )
+        prepare!(sim)
+        st = sim.state
+        before = Array(st.rx)
+        for _ in 1:20
+            SimulationCore.step!(st, sim.lowlevel_integrator, 1e-3; compute_energy=true)
+        end
+        @test state_allfinite(st)
+        @test Array(st.rx) != before
+        obs = ParticleDynamics.DeviceEngine.observable_status(st.engine.run)
+        @test obs.kinetic == 0.0
+    end
+end
+
 @testset "Workflow Langevin Supports Heterogeneous Masses" begin
     system = _workflow_system_two_types(N=8, T=Float64, masses=Dict(:C => 1.0, :H => 2.0))
     cold, hot, _, groups = _workflow_groups_for_two_types()

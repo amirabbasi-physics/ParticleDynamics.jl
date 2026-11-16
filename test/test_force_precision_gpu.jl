@@ -1,7 +1,7 @@
 module ForcePrecisionGPUChecks
 using Test, CUDA, ParticleDynamics, LinearAlgebra
 const SC = ParticleDynamics.SimulationCore
-include(joinpath(@__DIR__,"../benchmark/gromacs/GPUForceReference.jl"))
+include(joinpath(@__DIR__,"gpu_force_reference.jl"))
 using .GPUForceReference
 
 @testset "Independent CUDA reference analytic checks" begin

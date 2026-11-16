@@ -180,7 +180,7 @@ mutable struct SimulationState{T<:AbstractFloat}
     cluster::Any
     cluster_config::Any
     # Typed bonded families (`BondedForces.BondedTerms`) added after the
-    # legacy uniform bond kernels; `nothing` when absent. Typed `Any` and
+    # uniform bond kernels (`bonds`, `bonding`); `nothing` when absent. Typed `Any` and
     # dispatched behind a function barrier once per force evaluation.
     bonded::Any
     # Optional rigid-water integration workspace; conservative forces stay
@@ -242,6 +242,12 @@ function set_vdw_modifier!(st::SimulationState, modifier::Symbol)
     invalidate_forces!(st)
     return st
 end
+"""
+    vdw_modifier(st) -> Symbol
+
+Current Lennard-Jones energy convention at the cutoff, `:none` or
+`:potential_shift` (see [`set_vdw_modifier!`](@ref)).
+"""
 vdw_modifier(st::SimulationState) = st.vdw_modifier
 
 function _slot_of_kernel!(slot_of, tag)

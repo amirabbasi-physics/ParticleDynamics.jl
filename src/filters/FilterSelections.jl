@@ -83,21 +83,6 @@ resolve(st::SimulationState, f::Filter) = resolve(f, st)
 GPU version of [`resolve`](@ref), used by `assign_scalar!` and friends when
 updating `CuArray` buffers directly.
 """
-function _resolve_typeids_gpu(f::TypeIDs, st::SimulationState)
-    N = length(st.rx)
-    N == 0 && return CUDA.zeros(Int32, 0)
-    ids = unique(Int32.(f.ids))
-    isempty(ids) && return CUDA.zeros(Int32, 0)
-
-    mask = CUDA.fill(false, N)
-    @inbounds for id in ids
-        mask .|= (st.typeid .== id)
-    end
-
-    idx64 = findall(mask)
-    return Int32.(idx64)
-end
-
 function resolve_gpu(f::All, st::SimulationState)
     return ParticleGroups.resolve_gpu(_to_particle_selection(f), st)
 end

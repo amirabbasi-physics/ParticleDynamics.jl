@@ -12,7 +12,7 @@ using Test, CUDA, ParticleDynamics, Random, Statistics
 const SC=ParticleDynamics.SimulationCore
 const DE=ParticleDynamics.DeviceEngine
 const F=ParticleDynamics.Filters
-include(joinpath(@__DIR__,"..","scripts","capture_staged_golden.jl"))
+include(joinpath(@__DIR__,"golden_capture.jl"))
 relerr(a,b)=maximum(abs.(a.-b))/max(maximum(abs.(b)),1e-30)
 
 # Per-particle arrays the engine does not permute, and why. A new per-particle

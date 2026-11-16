@@ -117,7 +117,7 @@ end
     StencilNeighborMatrix{T}
 
 Neighbor list variant where each particle carries its own interaction radius
-(`rlist`, `rlist2`). Used by `examples/2D/3D_stencil_two_sizes*.jl` when mixing
+(`rlist`, `rlist2`), for mixtures of
 different particle diameters. The per-particle cutoff is `σ_i + skin`, so the
 `skin` argument still controls rebuild latency.
 """

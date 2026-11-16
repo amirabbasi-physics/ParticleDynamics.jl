@@ -29,8 +29,8 @@ export box_from_phi_2d,
 
 Compute a rectangular 2D box `(Lx, Ly)` whose area fraction matches the target
 `ϕ` when populated with `N` disks of diameter `σ`. `aspect = Lx/Ly` and defaults
-to 1 (square). `examples/TwoT_2D_LD_VV.jl` calls this with `(N=2000, ϕ=0.5,
-σ=1.0)` to fix the box before the random hex-based placement.
+to 1 (square). For example, `(N=2000, ϕ=0.5, σ=1.0)` fixes the box before a
+random hex-based placement.
 """
 function box_from_phi_2d(N::Integer, ϕ::Real, σ::Real; T=Float32, aspect::Real=1)
     @assert ϕ > 0 "Area fraction must be positive"
@@ -104,8 +104,7 @@ end
     hex_sites_in_box_2d(box, σ)
 
 Enumerate hexagonal lattice sites inside a periodic rectangular box of side lengths
-`box`. `a = σ` fixes the nearest-neighbor spacing, which matches the setups
-used in `examples/2D_example.jl` and related workflow examples. Rows are centered in the
+`box`. `a = σ` fixes the nearest-neighbor spacing. Rows are centered in the
 box, and if an odd row count would place periodic images closer than `a`,
 the last row is dropped to avoid overlaps while minimizing empty space.
 """
@@ -177,9 +176,8 @@ end
     hex_random_2d(N, σ, ϕ; T=Float32, rng=Random.default_rng(), fit_box=true, aspect=1)
 
 Sample `N` distinct hexagonal lattice sites at random inside the box computed
-by [`box_from_phi_2d`](@ref). This is the entry point used by
-`examples/TwoT_2D_LD_VV.jl` (with `σ = 1.0`, `ϕ = 0.5`) before assigning hot
-and cold type IDs. When `fit_box=true`, the lattice spacing is adjusted so an
+by [`box_from_phi_2d`](@ref), e.g. with `σ = 1.0`, `ϕ = 0.5`, before assigning
+type IDs. When `fit_box=true`, the lattice spacing is adjusted so an
 even row count fits exactly in `Ly`, avoiding overlaps across the periodic
 y-wrap without leaving an empty strip. The spacing is only increased (never
 reduced below `σ`); an error is raised if there is insufficient room. Use
@@ -208,8 +206,7 @@ end
     hex_circle_2d(N, σ, ϕ; T=Float32, aspect=1)
 
 Return the innermost `N` hex-lattice sites (ordered by radius) so that the
-configuration forms a densely packed circular cluster. The single-temperature
-circles in `examples/SingleT_2D_LD_VV_Circle.jl` are assembled with this helper.
+configuration forms a densely packed circular cluster.
 Use `aspect` to set `Lx/Ly` (defaults to 1).
 """
 function hex_circle_2d(N::Integer, σ::Real, ϕ::Real; T=Float32, aspect::Real=1)
@@ -227,7 +224,7 @@ end
 """
     hex_circle_plus_random_2d(N, σ, ϕ, frac_circle; T=Float32, rng=Random.default_rng(), aspect=1)
 
-Hybrid generator used by `examples/TwoT_2D_LD_VV_frac.jl`: `frac_circle` of the
+Hybrid generator: `frac_circle` of the
 particles occupy the innermost circle while the rest are randomly drawn from
 sites outside that radius. The return value bundles the circle and random
 indices so scripts can assign different types or temperatures to each set. Use

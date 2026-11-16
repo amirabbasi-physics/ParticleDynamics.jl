@@ -1,4 +1,4 @@
-# Bonded Terms, Minimization and NPT
+# Bonds, minimization and pressure
 
 All quantities are plain numbers in caller-chosen consistent units (length L,
 energy E, time). Angles are radians.
@@ -40,9 +40,21 @@ forces = Force[
 Every label must be assigned exactly once per section; missing or duplicate
 assignments are errors. Torsions and impropers require 3D. Invalid geometry
 (zero-length bonds, collinear torsion planes, FENE beyond `R0`) raises
-`DomainError` with the topology index. `bonded_energy_components(st)` returns
-per-family energies. Exclusion and 1–4 scaling policies beyond the existing
-bonded-pair exclusion are not implemented yet.
+`DomainError` with the topology index. Exclusion and 1–4 scaling policies
+beyond the existing bonded-pair exclusion are not implemented yet.
+
+```@docs
+ParticleDynamics.HarmonicBondForce
+ParticleDynamics.FENEBondForce
+ParticleDynamics.HarmonicAngleForce
+ParticleDynamics.CosineSquaredAngleForce
+ParticleDynamics.UreyBradleyAngleForce
+ParticleDynamics.PeriodicDihedralForce
+ParticleDynamics.OPLSDihedralForce
+ParticleDynamics.RyckaertBellemansDihedralForce
+ParticleDynamics.HarmonicImproperForce
+ParticleDynamics.PeriodicImproperForce
+```
 
 ## Energy minimization
 
@@ -52,14 +64,20 @@ result = minimize!(sim; method=FIRE(dt_initial=1e-3, dt_max=1e-2),
                    mobile=Group(:solvent, TypeSelection(:W)))
 ```
 
-`minimize!` works on a workflow `Simulation` (the integrator only supplies
-forces; no thermostat runs) or on a low-level `SimulationState`. The box is
-fixed; non-mobile particles keep their interactions but do not move.
+`minimize!` minimizes a `Simulation` using its declared forces; no thermostat
+runs. The box is fixed; non-mobile particles keep their interactions but do
+not move.
 `FIRE` (velocity-Verlet FIRE) uses forces only; `SteepestDescent` uses a
 backtracking Armijo line search on energies and therefore stops with
 `:step_too_small` once energy differences fall below rounding (in practice
 about `|F| ≈ √(2 k eps E_term)`). `result.converged` is true only when the
 largest mobile force reached `force_tolerance`.
+
+`FIRE` requires `dt_initial` and `dt_max`; `SteepestDescent` requires
+`initial_step`. Control the run with `force_tolerance`, `max_displacement`,
+`max_iterations` and `max_evaluations`. The returned result includes
+`converged`, `reason`, `iterations`, `initial_energy`, `final_energy` and
+`max_force`; inspect the stopping reason before using the configuration.
 
 ## Isotropic NPT
 
@@ -84,12 +102,6 @@ at every event. `barostat_diagnostics(sim)` reports volume, acceptance and
 committed changes. GSD frames record `log/barostat/state`; continue a run
 with `restore_barostat!(sim, read_gsd_log(path, "log/barostat/state"))`.
 
-States with rigid water (`attach_rigid_water!`, core API) take Monte Carlo
-volume moves only. The moves are molecular: `set_cell_and_molecules!` scales
-each water's centre of mass and translates the molecule rigidly, and the
-acceptance counts each water once. C-rescale and atom-wise scaling are
-rejected for rigid water.
-
 Monte Carlo moves sample the potential energy itself, so the Lennard-Jones
 cutoff convention matters (`vdw_modifier`, see [Forces](forces.md)). Use
 `:potential_shift` to compare with GROMACS.
@@ -98,3 +110,14 @@ Size the neighbor-list `capacity` for the densest volume the run will visit:
 an overflow stops the run instead of truncating the list. Each barostat event
 currently triggers a neighbor rebuild, so events every 10–25 steps are a
 reasonable default.
+
+### Barostat API
+
+```@docs
+ParticleDynamics.Barostat
+ParticleDynamics.MonteCarloBarostat
+ParticleDynamics.StochasticCellRescaling
+ParticleDynamics.barostat_diagnostics
+ParticleDynamics.barostat_state_record
+ParticleDynamics.restore_barostat!
+```

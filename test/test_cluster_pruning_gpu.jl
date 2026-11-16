@@ -1,5 +1,5 @@
 module ClusterPruningGPUChecks
-# S5 regression: eager distance-only pruning must still evaluate pair forces.
+# Eager distance-only pruning must still evaluate pair forces.
 # Reference forces, energies and virials use the separate GPU ELL implementation.
 using Test, CUDA, ParticleDynamics, Random
 const SC = ParticleDynamics.SimulationCore
@@ -33,52 +33,44 @@ function compare!(A,B;energy=true)
 end
 
 @testset verbose=true "Distance-only pruning: eager evaluation and graph steps" begin
-    original = CP.PRUNE_ONLY[]
-    try
-        @testset "$T, distance-only=$prune_only, intervals=$intervals" for T in (Float32,Float64),
-                prune_only in (false,true), intervals in (nothing,(8,2))
-            CP.PRUNE_ONLY[] = prune_only
-            A = fixture(T,:cluster,intervals); B = fixture(T,:ell,nothing)
-            SC.evaluate_forces_into_f!(A,true)
-            @test A.cluster.list.prune_only == prune_only
-            compare!(A,B)
+    @testset "$T, intervals=$intervals" for T in (Float32,Float64), intervals in (nothing,(8,2))
+        A = fixture(T,:cluster,intervals); B = fixture(T,:ell,nothing)
+        SC.evaluate_forces_into_f!(A,true)
+        compare!(A,B)
 
-            # Eager prune without rebuilding: motion exceeds prune_buffer/2 but not skin/2.
-            L = A.cluster.list; before = Array(L.counts)
-            A.rx .+= T(0.06)
-            SC.evaluate_forces_into_f!(A,true)
-            after = Array(L.counts)
-            @test after[CP.CL_NBUILD] == before[CP.CL_NBUILD]
-            @test after[CP.CL_NPRUNE] == before[CP.CL_NPRUNE] + 1
-            compare!(A,B)
+        # Eager prune without rebuilding: motion exceeds prune_buffer/2 but not skin/2.
+        L = A.cluster.list; before = Array(L.counts)
+        A.rx .+= T(0.06)
+        SC.evaluate_forces_into_f!(A,true)
+        after = Array(L.counts)
+        @test after[CP.CL_NBUILD] == before[CP.CL_NBUILD]
+        @test after[CP.CL_NPRUNE] == before[CP.CL_NPRUNE] + 1
+        compare!(A,B)
 
-            # Explicit rebuild, and then an unchanged configuration (no prune).
-            CP.request_build!(L)
-            SC.evaluate_forces_into_f!(A,true)
-            @test Array(L.counts)[CP.CL_NBUILD] == after[CP.CL_NBUILD] + 1
-            compare!(A,B)
-            before = Array(L.counts)
-            SC.evaluate_forces_into_f!(A,false)
-            @test Array(L.counts)[CP.CL_NPRUNE] == before[CP.CL_NPRUNE]
-            compare!(A,B;energy=false)
+        # Explicit rebuild, and then an unchanged configuration (no prune).
+        CP.request_build!(L)
+        SC.evaluate_forces_into_f!(A,true)
+        @test Array(L.counts)[CP.CL_NBUILD] == after[CP.CL_NBUILD] + 1
+        compare!(A,B)
+        before = Array(L.counts)
+        SC.evaluate_forces_into_f!(A,false)
+        @test Array(L.counts)[CP.CL_NPRUNE] == before[CP.CL_NPRUNE]
+        compare!(A,B;energy=false)
 
-            # Every step is checked, including fixed-interval rebuild/prune phases.
-            sp = SC.nve(A)
-            for step in 1:24
-                energy = step % 3 == 0
-                SC.step!(A,sp,A.dt;compute_energy=energy)
-                DE.synchronize_state!(A)
+        # Every step is checked, including fixed-interval rebuild/prune phases.
+        sp = SC.nve(A)
+        for step in 1:24
+            energy = step % 3 == 0
+            SC.step!(A,sp,A.dt;compute_energy=energy)
+            DE.synchronize_state!(A)
+            compare!(A,B;energy)
+            if step % 5 == 0
+                # Force an eager prune while the stepping engine owns the state.
+                CP.request_build!(A.cluster.list)
+                SC.evaluate_forces_into_f!(A,energy)
                 compare!(A,B;energy)
-                if step % 5 == 0
-                    # Force an eager prune while the stepping engine owns the state.
-                    CP.request_build!(A.cluster.list)
-                    SC.evaluate_forces_into_f!(A,energy)
-                    compare!(A,B;energy)
-                end
             end
         end
-    finally
-        CP.PRUNE_ONLY[] = original
     end
 end
 end

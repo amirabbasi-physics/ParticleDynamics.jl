@@ -62,13 +62,11 @@ function cluster_forces!(run,b::ClusterBackend;energy::Bool=false)
     end
     CP._pack!(eng,r...,b.q,b.typ)
     if c[CP.CL_PRUNE]!=0
-        CP.enqueue_prune!(eng,r...,energy;mark=true)   # the next eager decision measures from here
+        CP.enqueue_prune!(eng,r...;mark=true)   # the next eager decision measures from here
     end
-    # A distance-only prune updates the working list but leaves fc/Ec/Vc untouched.
-    # As in the graph suffix, compute pairs on that list before scattering them.
-    if c[CP.CL_PRUNE]==0 || L.prune_only
-        CP.enqueue_pairs!(eng,energy,Val(false))
-    end
+    # The prune updates the working list only; as in the graph suffix, the pair pass on that
+    # list follows before the scatter.
+    CP.enqueue_pairs!(eng,energy,Val(false))
     CP.enqueue_scatter!(eng,r...,b.q,run.f...,run.energy,run.virial,energy)
     if b.solver!==nothing
         order=CP.mesh_order(eng)
@@ -120,15 +118,15 @@ function cluster_step_parts(run,b::ClusterBackend;energy::Bool,resume::Integer=0
         sample && features_position_sample!(run)   # physical positions only (not the Heun midpoint)
         CP._pack!(eng,r...,b.q,b.typ)
     end
+    prune=() -> CP.enqueue_prune!(eng,r...)
     # virial: a barostat sampling step accumulates only the virial trace Σ r·f of the
     # pairs (one register per thread) instead of energies and per-particle virial tensors
-    prune(e::Bool)=() -> CP.enqueue_prune!(eng,r...,e;trace=virial)
     # GATHER_EARLY: the final mesh gather writes the forces in the parallel node, beside the
     # pair pass; the pair scatter (in the join) adds to them
     early=GATHER_EARLY[] && b.solver!==nothing && ES.gather_sets(b.solver)
     scatter(e::Bool;add::Bool=false)=() -> CP.enqueue_scatter!(eng,r...,b.q,run.f...,run.energy,run.virial,e;trace=virial,add)
     pairs(e::Bool;scattered::Bool=true)=() -> begin
-        CP.enqueue_pairs!(eng,e,Val(false);skip=(L.prune_only || fast) ? 0 : CP.CL_PRUNE,trace=virial)
+        CP.enqueue_pairs!(eng,e,Val(false);trace=virial)
         scattered && scatter(e)()
     end
     # The mesh traverses its own copy of the cluster order (a rebuild may rewrite the
@@ -156,7 +154,7 @@ function cluster_step_parts(run,b::ClusterBackend;energy::Bool,resume::Integer=0
         end
         push!(marks,n)
     end
-    pruning!(prefix,e)=(push!(sections,(prefix,L.counts,CP.CL_PRUNE,fast ? nothing : prune(e))); push!(marks,0); push!(resumes,nothing))
+    pruning!(prefix)=(push!(sections,(prefix,L.counts,CP.CL_PRUNE,fast ? nothing : prune)); push!(marks,0); push!(resumes,nothing))
     # RW_BATH_SIDE: the rigid-water CSVR bath as a side branch beside the step's force work (not on
     # pressure-event steps, whose cell scaling follows the bath, nor in recovery graphs)
     sidebath=RW_BATH_SIDE[] && rw_fast_path(run) && th isa CSVRData && !event && !split && !keep && !heun && resume==0
@@ -176,7 +174,7 @@ function cluster_step_parts(run,b::ClusterBackend;energy::Bool,resume::Integer=0
         event && (heun && throw(ArgumentError("Device pressure control does not support Euler–Heun runs")))
         rebuild!(() -> (enqueue_drift!(run;csvr=!sidebath); event && enqueue_crescale!(run,b); dstep()),:cluster)   # Heun: the midpoint move
     end
-    pruning!(pack(!heun),heun ? false : energy)
+    pruning!(pack(!heun))
     if heun
         midpoint_force=() -> begin
             pairs(false)()
@@ -191,7 +189,7 @@ function cluster_step_parts(run,b::ClusterBackend;energy::Bool,resume::Integer=0
         else
             rebuild!(() -> (midpoint_force(); final_move(); decide()),:cluster)
         end
-        pruning!(pack(true),energy)
+        pruning!(pack(true))
     end
     after=length(sections)-1                     # the final evaluation's cluster rebuild section
     if resume>0
@@ -223,7 +221,7 @@ end
 
 """Fewer tail kernels in cluster steps: the kick's last kernel advances the device step counter when
 no after-kick work follows (`quiet_after_kick`), and fast steps skip the copy of the cluster order for
-the mesh (unchanged without a build). Five paired runs with C1 lists: salt 10.6k NVE 1.014×, NVT10 1.012×."""
+the mesh (unchanged without a build). Five paired runs with buffered fixed-interval lists: salt 10.6k NVE 1.014×, NVT10 1.012×."""
 const FOLD_TAIL=Ref(true)
 
 # Keep per-particle Ekin current, but reduce full-step bath totals only on sampled
@@ -251,16 +249,16 @@ pair pass (diagnostics: `MESH_PARALLEL[] = false`)."""
 const MESH_PARALLEL=Ref(true)
 """Host-scheduled fixed list intervals: with `list_intervals` (nstlist a multiple of nstprune), the
 rebuild/prune schedule follows the device step counter, and the host launches a `fast` graph without
-list decisions or conditional nodes on the steps between scheduled ones. Five paired runs, C1 lists:
-salt 10.6k NVE 1.10×, NVT10 1.10×, 10k water NPT 1.03× faster."""
+list decisions or conditional nodes on the steps between scheduled ones. Five paired runs, buffered
+fixed-interval lists: salt 10.6k NVE 1.10×, NVT10 1.10×, 10k water NPT 1.03× faster."""
 const HOST_SCHEDULE=Ref(true)
 host_scheduled(run)=HOST_SCHEDULE[] && run.cluster!==nothing && (L=run.cluster.eng.list; L.nstlist>0 && L.nstprune>0 &&
     L.nstlist%L.nstprune==0) && !any(needs_neighbors,run.features) && !(run.thermostat isa BrownianData && run.thermostat.midpoint)
 """Whether a launch at device step `device_step` of a host-scheduled run is a scheduled (decision) step."""
 scheduled_step(run,device_step::Integer)=device_step%run.cluster.eng.list.nstprune==0
 """The final mesh gather runs in the parallel mesh node, beside the pair pass, writing the mesh
-forces; the pair scatter in the join adds to them (`early` in `cluster_step_parts`; 16-lane gather
-only, `ES.gather_sets`). `false` restores the gather after the scatter. 10k water NPT, five paired
+forces; the pair scatter in the join adds to them (`early` in `cluster_step_parts`; not for P3M-ik,
+`ES.gather_sets`). `false` restores the gather after the scatter. 10k water NPT, five paired
 runs: 1.028× faster."""
 const GATHER_EARLY=Ref(true)
 """The rigid-water CSVR bath update as a side branch beside the list decision, mesh and pair

@@ -164,37 +164,22 @@ end
 end
 
 @testset "Low-level stochastic timestep guards" begin
-    LI = ParticleDynamics.LangevinIntegrators
-    BI = ParticleDynamics.BrownianIntegrators
+    SC = SimulationCore
+    # Raw parameter bundles carry the dt their noise was scaled for; stepping them
+    # with another dt must refuse before touching the state.
     for T in (Float32,Float64), D in (2,3)
         st = build_simulation(N=2,box=ntuple(_ -> T(20),D),temperature=0,
             epsilon=0,precision=T === Float32 ? :f32 : :f64)
-        coords = (st.rx,st.ry,st.rz)[1:D]
-        velocity = (st.vx,st.vy,st.vz)[1:D]
-        forces = (st.fx,st.fy,st.fz)[1:D]
-        noise = ntuple(_ -> CUDA.zeros(T,2),D)
-        mass = CUDA.ones(T,2)
-        dt = T(.01); box = ntuple(_ -> T(20),D)
-        vv = SimulationCore.velocityverlet(st;gamma=1,temperature=0,dt).params
-        bao = SimulationCore.baoab(st;gamma=1,temperature=0,dt).params
-        em = SimulationCore.eulermaruyama(st;gamma=1,temperature=0,dt).params
-        ou_step = D == 2 ? LI.baoab_OU_2d! : LI.baoab_OU_3d!
-        em_step = D == 2 ? BI.em_step_2d! : BI.em_step_3d!
-        calls = (
-            h -> LI.vv_positions_soa!(coords...,velocity...,forces...,noise...,vv,h,box),
-            h -> LI.vv_positions_soa!(coords...,velocity...,forces...,noise...,mass,vv,h,box),
-            h -> LI.vv_velocities_soa!(velocity...,forces...,forces...,noise...,st.dq,st.dU,st.Ekin,vv,h),
-            h -> LI.vv_velocities_soa!(velocity...,forces...,forces...,noise...,st.dq,st.dU,st.Ekin,mass,mass,vv,h),
-            h -> ou_step(velocity...,noise...,bao,h,st.dq),
-            h -> ou_step(velocity...,noise...,mass,bao,h,st.dq),
-            h -> em_step(coords...,forces...,em,h,st.dq,st.dU,box),
-        )
-        for call in calls
-            before = map(Array,(coords...,velocity...,st.dq,st.dU,st.Ekin))
-            @test_throws ArgumentError call(2dt)
-            @test map(Array,(coords...,velocity...,st.dq,st.dU,st.Ekin)) == before
-            call(dt)
-            @test all(a -> all(isfinite,Array(a)),(coords...,velocity...))
+        dt = T(.01)
+        coords() = map(Array,(st.rx,st.ry,st.rz)[1:D])
+        for ctor in (SC.velocityverlet, SC.baoab, SC.eulerheun, SC.eulermaruyama)
+            params = ctor(st;gamma=1,temperature=0,dt).params
+            before = (coords(), st.step)
+            @test_throws ArgumentError step!(st,params,2dt)
+            @test (coords(), st.step) == before
+            step!(st,params,dt)
+            @test st.step == before[2] + 1
+            @test all(a -> all(isfinite,a),coords())
         end
     end
 end

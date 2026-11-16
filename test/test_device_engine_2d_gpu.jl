@@ -8,7 +8,7 @@ using Main.GoldenFixtures
 using Test, CUDA, ParticleDynamics, TOML, SHA, LinearAlgebra
 const SC=ParticleDynamics.SimulationCore
 const DE=ParticleDynamics.DeviceEngine
-include(joinpath(@__DIR__,"..","scripts","capture_staged_golden.jl"))
+include(joinpath(@__DIR__,"golden_capture.jl"))
 include(joinpath(@__DIR__,"pair_reference_gpu.jl"))
 include(joinpath(@__DIR__,"engine_golden.jl")); using .EngineGolden
 const GOLDEN=golden_directory(:deterministic)

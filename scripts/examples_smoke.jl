@@ -6,20 +6,13 @@ const ROOT = normpath(joinpath(@__DIR__, ".."))
 const EXAMPLES_DIR = joinpath(ROOT, "examples")
 
 const SMOKE_ENV = Dict(
-    "NEQSIM_NPARTICLES" => "100",
-    "NEQSIM_N" => "100",
-    "NEQSIM_MAX_STEPS" => "2",
-    "NEQSIM_STEPS" => "2",
-    "NEQSIM_LOG_INTERVAL" => "1",
-    "NEQSIM_WARMUP_STEPS" => "0",
-    "NEQSIM_INIT_STEPS" => "0",
-    "NEQSIM_RELAX_STEPS" => "0",
-    "NEQSIM_FREEZE_STEPS" => "0",
-    "NEQSIM_BURN_STEPS" => "0",
-    "NEQSIM_SAMPLE_STRIDE" => "1",
-    "NEQSIM_MAX_SECONDS" => "20",
-    "NEQSIM_APPEND_GSD" => "false",
-    "NEQSIM_APPEND_LOG" => "false",
+    "SIM_NPARTICLES" => "100",
+    "SIM_MAX_STEPS" => "2",
+    "SIM_LOG_INTERVAL" => "1",
+    "SIM_WARMUP_STEPS" => "0",
+    "SIM_INIT_STEPS" => "0",
+    "SIM_RELAX_STEPS" => "0",
+    "SIM_MAX_SECONDS" => "20",
 )
 
 function run_example(path::String; args::Vector{String}=String[], env::Dict{String,String}=Dict{String,String}())
@@ -35,51 +28,21 @@ function run_example(path::String; args::Vector{String}=String[], env::Dict{Stri
 end
 
 function example_args(path::String)
-    name = basename(path)
-    if name == "SingleT_2D_MD_CSVR.jl"
-        return ["0.7", "100.0"]
-    elseif name == "SingleT_2D_LD_VV_hex_sweep.jl"
-        return ["0.7", "100.0"]
-    end
+    basename(path) == "SingleT_2D_MD_CSVR.jl" && return ["0.7", "100.0"]
     return String[]
 end
 
+# Per-example overrides of SMOKE_ENV. The 3D Lennard-Jones example needs a box of
+# at least three list radii (9σ), i.e. more than ~580 particles at its density.
 function example_env(path::String)
-    name = basename(path)
-    if name == "restart_from_gsd.jl"
-        return Dict(
-            "NEQSIM_GSD_IN" => joinpath(EXAMPLES_DIR, "traj3d_quick.gsd"),
-            "NEQSIM_GSD_OUT" => joinpath(EXAMPLES_DIR, "traj3d_quick_restart.gsd"),
-            "NEQSIM_LOG_OUT" => joinpath(EXAMPLES_DIR, "traj3d_quick_restart.log"),
-        )
-    elseif name == "TwoT_2D_LD_Circle.jl"
-        return Dict("NEQSIM_NPARTICLES" => "400")
-    elseif name == "TwoT_2D_LD_slab.jl"
-        return Dict("NEQSIM_NPARTICLES" => "512")
-    elseif name == "TwoT_2D_MD_NHC_LJ_slab.jl"
-        return Dict("NEQSIM_NPARTICLES" => "768")
-    elseif name == "TwoT_2D_MD_NHC_softrepulsive_slab.jl"
-        return Dict("NEQSIM_NPARTICLES" => "1024")
-    elseif name == "TwoT_LJ2D_MD_CSVR_slab.jl"
-        return Dict("NEQSIM_NPARTICLES" => "512")
-    elseif name == "TwoT_SR2D_MD_CSVR_slab.jl"
-        return Dict("NEQSIM_NPARTICLES" => "512")
-    end
+    basename(path) == "3D_LJ_NVE.jl" && return Dict("SIM_NPARTICLES" => "1000")
     return Dict{String,String}()
 end
 
 function example_paths()
     paths = filter(path -> endswith(path, ".jl") && !startswith(basename(path), "_"),
                    readdir(EXAMPLES_DIR; join=true))
-    sort!(paths)
-
-    restart_idx = findfirst(path -> basename(path) == "restart_from_gsd.jl", paths)
-    if restart_idx !== nothing
-        restart = paths[restart_idx]
-        deleteat!(paths, restart_idx)
-        push!(paths, restart)
-    end
-    return paths
+    return sort!(paths)
 end
 
 if !CUDA.functional()

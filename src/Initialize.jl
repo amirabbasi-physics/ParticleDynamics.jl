@@ -81,8 +81,8 @@ end
     center_of_mass_velocity!(vx, vy[, vz]) -> tuple
 
 Transfer the velocity arrays back to the host, compute the average velocity,
-and return it as a tuple. Used by the warmup blocks in
-`examples/TwoT_2D_LD_VV.jl` to ensure there is no center-of-mass drift.
+and return it as a tuple. Use it after warmup to check that there is no
+center-of-mass drift.
 """
 function center_of_mass_velocity!(vx::CuArray{T,1}, vy::CuArray{T,1}) where {T<:AbstractFloat}
     Vx = sum(Array(vx)) / length(vx)

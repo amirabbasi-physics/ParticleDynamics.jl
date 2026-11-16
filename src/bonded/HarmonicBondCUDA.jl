@@ -287,8 +287,7 @@ end
 """
     harmonic_forces_soa!(rx, ry[, rz], fx, fy[, fz], E, bonds, box, params)
 
-Evaluate harmonic bond forces and per-particle energies. The bead–spring chains
-in `examples/2D_polymer_bonded.jl` use this helper after calling
+Evaluate harmonic bond forces and per-particle energies for a bond list from
 `build_bondlist`.
 """
 function harmonic_forces_soa!(

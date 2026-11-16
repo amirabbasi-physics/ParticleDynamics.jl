@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for contributing to `ParticleDynamics.jl`.
+Thanks for contributing to `ParticleDynamics`.
 
 ## Before opening a PR
 

@@ -499,7 +499,7 @@ class Dashboard:
         self.figure.text(
             0.5,
             0.955,
-            "ParticleDynamics.jl",
+            "ParticleDynamics",
             color=TEXT,
             fontsize=26,
             fontweight="bold",
@@ -615,13 +615,13 @@ class Dashboard:
             marker="o",
             markevery=40,
             markersize=4.5,
-            label="ParticleDynamics.jl",
+            label="ParticleDynamics",
         )
         (self.ree_dot,) = self.ree_axis.plot([], [], "o", color=NAVY, markersize=5)
         self.ree_legend = LiveLegend(
             self.ree_axis,
             rf"Kremer–Grest (1990): $\langle R_{{\mathrm{{e}}}}^2 \rangle_{{\mathrm{{ref}}}} = {reference.ree2:.1f}$",
-            r"ParticleDynamics.jl: $\overline{R_{\mathrm{e}}^2} =$",
+            r"ParticleDynamics: $\overline{R_{\mathrm{e}}^2} =$",
         )
 
         style_axis(self.rg_axis)
@@ -656,13 +656,13 @@ class Dashboard:
             marker="o",
             markevery=40,
             markersize=4.5,
-            label="ParticleDynamics.jl",
+            label="ParticleDynamics",
         )
         (self.rg_dot,) = self.rg_axis.plot([], [], "o", color=NAVY, markersize=5)
         self.rg_legend = LiveLegend(
             self.rg_axis,
             rf"Kremer–Grest (1990): $\langle R_{{\mathrm{{g}}}}^2 \rangle_{{\mathrm{{ref}}}} = {reference.rg2:.2f}$",
-            r"ParticleDynamics.jl: $\overline{R_{\mathrm{g}}^2} =$",
+            r"ParticleDynamics: $\overline{R_{\mathrm{g}}^2} =$",
         )
 
     @property

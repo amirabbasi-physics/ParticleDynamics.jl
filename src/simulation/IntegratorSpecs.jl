@@ -5,27 +5,176 @@ const INTEGRATOR_ID_NHC      = UInt8(3)
 const INTEGRATOR_ID_CSVR     = UInt8(4)
 const INTEGRATOR_ID_NVE      = UInt8(5)
 
+# ------------------------------------------------------------------
+# Stochastic integrator parameters (the device engine reads these; filters
+# update `gamma`/`noise_scale` in place)
+# ------------------------------------------------------------------
+
+"""
+    VVParams(gamma, mass, noise_scale; dt=1, corr_time=nothing, ou=nothing)
+
+Parameters for the Grønbech-Jensen/Farago (velocity-Verlet) Langevin scheme.
+`gamma` and `noise_scale` are CuArrays so `Filters.set_temperature!` can update
+them in-place. `corr_time` stores optional
+per-particle Ornstein–Uhlenbeck correlation times.
+"""
+struct VVParams{T<:AbstractFloat}
+    gamma::CuArray{T,1}
+    mass::T
+    dt::T
+    noise_scale::CuArray{T,1}
+    corr_time::Union{Nothing,CuArray{T,1}}
+    ou::Union{Nothing,Definitions.OUSpectrum{T}}
+end
+VVParams(gamma::CuArray{T,1}, mass::T, noise_scale::CuArray{T,1};
+         dt::T=one(T),
+         corr_time::Union{Nothing,CuArray{T,1}}=nothing,
+         ou::Union{Nothing,Definitions.OUSpectrum{T}}=nothing) where {T<:AbstractFloat} = begin
+    @assert corr_time === nothing || length(corr_time) == length(gamma)
+    VVParams{T}(gamma, mass, dt, noise_scale, corr_time, ou)
+end
+VVParams{T}(gamma::CuArray{T,1}, mass::T, noise_scale::CuArray{T,1};
+            dt::T=one(T),
+            corr_time::Union{Nothing,CuArray{T,1}}=nothing,
+            ou::Union{Nothing,Definitions.OUSpectrum{T}}=nothing) where {T<:AbstractFloat} =
+    VVParams(gamma, mass, noise_scale; dt=dt, corr_time=corr_time, ou=ou)
+
+"""
+    BAOABParams(gamma, mass, noise_scale; dt=1, corr_time=nothing, ou=nothing)
+
+Parameter container for the BAOAB/BAOA/GSM splitting schemes; same layout as
+[`VVParams`](@ref).
+"""
+struct BAOABParams{T<:AbstractFloat}
+    gamma::CuArray{T,1}
+    mass::T
+    dt::T
+    noise_scale::CuArray{T,1}
+    corr_time::Union{Nothing,CuArray{T,1}}
+    ou::Union{Nothing,Definitions.OUSpectrum{T}}
+end
+BAOABParams(gamma::CuArray{T,1}, mass::T, noise_scale::CuArray{T,1};
+            dt::T=one(T),
+            corr_time::Union{Nothing,CuArray{T,1}}=nothing,
+            ou::Union{Nothing,Definitions.OUSpectrum{T}}=nothing) where {T<:AbstractFloat} = begin
+    @assert corr_time === nothing || length(corr_time) == length(gamma)
+    BAOABParams{T}(gamma, mass, dt, noise_scale, corr_time, ou)
+end
+BAOABParams{T}(gamma::CuArray{T,1}, mass::T, noise_scale::CuArray{T,1};
+               dt::T=one(T),
+               corr_time::Union{Nothing,CuArray{T,1}}=nothing,
+               ou::Union{Nothing,Definitions.OUSpectrum{T}}=nothing) where {T<:AbstractFloat} =
+    BAOABParams(gamma, mass, noise_scale; dt=dt, corr_time=corr_time, ou=ou)
+
+"""
+    BrownianParams(gamma, noise_scale[, corr_time[, dt[, ou]]])
+
+Parameters for the stochastic midpoint (Euler–Heun) Brownian integrator.
+`gamma` and `noise_scale` are CuArrays so filters can assign different
+temperatures to different particle groups.
+"""
+struct BrownianParams{T<:AbstractFloat}
+    gamma::CuArray{T,1}
+    dt::T
+    noise_scale::CuArray{T,1}
+    corr_time::Union{Nothing,CuArray{T,1}}
+    ou::Union{Nothing,Definitions.OUSpectrum{T}}
+    function BrownianParams{T}(gamma::CuArray{T,1},
+                               dt::T,
+                               noise_scale::CuArray{T,1},
+                               corr_time::Union{Nothing,CuArray{T,1}}=nothing,
+                               ou::Union{Nothing,Definitions.OUSpectrum{T}}=nothing) where {T<:AbstractFloat}
+        @assert length(gamma) == length(noise_scale)
+        corr_time !== nothing && @assert length(corr_time) == length(gamma)
+        new{T}(gamma, dt, noise_scale, corr_time, ou)
+    end
+end
+
+BrownianParams(gamma::CuArray{T,1}, noise_scale::CuArray{T,1}) where {T<:AbstractFloat} =
+    BrownianParams{T}(gamma, one(T), noise_scale, nothing, nothing)
+BrownianParams(gamma::CuArray{T,1},
+               noise_scale::CuArray{T,1},
+               corr_time::Union{Nothing,CuArray{T,1}}) where {T<:AbstractFloat} =
+    BrownianParams{T}(gamma, one(T), noise_scale, corr_time, nothing)
+BrownianParams(gamma::CuArray{T,1},
+               noise_scale::CuArray{T,1},
+               corr_time::Union{Nothing,CuArray{T,1}},
+               dt::T,
+               ou::Union{Nothing,Definitions.OUSpectrum{T}}=nothing) where {T<:AbstractFloat} =
+    BrownianParams{T}(gamma, dt, noise_scale, corr_time, ou)
+
+function BrownianParams{T}(gamma::Real, temperature::Real, dt::Real, N::Integer) where {T<:AbstractFloat}
+    γ = T(gamma)
+    Δt = T(dt)
+    scale = sqrt(T(2) * γ * T(temperature) * Δt)
+    return BrownianParams{T}(CUDA.fill(γ, N), Δt, CUDA.fill(scale, N), nothing, nothing)
+end
+BrownianParams(::Type{T}, gamma::Real, temperature::Real, dt::Real, N::Integer) where {T<:AbstractFloat} =
+    BrownianParams{T}(gamma, temperature, dt, N)
+function BrownianParams(gamma::Real, temperature::Real, dt::Real, N::Integer)
+    inferred = promote_type(float(typeof(gamma)), float(typeof(temperature)), float(typeof(dt)))
+    T = inferred <: AbstractFloat ? inferred : Float32
+    return BrownianParams{T}(gamma, temperature, dt, N)
+end
+
+"""
+    EMParams(gamma, noise_scale[, corr_time[, dt[, ou]]])
+
+Parameters for the Euler–Maruyama Brownian step. Same layout as
+[`BrownianParams`](@ref), so `Filters.set_temperature!` and friends operate on
+either type.
+"""
+struct EMParams{T<:AbstractFloat}
+    gamma::CuArray{T,1}
+    dt::T
+    noise_scale::CuArray{T,1}
+    corr_time::Union{Nothing,CuArray{T,1}}
+    ou::Union{Nothing,Definitions.OUSpectrum{T}}
+    function EMParams{T}(gamma::CuArray{T,1},
+                         dt::T,
+                         noise_scale::CuArray{T,1},
+                         corr_time::Union{Nothing,CuArray{T,1}}=nothing,
+                         ou::Union{Nothing,Definitions.OUSpectrum{T}}=nothing) where {T<:AbstractFloat}
+        @assert length(gamma) == length(noise_scale)
+        corr_time !== nothing && @assert length(corr_time) == length(gamma)
+        new{T}(gamma, dt, noise_scale, corr_time, ou)
+    end
+end
+
+EMParams(gamma::CuArray{T,1}, noise_scale::CuArray{T,1}) where {T<:AbstractFloat} =
+    EMParams{T}(gamma, one(T), noise_scale, nothing, nothing)
+EMParams(gamma::CuArray{T,1},
+         noise_scale::CuArray{T,1},
+         corr_time::Union{Nothing,CuArray{T,1}}) where {T<:AbstractFloat} =
+    EMParams{T}(gamma, one(T), noise_scale, corr_time, nothing)
+EMParams(gamma::CuArray{T,1},
+         noise_scale::CuArray{T,1},
+         corr_time::Union{Nothing,CuArray{T,1}},
+         dt::T,
+         ou::Union{Nothing,Definitions.OUSpectrum{T}}=nothing) where {T<:AbstractFloat} =
+    EMParams{T}(gamma, dt, noise_scale, corr_time, ou)
+
 """
 Concrete spec for the package's Langevin/GJF `velocityverlet` path.
 """
 mutable struct VVSpec{T<:AbstractFloat} <: IntegratorSpec{T}
-    params::LangevinIntegrators.VVParams{T}
+    params::VVParams{T}
     workspace::StochasticWorkspace{T}
 end
 
 """
-BAOAB splitting spec used in `examples/TwoT_2D_LD_BAOAB.jl`.
+BAOAB splitting spec.
 """
 mutable struct BAOABSpec{T<:AbstractFloat} <: IntegratorSpec{T}
-    params::LangevinIntegrators.BAOABParams{T}
+    params::BAOABParams{T}
     workspace::StochasticWorkspace{T}
 end
 
 """
-BAOA splitting (no trailing B) for legacy scripts.
+BAOA splitting (no trailing B half-kick).
 """
 mutable struct BAOASpec{T<:AbstractFloat} <: IntegratorSpec{T}
-    params::LangevinIntegrators.BAOABParams{T}
+    params::BAOABParams{T}
     workspace::StochasticWorkspace{T}
 end
 
@@ -33,7 +182,7 @@ end
 Generalized simulation scheme (GSM) spec, which reuses the BAOAB parameter type.
 """
 mutable struct GSMSpec{T<:AbstractFloat} <: IntegratorSpec{T}
-    params::LangevinIntegrators.BAOABParams{T}
+    params::BAOABParams{T}
     workspace::StochasticWorkspace{T}
 end
 
@@ -41,7 +190,7 @@ end
 Midpoint Brownian integrator spec created by [`eulerheun`](@ref).
 """
 mutable struct BrownianSpec{T<:AbstractFloat} <: IntegratorSpec{T}
-    params::BrownianIntegrators.BrownianParams{T}
+    params::BrownianParams{T}
     workspace::StochasticWorkspace{T}
 end
 
@@ -49,7 +198,7 @@ end
 Euler-Maruyama overdamped spec created by [`eulermaruyama`](@ref).
 """
 mutable struct EMSpec{T<:AbstractFloat} <: IntegratorSpec{T}
-    params::BrownianIntegrators.EMParams{T}
+    params::EMParams{T}
     workspace::StochasticWorkspace{T}
 end
 
@@ -163,12 +312,12 @@ mutable struct CSVRSpec{T<:AbstractFloat} <: IntegratorSpec{T}
     workspace::CSVRWorkspace{T}
 end
 
-VVSpec(params::LangevinIntegrators.VVParams{T}) where {T<:AbstractFloat} = VVSpec{T}(params, _empty_workspace(T))
-BAOABSpec(params::LangevinIntegrators.BAOABParams{T}) where {T<:AbstractFloat} = BAOABSpec{T}(params, _empty_workspace(T))
-BAOASpec(params::LangevinIntegrators.BAOABParams{T}) where {T<:AbstractFloat} = BAOASpec{T}(params, _empty_workspace(T))
-GSMSpec(params::LangevinIntegrators.BAOABParams{T}) where {T<:AbstractFloat} = GSMSpec{T}(params, _empty_workspace(T))
-BrownianSpec(params::BrownianIntegrators.BrownianParams{T}) where {T<:AbstractFloat} = BrownianSpec{T}(params, _empty_workspace(T))
-EMSpec(params::BrownianIntegrators.EMParams{T}) where {T<:AbstractFloat} = EMSpec{T}(params, _empty_workspace(T))
+VVSpec(params::VVParams{T}) where {T<:AbstractFloat} = VVSpec{T}(params, _empty_workspace(T))
+BAOABSpec(params::BAOABParams{T}) where {T<:AbstractFloat} = BAOABSpec{T}(params, _empty_workspace(T))
+BAOASpec(params::BAOABParams{T}) where {T<:AbstractFloat} = BAOASpec{T}(params, _empty_workspace(T))
+GSMSpec(params::BAOABParams{T}) where {T<:AbstractFloat} = GSMSpec{T}(params, _empty_workspace(T))
+BrownianSpec(params::BrownianParams{T}) where {T<:AbstractFloat} = BrownianSpec{T}(params, _empty_workspace(T))
+EMSpec(params::EMParams{T}) where {T<:AbstractFloat} = EMSpec{T}(params, _empty_workspace(T))
 NHCSpec(params::NHCParams{T}) where {T<:AbstractFloat} =
     NHCSpec{T}(params,
                _new_nhc_workspace(Backends.CUDABackend(), T,

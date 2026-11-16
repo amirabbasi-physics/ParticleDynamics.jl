@@ -1,88 +1,85 @@
-# Integrators
+# Dynamics
 
-The package exposes explicit integrator constructors that allocate and own the
-workspace needed for repeated stepping. Reuse a spec across many `step!` calls.
+Choose a method for the physics and a scheme for the numerical integration.
+The `Integrator` combines them with your forces and timestep.
 
-## Integrator constructors
+| Dynamics | Method | Scheme |
+|:--|:--|:--|
+| Microcanonical MD (NVE) | `ConstantVolume(all)` | `VelocityVerlet()` |
+| Thermostatted MD (NVT) | `ConstantVolume(all; thermostat=CSVR(kT=1.0, tau=0.1))` | `VelocityVerlet()` |
+| Langevin dynamics | `Langevin(all; gamma=1.0, kT=1.0)` | `VelocityVerlet()`, `BAOAB()`, `BAOA()` or `GSM()` |
+| Overdamped Brownian dynamics | `Brownian(all; gamma=1.0, kT=1.0)` | `EulerHeun()` or `EulerMaruyama()` |
 
-```@docs
-ParticleDynamics.nve
-ParticleDynamics.velocityverlet
-ParticleDynamics.baoab
-ParticleDynamics.baoa
-ParticleDynamics.gsm
-ParticleDynamics.eulerheun
-ParticleDynamics.eulermaruyama
-ParticleDynamics.nosehooverchain
-ParticleDynamics.csvr
-```
+Here `all = Group(:all, AllSelection())`; `kT` is an energy in your chosen units.
 
-## Public spec types
+## Molecular dynamics
 
-```@docs
-ParticleDynamics.AbstractIntegratorSpec
-ParticleDynamics.VVSpec
-ParticleDynamics.BAOABSpec
-ParticleDynamics.BAOASpec
-ParticleDynamics.GSMSpec
-ParticleDynamics.BrownianSpec
-ParticleDynamics.EMSpec
-ParticleDynamics.NVESpec
-ParticleDynamics.NHCSpec
-ParticleDynamics.CSVRSpec
-```
-
-## Usage pattern
+For NVE, provide initial velocities and leave the system without a thermostat:
 
 ```julia
-nve_spec = nve(st; dt=2.0f-4)
-for _ in 1:100
-    step!(st, nve_spec, 2.0f-4; compute_energy=false)
-end
+integrator = Integrator(
+    dt=0.002,
+    scheme=VelocityVerlet(),
+    forces=[LennardJones(epsilon=1.0, sigma=1.0, cutoff=2.5)],
+    methods=[ConstantVolume(all)],
+)
 ```
 
-## Timestep consistency
+The [NVE example](../examples.md#Fluids) includes velocity initialization and
+energy output. For NVT, add a [thermostat](thermostats.md). For NPT, see
+[pressure control](bonded_minimization_npt.md#Isotropic-NPT).
 
-`step!` and `step_graph!` require a finite positive timestep. For Langevin and
-Brownian specs, it must equal the timestep supplied to their constructor (after
-conversion to the simulation precision). Noise amplitudes and OU coefficients
-are cached for that timestep. A mismatch throws `ArgumentError` before stepping
-changes state or consumes random numbers. The low-level EM and Langevin
-wrappers that consume cached stochastic parameters enforce the same contract.
-For static forces and virials, use
-`ParticleDynamics.SimulationCore.evaluate_forces_into_f!(st, true)`; zero-duration
-steps are rejected.
+## Brownian dynamics
+
+Use an overdamped method when inertia is not part of your model:
 
 ```julia
-dt = 0.001f0
-spec = eulermaruyama(st; gamma=1, temperature=1, dt=dt)
-step!(st, spec, dt)
+integrator = Integrator(
+    dt=0.00025,
+    scheme=EulerMaruyama(),
+    forces=[WCA(epsilon=10.0, sigma=1.0)],
+    methods=[Brownian(all; gamma=10.0, kT=1.0)],
+)
 ```
 
-To change the timestep, construct a new spec with all desired friction,
-temperature, and OU settings. This starts a new stochastic workspace; it does
-not preserve the previous OU realization. Temperature and OU setters require
-the existing spec's timestep, including filtered updates. Raw parameter
-constructors that omit `dt` default to one; pass `dt` explicitly when wrapping
-these parameters in a spec or passing them to `step!`.
+Friction must be positive on stochastic paths that divide by it. A timestep
+that works for an inertial system need not work for an overdamped one;
+check displacement and the observables relevant to your model.
 
-`Filters.set_friction!` controls friction independently of the noise amplitude.
-To maintain a chosen thermal temperature after changing friction, also call
-`Filters.set_temperature!` for the same particles and the spec's timestep.
+## Active forcing
 
-## Notes
+`ActiveOrnsteinUhlenbeck` adds a correlated stochastic process. Thermal noise
+is specified separately through `Brownian` or `Langevin`, so both methods
+can act on the same group:
 
-- `nve` is the deterministic microcanonical MD path.
-- Langevin and Brownian constructors own stochastic buffers.
-- `gamma > 0` is required on stochastic paths that divide by friction.
-- Thermostat-driven MD paths (`nosehooverchain`, `csvr`) allocate device
-  workspaces per bath and remain CUDA-specific internally.
+```julia
+methods = [
+    Brownian(all; gamma=10.0, kT=1.0),
+    ActiveOrnsteinUhlenbeck(all; gamma=10.0, tau=1.0, noise_scale=1.0),
+]
+```
 
-## Example scripts
+`noise_scale` is the stationary standard deviation of the OU impulse; it is
+not a bath temperature. For multiple correlation times, supply an `OUSpectrum`.
+The [active-particle examples](../examples.md#Active-particles) include
+free-particle displacement checks.
 
-- `examples/2D_example.jl`
-- `examples/TwoT_2D_LD_BAOAB.jl`
-- `examples/TwoT_2D_LD_GSM.jl`
-- `examples/TwoT_2D_BD_EH.jl`
-- `examples/3D_BD.jl`
-- `examples/3D_LJ_NVE.jl`
+## Choose and change a timestep
+
+Timesteps must be finite and positive. Start conservatively, then compare
+runs at smaller timesteps using energy conservation, structural observables
+or transport coefficients appropriate to your system.
+
+A stage can override the configured timestep, for example during warmup:
+
+```julia
+run!(sim, Stage(:warmup, steps=1_000; dt=0.0001))
+run!(sim, Stage(:production, steps=10_000))
+```
+
+If you replace `sim.integrator`, call `prepare!(sim)` before continuing.
+Changing stochastic settings can rebuild stochastic workspaces; a continued
+run is not a promise of bitwise replay of an uninterrupted noise history.
+
+See the [workflow reference](workflow.md#Integrator,-schemes-and-methods) for
+constructor arguments.

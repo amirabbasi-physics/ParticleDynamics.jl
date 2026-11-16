@@ -94,7 +94,6 @@ mutable struct ElectrostaticsSolver{T,KR,ST,W<:MeshWorkspace}
     identity_order::CuArray{Int32,1}
 end
 
-has_exceptions(s::ElectrostaticsSolver) = !isempty(s.exceptions)
 solver_mesh(s::ElectrostaticsSolver) = s.ws.mesh
 is_ik(s::ElectrostaticsSolver) = s.spec.influence === :p3m_ik
 
@@ -134,6 +133,9 @@ function ElectrostaticsSolver(spec::ElectrostaticsSpec, ::Type{T}, box::NTuple{3
     boxF = ntuple(d -> Float64(box[d]), 3)
     2 * spec.real_cutoff < minimum(boxF) ||
         throw(ArgumentError("real_cutoff=$(spec.real_cutoff) must be smaller than half the shortest box length $(minimum(boxF)) (minimum-image real space)."))
+    window_resolved(spec.window, T) ||
+        throw(ArgumentError("A prolate window of width $(spec.window.order) and shape $(round(spec.window.shape; digits=3)) is attenuated to $(round(window_nyquist_attenuation(spec.window); sigdigits=3)) at the mesh Nyquist frequency; a $(T) mesh solve resolves $(round(min_nyquist_attenuation(T); sigdigits=3)) or more, below that round-off enters the mesh forces. Use a larger window shape or a narrower window" *
+                            (T === Float64 ? "." : ", or a Float64 state.")))
     mesh = resolve_mesh(spec, boxF)
     all(k -> k >= window_order(spec.window), mesh) ||
         throw(ArgumentError("Every mesh dimension must be at least the assignment order."))
@@ -142,12 +144,13 @@ function ElectrostaticsSolver(spec::ElectrostaticsSpec, ::Type{T}, box::NTuple{3
     N = length(charges)
     slots = Tuple{Int32,Int32,Float64}[(Int32(slot_of[i]), Int32(slot_of[j]), s) for (i, j, s) in exceptions]
     exo, exj, exs = _exception_rows(T, N, slots)
+    stencil = device_stencil(spec.window, T)
     solver = ElectrostaticsSolver{T,typeof(device_pair_kernel(spec.split, T)),
-                                  typeof(device_stencil(spec.window, T)),typeof(ws)}(
+                                  typeof(stencil),typeof(ws)}(
         spec, T(C), T(spec.real_cutoff^2), T(self_coefficient(spec.split)),
         spec.real_space_modifier === :potential_shift ? T(cutoff_energy(spec.split, spec.real_cutoff)) : zero(T),
         background_coefficient(spec.split), 0.0, 0.0, zero(T), 0.0, boxF,
-        device_pair_kernel(spec.split, T), device_stencil(spec.window, T), ws,
+        device_pair_kernel(spec.split, T), stencil, ws,
         exceptions, exo, exj, exs, CuArray(Int32.(1:N)))
     set_solver_charges!(solver, charges)
     refresh_geometry!(solver, boxF)
@@ -290,8 +293,8 @@ end
 """
     mesh_transform!(solver, rx, ry, rz, q, compute_energy, order)
 
-First half of [`compute_mesh!`](@ref): spread (tiled over blocks of `order`,
-which should be spatially sorted), forward FFT, influence function (mesh
+First half of [`compute_mesh!`](@ref): spread (16 threads per particle, in
+the sequence `order`, which should be spatially sorted), forward FFT, influence function (mesh
 energy and virial with energies) and the inverse transforms. Touches only the
 solver workspace, so it may run on its own stream concurrently with
 short-range kernels.
@@ -310,22 +313,8 @@ function mesh_transform!(s::ElectrostaticsSolver{T}, rx, ry, rz, q, compute_ener
     part === :fft && @goto transforms
     part === :clear && (fill!(ws.grid, zero(T)); return nothing)
     part === :spread_only || fill!(ws.grid, zero(T))
-    # large systems: 512-particle blocks with a 44 KB tile (Float32); small
-    # systems keep more, smaller blocks in flight
-    # small systems (too few blocks for tiles to pay off) deposit directly
-    big = N >= 262_144 && sizeof(T) == 4
-    if MESH_LINES[]
-        @cuda threads=128 blocks=cld(N * MESH_LANES, 128) _spread_lines_kernel!(ws.grid_flat, rx, ry, rz, q, order, Lb,
-                                                                                K1, K2, K3, s.stencil, xq)
-    elseif N < 32_768
-        xq === nothing || throw(ArgumentError("packed coordinates need the 16-lane spread (MESH_LINES)"))
-        @cuda threads=128 blocks=cld(N, 128) _spread_kernel!(ws.grid_flat, rx, ry, rz, q, order, Lb,
-                                                             K1, K2, K3, s.stencil)
-    else
-        th = big ? 512 : 128
-        @cuda threads=th blocks=cld(N, th) _spread_tiled_kernel!(ws.grid_flat, rx, ry, rz, q, order, Lb,
-                                                                 K1, K2, K3, s.stencil, big ? Val(11264) : Val(4096))
-    end
+    @cuda threads=128 blocks=cld(N * MESH_LANES, 128) _spread_lines_kernel!(ws.grid_flat, rx, ry, rz, q, order, Lb,
+                                                                            K1, K2, K3, s.stencil, xq)
     (part === :spread || part === :spread_only) && return nothing
     @label transforms
     mul!(ws.spec, ws.plan_fwd, ws.grid)
@@ -363,28 +352,26 @@ end
 Second half of [`compute_mesh!`](@ref): add reciprocal forces (and energies)
 from the transformed grid, and store the global virial.
 """
-# `set=true` (16-lane gather only, `gather_sets`): the gather writes the mesh force and energy
-# of every particle of `order` instead of adding them (the caller adds the pair terms after).
-gather_sets(s::ElectrostaticsSolver) = !is_ik(s) && MESH_LINES[]
+# `set=true` (analytic-differentiation gather only, `gather_sets`): the gather writes the mesh
+# force and energy of every particle of `order` instead of adding them (the caller adds the pair
+# terms after).
+gather_sets(s::ElectrostaticsSolver) = !is_ik(s)
 
 function mesh_gather!(s::ElectrostaticsSolver{T}, rx, ry, rz, q, fx, fy, fz, Epot, Vglobal,
                       compute_energy::Bool, order; geom=nothing, set::Bool=false) where {T}
-    set && !gather_sets(s) && throw(ArgumentError("mesh_gather!(set=true) needs the 16-lane gather"))
+    set && !gather_sets(s) && throw(ArgumentError("mesh_gather!(set=true) needs the analytic-differentiation gather"))
     ws = s.ws
     K1, K2, K3 = Int32.(ws.mesh)
     Lb = geom === nothing ? T.(s.box) : geom
-    pthreads, pblocks = _launch1d(length(rx), 128)
     if is_ik(s)
+        pthreads, pblocks = _launch1d(length(rx), 128)
         ff = ws.field_flat::NTuple{3,CuArray{T,1}}
         @cuda threads=pthreads blocks=pblocks _gather_ik_kernel!(fx, fy, fz, Epot, rx, ry, rz, q, order,
             ff[1], ff[2], ff[3], ws.grid_flat, Lb, K1, K2, K3, s.stencil, s.bg,
             Val(compute_energy))
-    elseif MESH_LINES[]
+    else
         @cuda threads=128 blocks=cld(length(rx) * MESH_LANES, 128) _gather_ad_lines_kernel!(fx, fy, fz, Epot, rx, ry, rz,
             q, order, ws.grid_flat, Lb, K1, K2, K3, s.stencil, s.bg, Val(compute_energy), Val(set))
-    else
-        @cuda threads=pthreads blocks=pblocks _gather_ad_kernel!(fx, fy, fz, Epot, rx, ry, rz, q, order,
-            ws.grid_flat, Lb, K1, K2, K3, s.stencil, s.bg, Val(compute_energy))
     end
     compute_energy && _store_global_virial!(Vglobal, ws.acc, s.ubg)
     return nothing

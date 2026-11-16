@@ -5,8 +5,7 @@
 """
     write_observables_csv!(path, step; Epot, Ekin, dq)
 
-Append a single line with `step, Etot, Kavg, Qtot` (mirrors
-`examples/2D_example.jl` and the 3D variants).
+Append a single line with `step, Etot, Kavg, Qtot`.
 """
 function write_observables_csv!(path::AbstractString, step::Int;
                                 Epot::CuArray{T,1},
@@ -115,8 +114,7 @@ end
 # =======================================================================
 
 """
-Stream particle tables to CSV (one row per particle). Mirrors the logging used
-in the earlier `examples/` scripts.
+Stream particle tables to CSV (one row per particle).
 """
 mutable struct CSVWriter <: Writer
     path::String
@@ -180,7 +178,7 @@ end
 
 """
 Minimal XYZ trajectory writer. Each call to `write!` appends one frame; z is
-set to zero for 2D states, matching the usage in `examples/2D_example.jl`.
+set to zero for 2D states.
 """
 mutable struct XYZWriter <: Writer
     path::String
@@ -232,8 +230,7 @@ end
 """
     write_xyz!(path; rx, ry[, rz], atomsym="A")
 
-Write a single XYZ frame without constructing an `XYZWriter`. Mirrors the
-ad-hoc dumping performed in `examples/2D_example.jl`.
+Write a single XYZ frame without constructing an `XYZWriter`.
 """
 function write_xyz!(path::AbstractString; rx::CuArray{T,1},
                     ry::CuArray{T,1},

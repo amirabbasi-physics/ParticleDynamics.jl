@@ -12,7 +12,6 @@ using CUDA
 import ..NeighborLists
 import ..NonBondedForces
 import ..SimulationCore
-import ..BrownianIntegrators
 import ..Collisions
 import ..BondedForces
 import ..Definitions

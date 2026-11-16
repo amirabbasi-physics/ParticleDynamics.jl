@@ -10,7 +10,7 @@ using Main.GoldenFixtures
 using Test, CUDA, ParticleDynamics, Random, Statistics
 const SC=ParticleDynamics.SimulationCore
 const DE=ParticleDynamics.DeviceEngine
-include(joinpath(@__DIR__,"..","scripts","capture_staged_golden.jl"))
+include(joinpath(@__DIR__,"golden_capture.jl"))
 include(joinpath(@__DIR__,"engine_golden.jl")); using .EngineGolden
 relerr(a,b)=maximum(abs.(a.-b))/max(maximum(abs.(b)),1e-30)
 

@@ -5,30 +5,35 @@ DocMeta.setdocmeta!(ParticleDynamics, :DocTestSetup, :(using ParticleDynamics); 
 
 makedocs(
     modules=[ParticleDynamics],
-    sitename="ParticleDynamics.jl",
+    sitename="ParticleDynamics",
     format=Documenter.HTML(prettyurls=get(ENV, "CI", nothing) == "true", edit_link=nothing,
-                           repolink="https://github.com/amirabbasi-physics/ParticleDynamics.jl"),
+                           repolink="https://github.com/amirabbasi-physics/ParticleDynamics.jl",
+                           assets=["assets/site.css"], collapselevel=1),
     checkdocs=:none,
     doctest=false,
     remotes=nothing,
     pages=[
         "Home" => "index.md",
-        "Quickstart" => "quickstart.md",
-        "Manual" => [
-            "Low-Level API" => "manual/getting_started.md",
-            "Simulation State" => "manual/simulation_state.md",
-            "Integrators" => "manual/integrators.md",
-            "Forces" => "manual/forces.md",
-            "Electrostatics" => "manual/electrostatics.md",
-            "Bonded, Minimization, NPT" => "manual/bonded_minimization_npt.md",
-            "Groups and Filters" => "manual/groups_filters.md",
-            "Thermostats" => "manual/thermostats.md",
-            "Observables" => "manual/observables.md",
-            "I/O" => "manual/io.md",
-            "Restarts" => "manual/restarts.md",
+        "Start here" => [
+            "Your first simulation" => "quickstart.md",
+            "Examples" => "examples.md",
         ],
-        "Legacy Notes" => [
-            "Collision Rate Notes" => "legacy/collision_rate.md",
+        "Build your simulation" => [
+            "Initial configurations" => "manual/initialization.md",
+            "Interactions" => "manual/forces.md",
+            "Dynamics" => "manual/integrators.md",
+            "Temperature control" => "manual/thermostats.md",
+            "Particle groups" => "manual/groups_filters.md",
+            "Electrostatics" => "manual/electrostatics.md",
+            "Bonds, minimization & pressure" => "manual/bonded_minimization_npt.md",
+        ],
+        "Measure and save" => [
+            "Observables" => "manual/observables.md",
+            "Trajectories and tables" => "manual/io.md",
+            "Continue a simulation" => "manual/restarts.md",
+        ],
+        "Reference" => [
+            "Workflow API" => "manual/workflow.md",
         ],
     ],
 )

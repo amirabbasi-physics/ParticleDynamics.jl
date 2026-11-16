@@ -89,9 +89,8 @@ generic_pairs(::BondExclusionFeature)=true   # the tuned uniform-LJ kernels have
 end
 
 # ---------------------------------------------------------------------------
-# Legacy uniform bonds (`st.bonds` + `st.bonding`): harmonic or FENE, the staged
-# kernels. With energies they add the bond energy and overwrite the bonded virial
-# rows. FENE first checks every bond for r ≥ R0 or a nonfinite length.
+# Uniform bonds (`st.bonds` + `st.bonding`): harmonic or FENE. With energies they
+# add the bond energy and overwrite the bonded virial rows. FENE first checks every bond for r ≥ R0 or a nonfinite length.
 struct BondFeature{T,B,V,G,S} <: EngineFeature
     bonds::B
     fene::Bool

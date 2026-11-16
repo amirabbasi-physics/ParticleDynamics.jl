@@ -40,7 +40,7 @@ function external_forces! end
 
 Route all subsequent force evaluations of `st` through `pot`. Requirements:
 
-- no bonded terms (legacy bonds or typed families: external potentials replace
+- no bonded terms (uniform bonds or typed families: external potentials replace
   bonded terms too), and
 - `spatial_reorder=false` at build time: reordering permutes storage order,
   which would silently break the provider's particle↔index correspondence.

@@ -35,7 +35,7 @@ end
     return v
 end
 
-function _cluster_pair_kernel!(fc, Ec, Vc, xs, ys, zs, qs, ts, s6, s12, sci, cjl, m8, xid, masks, counts, skip::Int32,
+function _cluster_pair_kernel!(fc, Ec, Vc, xs, ys, zs, qs, ts, s6, s12, sci, cjl, m8, xid, masks, counts,
                                box::Union{NTuple{3,T},AbstractVector{T}}, ljp, ntypes::Int32, lrc2u::T, irc6::T, coul::CP,
                                nsplit::Int32, m8out, rp2::T, ::Val{SPLIT}, vlj::Val{LJK}, vljx::Val{LJEXCL},
                                vc::Val{COUL}, ve::Val{E}, ::Val{SHIFT}, ::Val{PRUNE}, vtr,
@@ -49,8 +49,6 @@ function _cluster_pair_kernel!(fc, Ec, Vc, xs, ys, zs, qs, ts, s6, s12, sci, cjl
     # launched at the super-cluster bound; blocks beyond the device count and
     # every block after an outer-list overflow do nothing (uniform per block)
     @inbounds (S >= counts[CL_NS] || counts[CL_ERR] != Int32(0)) && return
-    # graph steps: the plain pass does nothing when the device chose the pruning pass
-    @inbounds (skip > Int32(0) && counts[skip] != Int32(0)) && return
     sxq = CuStaticSharedArray(NTuple{4,T}, SUPER)
     sab = CuStaticSharedArray(NTuple{2,T}, (LJK == LJ_SEPARABLE || LJK == LJ_MIXED) ? SUPER : 1)
     stb = CuStaticSharedArray(Int32, SUPER)

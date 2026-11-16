@@ -12,7 +12,7 @@ using Test, CUDA, ParticleDynamics, Random, Statistics
 const SC=ParticleDynamics.SimulationCore
 const DE=ParticleDynamics.DeviceEngine
 const F=ParticleDynamics.Filters
-include(joinpath(@__DIR__,"..","scripts","capture_staged_golden.jl"))
+include(joinpath(@__DIR__,"golden_capture.jl"))
 include(joinpath(@__DIR__,"engine_golden.jl")); using .EngineGolden
 
 function make(kind,st,T)

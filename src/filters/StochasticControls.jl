@@ -217,95 +217,95 @@ function set_ou_spectrum!(st::SimulationState,
     return set_ou_spectrum!(spec, st, taus, scales; filter=filter, dt=dt)
 end
 
-function set_noise_scale!(bp::BrownianIntegrators.BrownianParams{T}, sel::Selection, value::Real) where {T<:AbstractFloat}
+function set_noise_scale!(bp::BrownianParams{T}, sel::Selection, value::Real) where {T<:AbstractFloat}
     assign_scalar!(bp.noise_scale, sel.device, value)
     return sel
 end
 
-function set_noise_scale!(bp::BrownianIntegrators.BrownianParams{T}, idx::CuArray{Int32,1}, value::Real) where {T<:AbstractFloat}
+function set_noise_scale!(bp::BrownianParams{T}, idx::CuArray{Int32,1}, value::Real) where {T<:AbstractFloat}
     assign_scalar!(bp.noise_scale, idx, value)
     return idx
 end
 
-function set_noise_scale!(bp::BrownianIntegrators.BrownianParams{T}, st::SimulationState, filter::Filter, value::Real) where {T<:AbstractFloat}
+function set_noise_scale!(bp::BrownianParams{T}, st::SimulationState, filter::Filter, value::Real) where {T<:AbstractFloat}
     sel = selection(st, filter)
     set_noise_scale!(bp, sel, value)
     return sel
 end
 
-function set_noise_scale!(bp::BrownianIntegrators.BrownianParams{T}, st::SimulationState; filter::Filter=All(), value::Real) where {T<:AbstractFloat}
+function set_noise_scale!(bp::BrownianParams{T}, st::SimulationState; filter::Filter=All(), value::Real) where {T<:AbstractFloat}
     return set_noise_scale!(bp, st, filter, value)
 end
 
-function set_noise_scale!(bp::BrownianIntegrators.BrownianParams{T}, st::SimulationState, mapping::AbstractDict{<:Filter,<:Real}) where {T<:AbstractFloat}
+function set_noise_scale!(bp::BrownianParams{T}, st::SimulationState, mapping::AbstractDict{<:Filter,<:Real}) where {T<:AbstractFloat}
     for (f, val) in mapping
         set_noise_scale!(bp, st, f, val)
     end
     return bp
 end
 
-function set_noise_scale!(bp::BrownianIntegrators.BrownianParams{T}, st::SimulationState, pairs::Pair{<:Filter,<:Real}...) where {T<:AbstractFloat}
+function set_noise_scale!(bp::BrownianParams{T}, st::SimulationState, pairs::Pair{<:Filter,<:Real}...) where {T<:AbstractFloat}
     for (f, val) in pairs
         set_noise_scale!(bp, st, f, val)
     end
     return bp
 end
 
-function set_corr_time!(bp::BrownianIntegrators.BrownianParams{T}, value::Real) where {T<:AbstractFloat}
+function set_corr_time!(bp::BrownianParams{T}, value::Real) where {T<:AbstractFloat}
     bp2 = _ensure_corr_time_array(bp)
     fill!(bp2.corr_time, T(value))
     ou = SimulationCore._build_single_mode_ou(Backends.CUDABackend(), T, bp2.noise_scale, bp2.corr_time, bp2.dt)
-    return BrownianIntegrators.BrownianParams{T}(bp2.gamma, bp2.dt, bp2.noise_scale, bp2.corr_time, ou)
+    return BrownianParams{T}(bp2.gamma, bp2.dt, bp2.noise_scale, bp2.corr_time, ou)
 end
 
-function set_corr_time!(em::BrownianIntegrators.EMParams{T}, value::Real) where {T<:AbstractFloat}
+function set_corr_time!(em::EMParams{T}, value::Real) where {T<:AbstractFloat}
     em2 = _ensure_corr_time_array(em)
     fill!(em2.corr_time, T(value))
     ou = SimulationCore._build_single_mode_ou(Backends.CUDABackend(), T, em2.noise_scale, em2.corr_time, em2.dt)
-    return BrownianIntegrators.EMParams{T}(em2.gamma, em2.dt, em2.noise_scale, em2.corr_time, ou)
+    return EMParams{T}(em2.gamma, em2.dt, em2.noise_scale, em2.corr_time, ou)
 end
 
-function set_friction!(bp::BrownianIntegrators.BrownianParams{T}, sel::Selection, value::Real) where {T<:AbstractFloat}
+function set_friction!(bp::BrownianParams{T}, sel::Selection, value::Real) where {T<:AbstractFloat}
     assign_scalar!(bp.gamma, sel.device, value)
     return sel
 end
 
-function set_friction!(bp::BrownianIntegrators.BrownianParams{T}, idx::CuArray{Int32,1}, value::Real) where {T<:AbstractFloat}
+function set_friction!(bp::BrownianParams{T}, idx::CuArray{Int32,1}, value::Real) where {T<:AbstractFloat}
     assign_scalar!(bp.gamma, idx, value)
     return idx
 end
 
-function set_friction!(bp::BrownianIntegrators.BrownianParams{T}, st::SimulationState, filter::Filter, value::Real) where {T<:AbstractFloat}
+function set_friction!(bp::BrownianParams{T}, st::SimulationState, filter::Filter, value::Real) where {T<:AbstractFloat}
     sel = selection(st, filter)
     set_friction!(bp, sel, value)
     return sel
 end
 
-function set_friction!(bp::BrownianIntegrators.BrownianParams{T}, st::SimulationState; filter::Filter=All(), value::Real) where {T<:AbstractFloat}
+function set_friction!(bp::BrownianParams{T}, st::SimulationState; filter::Filter=All(), value::Real) where {T<:AbstractFloat}
     return set_friction!(bp, st, filter, value)
 end
 
-function set_friction!(bp::BrownianIntegrators.BrownianParams{T}, st::SimulationState, mapping::AbstractDict{<:Filter,<:Real}) where {T<:AbstractFloat}
+function set_friction!(bp::BrownianParams{T}, st::SimulationState, mapping::AbstractDict{<:Filter,<:Real}) where {T<:AbstractFloat}
     for (f, val) in mapping
         set_friction!(bp, st, f, val)
     end
     return bp
 end
 
-function set_friction!(bp::BrownianIntegrators.BrownianParams{T}, st::SimulationState, pairs::Pair{<:Filter,<:Real}...) where {T<:AbstractFloat}
+function set_friction!(bp::BrownianParams{T}, st::SimulationState, pairs::Pair{<:Filter,<:Real}...) where {T<:AbstractFloat}
     for (f, val) in pairs
         set_friction!(bp, st, f, val)
     end
     return bp
 end
 
-function set_temperature!(bp::BrownianIntegrators.BrownianParams{T}, st::SimulationState, dt::Real, temperature::Real; filter::Filter=All()) where {T<:AbstractFloat}
+function set_temperature!(bp::BrownianParams{T}, st::SimulationState, dt::Real, temperature::Real; filter::Filter=All()) where {T<:AbstractFloat}
     sel = selection(st, filter)
     set_temperature!(bp, st, dt, temperature, sel)
     return sel
 end
 
-function set_temperature!(bp::BrownianIntegrators.BrownianParams{T}, st::SimulationState, dt::Real, temperature::Real, sel::Selection) where {T<:AbstractFloat}
+function set_temperature!(bp::BrownianParams{T}, st::SimulationState, dt::Real, temperature::Real, sel::Selection) where {T<:AbstractFloat}
     SimulationCore._require_stochastic_dt!(bp, dt)
     Δt = convert(T, dt)
     Tval = convert(T, temperature)
@@ -313,7 +313,7 @@ function set_temperature!(bp::BrownianIntegrators.BrownianParams{T}, st::Simulat
     return sel
 end
 
-function set_temperature!(bp::BrownianIntegrators.BrownianParams{T}, st::SimulationState, dt::Real, temperature::Real, idx::CuArray{Int32,1}) where {T<:AbstractFloat}
+function set_temperature!(bp::BrownianParams{T}, st::SimulationState, dt::Real, temperature::Real, idx::CuArray{Int32,1}) where {T<:AbstractFloat}
     SimulationCore._require_stochastic_dt!(bp, dt)
     Δt = convert(T, dt)
     Tval = convert(T, temperature)
@@ -321,14 +321,14 @@ function set_temperature!(bp::BrownianIntegrators.BrownianParams{T}, st::Simulat
     return idx
 end
 
-function set_temperature!(bp::BrownianIntegrators.BrownianParams{T}, st::SimulationState, dt::Real, mapping::AbstractDict{<:Filter,<:Real}) where {T<:AbstractFloat}
+function set_temperature!(bp::BrownianParams{T}, st::SimulationState, dt::Real, mapping::AbstractDict{<:Filter,<:Real}) where {T<:AbstractFloat}
     for (f, temp) in mapping
         set_temperature!(bp, st, dt, temp; filter=f)
     end
     return bp
 end
 
-function set_temperature!(bp::BrownianIntegrators.BrownianParams{T}, st::SimulationState, dt::Real, pairs::Pair{<:Filter,<:Real}...) where {T<:AbstractFloat}
+function set_temperature!(bp::BrownianParams{T}, st::SimulationState, dt::Real, pairs::Pair{<:Filter,<:Real}...) where {T<:AbstractFloat}
     for (f, temp) in pairs
         set_temperature!(bp, st, dt, temp; filter=f)
     end

@@ -116,6 +116,15 @@ dimensionless shapes are distinct from the Gaussian `alpha` (inverse length).
 Treat the defaults as starting points and measure the error for production
 settings.
 
+The default `window_shape` also depends on the precision of the state. A
+window that decays below `0.02 eps(T)^(2/3)` at the mesh Nyquist frequency
+(4.8e-7 in Float32, 7.3e-13 in Float64) lets round-off into the mesh forces,
+so where the `ε/2` shape falls below that bound the default is the smallest
+shape that meets it, at the same `order`. This happens in Float32 for
+ε ≈ 3.3e-5–4.5e-5 and below ε ≈ 6e-6, and in Float64 from ε ≈ 3e-9 downward. The solver
+refuses an explicit window below the bound. Float32 forces reach about 2e-6
+relative accuracy at best; a tighter `tolerance` needs a Float64 state.
+
 `influence=:optimal` (default) uses the analytic-differentiation optimal
 influence function with alias sums over `|n| ≤ alias_order` images of the
 prolate window transform, which compensates the aliasing of the truncated
@@ -182,7 +191,37 @@ function esp_order_for_tolerance(eps::Real)
 end
 
 """
+    esp_window_shape(ε, P, T) -> c₁
+
+Window shape of the ESP rule for a window of width `P`: `c(ε/2)`, or the
+smallest larger shape that a mesh solve in precision `T` resolves
+(`Electrostatics.window_resolved`). The rule's own shape is kept wherever it
+is resolved: in Float64 down to ε ≈ 3e-9, in Float32 for the table widths
+except just below a width change (ε ≈ 3.3e-5–4.5e-5) and below ε ≈ 6e-6.
+"""
+function esp_window_shape(eps::Real, P::Integer, ::Type{T}) where {T<:AbstractFloat}
+    c1 = Electrostatics.prolate_shape_for_tolerance(Float64(eps) / 2)
+    Electrostatics.window_resolved(P, c1, T) && return c1
+    lo = c1
+    hi = c1 + 0.5
+    while !Electrostatics.window_resolved(P, hi, T)
+        lo = hi
+        hi += 0.5
+        hi < 80 || throw(ArgumentError("No prolate window of width $(P) is resolved in $(T)."))
+    end
+    while hi - lo > 1e-3
+        mid = 0.5 * (lo + hi)
+        Electrostatics.window_resolved(P, mid, T) ? (hi = mid) : (lo = mid)
+    end
+    return hi
+end
+
+"""
     electrostatics_spec(force) -> Electrostatics.ElectrostaticsSpec
+    electrostatics_spec(force, T) -> Electrostatics.ElectrostaticsSpec
+
+`T` is the precision of the state the solver is built for (default Float64);
+it enters only the default window shape of [`ESP`](@ref).
 
 Validated low-level specification of a workflow electrostatics descriptor.
 """
@@ -209,7 +248,9 @@ function electrostatics_spec(f::PPPM)
         net_charge=f.net_charge, boundary=f.boundary, real_space_modifier=f.real_space_modifier)
 end
 
-function electrostatics_spec(f::ESP)
+electrostatics_spec(f::ElectrostaticsForce, ::Type{<:AbstractFloat}) = electrostatics_spec(f)
+
+function electrostatics_spec(f::ESP, ::Type{T}=Float64) where {T<:AbstractFloat}
     pref, rc = _require_common(f)
     if f.split_shape === nothing || f.window_shape === nothing || f.order === nothing
         f.tolerance === nothing &&
@@ -217,8 +258,8 @@ function electrostatics_spec(f::ESP)
     end
     eps = f.tolerance === nothing ? nothing : Float64(f.tolerance)
     c = f.split_shape === nothing ? Electrostatics.prolate_shape_for_tolerance(eps) : Float64(f.split_shape)
-    c1 = f.window_shape === nothing ? Electrostatics.prolate_shape_for_tolerance(eps / 2) : Float64(f.window_shape)
     P = f.order === nothing ? esp_order_for_tolerance(eps) : Int(f.order)
+    c1 = f.window_shape === nothing ? esp_window_shape(eps, P, T) : Float64(f.window_shape)
     spacing = (f.mesh === nothing && f.mesh_spacing === nothing) ? pi * rc / c : f.mesh_spacing
     f.influence in (:optimal, :deconvolution) ||
         throw(ArgumentError("ESP influence must be :optimal or :deconvolution; got $(f.influence)."))
@@ -270,8 +311,8 @@ end
 Low-level convenience: attach the solver described by a workflow descriptor
 to an existing state.
 """
-SimulationCore.attach_electrostatics!(st::SimulationState, f::ElectrostaticsForce; kwargs...) =
-    SimulationCore.attach_electrostatics!(st, electrostatics_spec(f); kwargs...)
+SimulationCore.attach_electrostatics!(st::SimulationState{T}, f::ElectrostaticsForce; kwargs...) where {T} =
+    SimulationCore.attach_electrostatics!(st, electrostatics_spec(f, T); kwargs...)
 
 """
     electrostatics_from_settings(record, exceptions=()) -> ElectrostaticsForce
@@ -401,14 +442,14 @@ function tune_electrostatics(st::SimulationState{T}, force::ElectrostaticsForce;
     pref = Float64(force.coulomb_prefactor)
     box = Float64.(st.box3)
     refspec(eps) = electrostatics_spec(ESP(coulomb_prefactor=pref, relative_permittivity=force.relative_permittivity,
-                                           real_cutoff=rc, tolerance=eps, net_charge=:background))
+                                           real_cutoff=rc, tolerance=eps, net_charge=:background), T)
     Fref = _scratch_forces!(buf, _solver_for(st, refspec(reference_tolerance)), st)
     Fref2 = _scratch_forces!(buf, _solver_for(st, refspec(reference_tolerance / 2)), st)
     GC.gc()
     rel(F) = sqrt(Base.sum(abs2, F .- Fref) / Base.sum(abs2, Fref))
     ref_bound = rel(Fref2)
     function trial(f)
-        spec = electrostatics_spec(f)
+        spec = electrostatics_spec(f, T)
         maximum(Electrostatics.resolve_mesh(spec, box)) > max_mesh && return nothing
         solver = _solver_for(st, spec)
         err = rel(_scratch_forces!(buf, solver, st))
@@ -422,7 +463,7 @@ function tune_electrostatics(st::SimulationState{T}, force::ElectrostaticsForce;
             r = trial(f)
             r === nothing && break
             if r.err <= target
-                spec = electrostatics_spec(f)
+                spec = electrostatics_spec(f, T)
                 chosen = (force=ESP(; (k => getfield(f, k) for k in fieldnames(ESP))..., tolerance=nothing,
                                     split_shape=spec.split.shape, window_shape=spec.window.shape,
                                     order=spec.window.order, mesh=r.mesh, mesh_spacing=nothing),
@@ -489,21 +530,21 @@ function _tune_for_time(st::SimulationState{T}, force::ElectrostaticsForce; targ
     try
         s0 === nothing || SimulationCore.detach_electrostatics!(st)
         Fnb = _state_forces(st)
-        # Reference: tight ESP in Float64. In Float32 wide prolate windows lose
-        # accuracy (ESP at ε = 1e-7 is only good to ~1e-4 there), so the
-        # reference is an order-6 PME on a fine grid (~5e-6 in Float32).
+        # Reference: tight ESP in Float64. Float32 forces reach ~2e-6 at best
+        # whatever the tolerance, so there the reference is an order-6 PME on a
+        # fine grid (~5e-6 in Float32).
         refforce = T === Float64 ?
             ESP(coulomb_prefactor=force.coulomb_prefactor, relative_permittivity=force.relative_permittivity,
                 real_cutoff=rc, tolerance=reference_tolerance, net_charge=:background) :
             PME(coulomb_prefactor=force.coulomb_prefactor, relative_permittivity=force.relative_permittivity,
                 real_cutoff=rc, real_space_tolerance=1e-7, order=6, mesh_spacing=rc / 14, net_charge=:background)
-        attach(electrostatics_spec(refforce))
+        attach(electrostatics_spec(refforce, T))
         Fref = _state_forces(st) .- Fnb
         den = sqrt(Base.sum(abs2, Fref))
         err_of(F) = sqrt(Base.sum(abs2, F .- Fnb .- Fref)) / den
         candidates = NamedTuple[]
         function trial(f)
-            spec = electrostatics_spec(f)
+            spec = electrostatics_spec(f, T)
             maximum(Electrostatics.resolve_mesh(spec, box)) > max_mesh && return nothing
             attach(spec)
             err = err_of(_state_forces(st))

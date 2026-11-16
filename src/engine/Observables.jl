@@ -3,7 +3,6 @@
 # GROMACS md uses <K(t)> = (K(v-hF/m) + K(v+hF/m))/2, h=dt/2.
 # Thus its kinetic tensor is m/2 * (v⊗v + (hF/m)⊗(hF/m)).
 # This is NOT K of the averaged velocity, nor an average of cadence samples.
-const OBS_COMPONENTS = (:xx,:yy,:zz,:xy,:xz,:yz)
 const OBS_CONVENTION = "U,W at r(t); K half-step averaged from v(t) +/- dt*F(t)/(2m); no COM subtraction; D·N DOF; reduced units kB=1"
 
 struct ObservableWorkspace
@@ -114,8 +113,10 @@ function observable_arguments(run)
     # Velocity constraints (rigid water): the half-step velocities v ∓ dt·F/(2m) carry the
     # bond components the constraint forces would cancel, so K comes from the projected v(t).
     constrained=hasproperty(run,:features) && any(constrains_velocities,run.features)
+    # Zero mass (overdamped runs only): no half-step term, so K = 0 instead of 0·Inf.
     partial=(o.partial,run.energy,run.virial,run.v...,run.f...,
-        Float64(run.mass),constrained ? 0.0 : Float64(run.dt)/(2Float64(run.mass)),hasproperty(run,:fx) ? run.fx : ())
+        Float64(run.mass),(constrained || run.mass==0) ? 0.0 : Float64(run.dt)/(2Float64(run.mass)),
+        hasproperty(run,:fx) ? run.fx : ())
     # Volume is the box area in 2D; the pressure trace divides by D·V.
     vg=hasproperty(run,:cluster) && run.cluster!==nothing ? run.cluster.Vglobal :
        (hasproperty(run,:mesh) && run.mesh!==nothing ? run.mesh.Vglobal : nothing)   # ELL charged runs

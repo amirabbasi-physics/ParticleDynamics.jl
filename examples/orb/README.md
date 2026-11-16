@@ -1,7 +1,7 @@
 # Orb foundation models, and a head-to-head against MACE-OFF
 
 This directory adds a second machine-learned-potential backend to
-ParticleDynamics.jl — **Orb-v3** (Orbital Materials) — behind the same
+ParticleDynamics — **Orb-v3** (Orbital Materials) — behind the same
 `AbstractExternalPotential` interface used by the MACE provider in
 [`examples/mace`](../mace). With two independent foundation models reachable
 through one interface, the engine becomes an instrument for comparing them:

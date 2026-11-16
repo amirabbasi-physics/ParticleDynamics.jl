@@ -1,4 +1,4 @@
-# MACE foundation-model force provider for ParticleDynamics.jl.
+# MACE foundation-model force provider for ParticleDynamics.
 #
 # Implements the `AbstractExternalPotential` contract: positions are staged
 # host-side, forces/energy come from mace-torch (GPU) through an ASE

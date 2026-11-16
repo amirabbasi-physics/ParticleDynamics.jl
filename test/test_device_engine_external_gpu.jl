@@ -18,7 +18,7 @@ const SC=ParticleDynamics.SimulationCore
 const DE=ParticleDynamics.DeviceEngine
 const BF=ParticleDynamics.BondedForces
 const F=ParticleDynamics.Filters
-include(joinpath(@__DIR__,"..","scripts","capture_staged_golden.jl"))
+include(joinpath(@__DIR__,"golden_capture.jl"))
 include(joinpath(@__DIR__,"engine_golden.jl")); using .EngineGolden
 relerr(a,b)=maximum(abs.(a.-b))/max(maximum(abs.(b)),1e-30)
 mic(x,L)=x-L*round(x/L)

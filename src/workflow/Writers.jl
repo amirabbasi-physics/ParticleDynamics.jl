@@ -98,6 +98,85 @@ function GSDWriter(filename::AbstractString;
                      observables=Any[observables...])
 end
 
+const IN_MEMORY_FIELDS = (:positions, :unwrapped_positions, :velocities, :forces, :energy, :virial)
+
+"""
+    InMemoryWriter(; every=nothing, schedule=nothing, fields=[:positions], write_start=false)
+
+Scheduled writer that keeps frames in host memory instead of a file, for
+analysis and debugging inside the same Julia session. `fields` selects any of
+`$(join(map(repr, IN_MEMORY_FIELDS), ", "))`:
+
+- per-particle data (`:positions`, `:unwrapped_positions`, `:velocities`,
+  `:forces`) is stored in particle-id order, i.e. the order of the
+  `ParticleSystem`, independent of the engine's spatial sorting;
+- `:energy` stores the total kinetic and potential energy;
+- `:virial` stores the total virial tensor.
+
+Velocities are not recorded for Brownian dynamics (overdamped motion has none).
+Frames accumulate across stages and `run!` calls until `empty!(writer)`; read
+them with [`recorded_data`](@ref).
+"""
+mutable struct InMemoryWriter <: Writer
+    every
+    schedule
+    fields::Vector{Symbol}
+    write_start::Bool
+    steps::Vector{Int}
+    data::Dict{Symbol,Any}   # field => flat host Vector{T}, frame-major blocks
+    n::Int                   # particles per frame (0 until the first frame)
+    dim::Int
+    scratch::Any             # host staging Vector{T} for device copies
+end
+
+function InMemoryWriter(; every=nothing, schedule=nothing, fields=[:positions], write_start::Bool=false)
+    fields = unique!(Symbol[fields...])
+    isempty(fields) && throw(ArgumentError("InMemoryWriter needs at least one field."))
+    for f in fields
+        f in IN_MEMORY_FIELDS ||
+            throw(ArgumentError("Unknown InMemoryWriter field :$f; use any of $(IN_MEMORY_FIELDS)."))
+    end
+    return InMemoryWriter(every, schedule, fields, write_start, Int[], Dict{Symbol,Any}(), 0, 0, nothing)
+end
+
+function Base.empty!(writer::InMemoryWriter)
+    empty!(writer.steps)
+    empty!(writer.data)
+    writer.n = 0
+    writer.dim = 0
+    return writer
+end
+
+"""
+    recorded_data(writer::InMemoryWriter) -> NamedTuple
+
+Frames recorded so far. `step` holds the step of each frame. Per-particle
+fields are `N × D × nframes` arrays (`data.positions[:, :, k]` is frame `k`,
+rows in particle-id order), `energy` gives `kinetic_energy` and
+`potential_energy` vectors, and `virial` is a `D × D × nframes` array. The
+arrays are copies; the writer keeps recording.
+"""
+function recorded_data(writer::InMemoryWriter)
+    nframes = length(writer.steps)
+    names = Symbol[:step]
+    values = Any[copy(writer.steps)]
+    for f in writer.fields
+        buf = get(writer.data, f, nothing)
+        if f === :energy
+            e = buf === nothing ? Float64[] : buf
+            push!(names, :kinetic_energy, :potential_energy)
+            push!(values, e[1:2:end], e[2:2:end])
+        elseif f === :virial
+            push!(names, :virial)
+            push!(values, buf === nothing ? zeros(0, 0, 0) : reshape(copy(buf), writer.dim, writer.dim, nframes))
+        else
+            push!(names, f)
+            push!(values, buf === nothing ? zeros(0, 0, 0) : reshape(copy(buf), writer.n, writer.dim, nframes))
+        end
+    end
+    return NamedTuple{Tuple(names)}(Tuple(values))
+end
+
 mutable struct PreparedWriter
     writer::Writer
     schedule
@@ -148,6 +227,9 @@ function _normalize_writer_requests(sim, writer::GSDWriter)
     return requests
 end
 
+_normalize_writer_requests(sim, ::InMemoryWriter) =
+    NamedTuple{(:observable, :fields),Tuple{Observable,Vector{Symbol}}}[]
+
 _writer_append_mode(writer::Writer) = getfield(writer, :append) || getfield(writer, :mode) == :append
 
 function _validate_writer(writer::TableWriter)
@@ -162,6 +244,13 @@ function _validate_writer(writer::GSDWriter)
     return writer
 end
 
+_validate_writer(writer::InMemoryWriter) = writer
+
+# Energies (and, on sampled steps, virials) the writer reads must be computed on its steps.
+_writer_needs_energy(writer::GSDWriter) = writer.write_virial
+_writer_needs_energy(writer::InMemoryWriter) = :energy in writer.fields || :virial in writer.fields
+_writer_needs_energy(::Writer) = false
+
 function prepare_writers!(sim)
     previous = _writer_contexts(sim)
     contexts = PreparedWriter[]
@@ -173,7 +262,7 @@ function prepare_writers!(sim)
         end
         schedule = normalize_schedule(every=getfield(writer, :every), schedule=getfield(writer, :schedule), default=Every(1))
         needs_energy = any(req -> observable_requires_energy(req.observable, req.fields), requests) ||
-                       (writer isa GSDWriter && writer.write_virial)
+                       _writer_needs_energy(writer)
         needs_interval_reset = any(req -> observable_has_interval_fields(req.observable, req.fields), requests)
         ctx = PreparedWriter(writer, schedule, requests, nothing, String[], false, false, needs_energy, needs_interval_reset, false)
         old_index = findfirst(old -> old.writer === writer, previous)
@@ -534,24 +623,98 @@ function _writer_logs(sim)
     return ("log/barostat/state" => barostat_state_record(sim),)
 end
 
+_brownian_run(sim) = sim.lowlevel_integrator isa Union{SimulationCore.BrownianSpec,SimulationCore.EMSpec}
+
+# Device arrays `cols` (one per dimension) appended as one N × D block in particle-id order.
+function _record_particle_block!(buf::Vector{T}, cols, tag_host, scratch::Vector{T}) where {T}
+    n = length(scratch)
+    offset = length(buf)
+    resize!(buf, offset + n * length(cols))
+    for (d, col) in enumerate(cols)
+        copyto!(scratch, col)                    # waits for the queued device work
+        base = offset + (d - 1) * n
+        if tag_host === nothing
+            copyto!(buf, base + 1, scratch, 1, n)
+        else
+            @inbounds for k in 1:n               # slot k holds particle tag[k]
+                buf[base + tag_host[k]] = scratch[k]
+            end
+        end
+    end
+    return buf
+end
+
+function _write_in_memory!(sim, ctx::PreparedWriter, step::Int)
+    writer = ctx.writer::InMemoryWriter
+    st = sim.state::SimulationState
+    T = eltype(st.rx)
+    n = length(st.rx)
+    dim = st.rz === nothing ? 2 : 3
+    if writer.n == 0
+        writer.n = n
+        writer.dim = dim
+    elseif (writer.n, writer.dim) != (n, dim)
+        throw(ArgumentError("InMemoryWriter recorded $(writer.n) particles in $(writer.dim)D; the state has $n in $(dim)D. Call empty!(writer) first."))
+    end
+    if !(writer.scratch isa Vector{T}) || length(writer.scratch) != n
+        writer.scratch = Vector{T}(undef, n)
+    end
+    tag_host = st.tag === nothing ? nothing : Array(st.tag)
+    buffer(f) = get!(() -> T[], writer.data, f)::Vector{T}
+    for f in writer.fields
+        if f === :positions
+            _record_particle_block!(buffer(f), (st.rx, st.ry, st.rz)[1:dim], tag_host, writer.scratch)
+        elseif f === :unwrapped_positions
+            st.rx_unwrap === nothing &&
+                throw(ArgumentError("InMemoryWriter :unwrapped_positions requires unwrapped_positions=true in the simulation build."))
+            _record_particle_block!(buffer(f), (st.rx_unwrap, st.ry_unwrap, st.rz_unwrap)[1:dim], tag_host, writer.scratch)
+        elseif f === :velocities
+            _brownian_run(sim) &&
+                throw(ArgumentError("InMemoryWriter :velocities is not defined for Brownian dynamics; drop the field."))
+            _record_particle_block!(buffer(f), (st.vx, st.vy, st.vz)[1:dim], tag_host, writer.scratch)
+        elseif f === :forces
+            _record_particle_block!(buffer(f), (st.fx, st.fy, st.fz)[1:dim], tag_host, writer.scratch)
+        elseif f === :energy
+            st.energy_valid || SimulationCore.ensure_energies!(st)
+            push!(buffer(f), T(Base.sum(st.Ekin)), T(Base.sum(st.Epot)))
+        elseif f === :virial
+            v = SimulationCore.virial_tensor(st)
+            block = dim == 2 ? T[v.xx, v.xy, v.xy, v.yy] :
+                T[v.xx, v.xy, v.xz, v.xy, v.yy, v.yz, v.xz, v.yz, v.zz]
+            append!(buffer(f), block)
+        end
+    end
+    push!(writer.steps, step)
+    return ctx
+end
+
 function _write_writer!(sim, ctx::PreparedWriter, step::Int)
     writer = ctx.writer
     if writer isa TableWriter
         return _write_table!(sim, ctx, step)
+    elseif writer isa InMemoryWriter
+        return _write_in_memory!(sim, ctx, step)
     else
         return _write_gsd!(sim, ctx, step)
     end
 end
+
+_start_frame(writer::Union{GSDWriter,InMemoryWriter}) = writer.write_start
+_start_frame(::Writer) = false
+_start_needs_forces(writer::GSDWriter) = writer.write_forces || writer.write_virial
+_start_needs_forces(writer::InMemoryWriter) = :forces in writer.fields || :virial in writer.fields
+_start_needs_virial(writer::GSDWriter) = writer.write_virial
+_start_needs_virial(writer::InMemoryWriter) = :virial in writer.fields
 
 function write_initial_frames!(sim)
     st = sim.state
     st === nothing && return sim
     for ctx in _writer_contexts(sim)
         writer = ctx.writer
-        if writer isa GSDWriter && writer.write_start && !ctx.start_written
-            if writer.write_forces || writer.write_virial
+        if _start_frame(writer) && !ctx.start_written
+            if _start_needs_forces(writer)
                 spring = SimulationCore._freeze_active!(st) && st.freeze_mode == SimulationCore.FREEZE_SPRING
-                SimulationCore.evaluate_current_configuration!(st, writer.write_virial; freeze_spring=spring)
+                SimulationCore.evaluate_current_configuration!(st, _start_needs_virial(writer); freeze_spring=spring)
             end
             _write_writer!(sim, ctx, st.step)
             ctx.start_written = true

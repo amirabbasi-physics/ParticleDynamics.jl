@@ -1,7 +1,7 @@
 module DeviceArgonBuilderGPUChecks
 using Test, CUDA, ParticleDynamics, LinearAlgebra
-include(joinpath(@__DIR__,"../benchmark/gromacs/DeviceArgonNVE.jl"))
-include(joinpath(@__DIR__,"../benchmark/gromacs/GPUForceReference.jl"))
+include(joinpath(@__DIR__,"device_argon_nve.jl"))
+include(joinpath(@__DIR__,"gpu_force_reference.jl"))
 const DA=DeviceArgonNVE
 const NL=ParticleDynamics.NeighborLists
 

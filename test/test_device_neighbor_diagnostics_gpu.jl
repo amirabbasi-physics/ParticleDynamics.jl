@@ -1,6 +1,6 @@
 module DeviceNeighborDiagnosticsGPUChecks
 using Test, CUDA, ParticleDynamics
-include(joinpath(@__DIR__,"../benchmark/gromacs/DeviceArgonNVE.jl"))
+include(joinpath(@__DIR__,"device_argon_nve.jl"))
 const DA=DeviceArgonNVE
 const NL=ParticleDynamics.NeighborLists
 
