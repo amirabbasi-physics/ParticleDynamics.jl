@@ -1,0 +1,39 @@
+/* Shared presentation for the documentation, including narrow screens. */
+:root {
+  --pd-accent: #99603a;
+  --pd-soft: #f5efe5;
+  --pd-line: #ded3c1;
+  --pd-ink: #39352e;
+}
+html.theme--documenter-dark,
+html.theme--catppuccin-mocha,
+html.theme--catppuccin-macchiato,
+html.theme--catppuccin-frappe {
+  --pd-accent: #e8b684;
+  --pd-soft: #302c26;
+  --pd-line: #5b5144;
+  --pd-ink: #eee6da;
+}
+#documenter .docs-sidebar { border-right: 1px solid var(--pd-line); }
+#documenter .docs-sidebar .docs-package-name { font-weight: 750; letter-spacing: -.035em; }
+#documenter .docs-sidebar ul.docs-menu > li { margin-bottom: .45rem; }
+#documenter .docs-sidebar ul.docs-menu li.is-active > a { color: var(--pd-accent); }
+#documenter .docs-main a { text-underline-offset: .2em; }
+#documenter .docs-main .docs-article { max-width: 58rem; }
+#documenter .docs-main .docs-article h1 { letter-spacing: -.035em; }
+#documenter .docs-main .docs-article h2 { margin-top: 2.25rem; letter-spacing: -.02em; }
+.pd-hero { padding: 1.8rem 0 1rem; color: var(--pd-ink); }
+#documenter .pd-eyebrow { font-size: .72rem; font-weight: 700; letter-spacing: .12em; color: var(--pd-accent); }
+#documenter .pd-headline { font-size: clamp(2.7rem, 5vw, 4.5rem); line-height: 1.06; font-weight: 750; letter-spacing: -.055em; margin: 1rem 0 1.4rem; }
+#documenter .pd-intro { max-width: 42rem; font-size: 1.14rem; line-height: 1.7; }
+#documenter .pd-paths > ul { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; list-style: none; margin: 1rem 0 2rem; padding: 0; }
+#documenter .pd-paths > ul > li { background: var(--pd-soft); border-top: 3px solid var(--pd-accent); border-radius: 0 0 .45rem .45rem; padding: 1.1rem; margin: 0; font-size: .9rem; line-height: 1.6; }
+#documenter .pd-paths strong { display: block; margin-bottom: .65rem; }
+#documenter .pd-paths a { color: var(--pd-accent); }
+#documenter .docs-article img { border-radius: .4rem; }
+#documenter .docs-article pre { border-radius: .4rem; }
+#documenter a:focus-visible { outline: 2px solid var(--pd-accent); outline-offset: 4px; }
+@media (max-width: 700px) {
+  #documenter .pd-paths > ul { grid-template-columns: 1fr; }
+  .pd-hero { padding-top: .5rem; }
+}
