@@ -65,15 +65,6 @@ Learn how to [choose interactions](manual/forces.md),
 [control temperature](manual/thermostats.md), and
 [record measurements](manual/observables.md).
 
-## A look inside a polymer melt
-
-![A rendered polymer melt beside measured chain end-to-end distance and radius of gyration.](assets/polymer-melt.png)
-
-A configuration and recorded measurements from the Kremer–Grest showcase:
-100 chains, 3,200 beads, and chain-size measurements alongside the configuration. The reference values
-shown are rescaled from the published 25-bead chains to 32 beads using N−1.
-[Explore the polymer examples and rendering recipe](examples.md#Polymers).
-
 ## Supported systems
 
 ParticleDynamics supports 2D and 3D periodic systems on a single GPU, including
