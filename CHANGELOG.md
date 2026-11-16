@@ -4,6 +4,13 @@ All notable user-visible changes to this project will be documented in this file
 
 ## 0.7.0 — unreleased
 
+### Compatibility and documentation
+
+- Julia 1.11 or later is required, matching the minimum supported by GSDFiles.
+  The previous Julia 1.10 declaration could not resolve the package dependencies.
+- The documentation displays the package logo on every page. The polymer-melt
+  showcase appears on the examples page rather than the homepage.
+
 ### Workflow
 
 - New `InMemoryWriter` (with `recorded_data` and `empty!`): a scheduled writer

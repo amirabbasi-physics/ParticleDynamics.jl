@@ -34,7 +34,7 @@ system from its initial configuration to a trajectory you can analyse.</p>
 
 ## Install and begin
 
-Simulations run on a **CUDA-capable NVIDIA GPU**. Use Julia 1.10 or later with a
+Simulations run on a **CUDA-capable NVIDIA GPU**. Use Julia 1.11 or later with a
 working CUDA installation, then install the registered package:
 
 ```julia

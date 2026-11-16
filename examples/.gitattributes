@@ -1,0 +1,3 @@
+# Example rendering, analysis and orchestration helpers are not package implementation.
+*.py -linguist-detectable
+*.sh -linguist-detectable

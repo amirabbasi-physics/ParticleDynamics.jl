@@ -9,6 +9,10 @@ jobs:
   cpu-checks:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        julia-version: ['1.11', '1.12']
     permissions:
       contents: write
 
@@ -19,7 +23,7 @@ jobs:
       - name: Setup Julia
         uses: julia-actions/setup-julia@v2
         with:
-          version: '1.12'
+          version: ${{ matrix.julia-version }}
 
       - name: Cache Julia artifacts
         uses: julia-actions/cache@v2
@@ -34,6 +38,7 @@ jobs:
         run: julia --project -e 'using Pkg; Pkg.test()'
 
       - name: Build and deploy docs
+        if: matrix.julia-version == '1.12'
         run: julia --project=docs -e 'using Pkg; Pkg.instantiate(); include("docs/make.jl")'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
