@@ -15,6 +15,7 @@ html.theme--catppuccin-frappe {
   --pd-ink: #eee6da;
 }
 #documenter .docs-sidebar { border-right: 1px solid var(--pd-line); }
+#documenter .docs-sidebar .docs-logo img { width: auto; max-height: 8rem; margin: 0 auto; }
 #documenter .docs-sidebar .docs-package-name { font-weight: 750; letter-spacing: -.035em; }
 #documenter .docs-sidebar ul.docs-menu > li { margin-bottom: .45rem; }
 #documenter .docs-sidebar ul.docs-menu li.is-active > a { color: var(--pd-accent); }
