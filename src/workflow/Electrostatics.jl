@@ -383,7 +383,11 @@ function electrostatics_from_settings(rec::AbstractVector{<:Real}, exceptions=()
     elseif method == 4 || method == 5
         return ESP(; common..., tolerance=nothing, split_shape=Float64(rec[6]), order=Int(rec[7]),
                    window_shape=Float64(rec[8]), alias_order=Int(rec[12]),
-                   influence=method == 4 ? :optimal : :deconvolution)
+                   continuity=:c0, influence=method == 4 ? :optimal : :deconvolution)
+    elseif method == 6 || method == 7
+        return ESP(; common..., tolerance=nothing, split_shape=Float64(rec[6]), order=Int(rec[7]),
+                   window_shape=Float64(rec[8]), alias_order=Int(rec[12]),
+                   continuity=:c2, influence=method == 6 ? :optimal : :deconvolution)
     end
     throw(ArgumentError("Unknown electrostatics method code $(method)."))
 end
@@ -598,13 +602,19 @@ function _tune_for_time(st::SimulationState{T}, force::ElectrostaticsForce; targ
         record!(f, r) = push!(candidates, (force=f, error=r.err, mesh=r.mesh, time_ms=_state_time_ms(st)))
         if force isa ESP
             eps_list = target .* (0.75 .^ (0:16))
-            P0 = esp_order_for_tolerance(target)
+            is_c2 = force.continuity === :c2
+            P0 = is_c2 ? c2_esp_order_for_tolerance(target) : esp_order_for_tolerance(target)
             Ps = orders === nothing ? (P0 - 1, P0, P0 + 1) : Tuple(orders)
             for P in Ps
                 P >= 3 || continue
                 for eps in eps_list
-                    shape = Electrostatics.prolate_shape_for_tolerance(eps / 2)
-                    P <= Electrostatics.max_prolate_order(shape) || continue
+                    if is_c2
+                        shape = Electrostatics.generalized_prolate_shape_for_tolerance(eps / 2, 3)
+                        P <= Electrostatics.max_c2_prolate_order(shape) || continue
+                    else
+                        shape = Electrostatics.prolate_shape_for_tolerance(eps / 2)
+                        P <= Electrostatics.max_prolate_order(shape) || continue
+                    end
                     f = _rebuild_force(force; tolerance=eps, split_shape=nothing, window_shape=nothing,
                                        order=P, mesh=nothing, mesh_spacing=nothing)
                     r = trial(f)
