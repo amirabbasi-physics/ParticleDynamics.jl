@@ -80,17 +80,28 @@ function _lj_pair_model(st::SC.SimulationState{T}) where {T}
         return UniformSoftRepulsive(sr.ϵ,sr.σ),(),Float64(sr.σ)
     end
     wca=st.nb_kind==SC.NB_KIND_WCA
+    mod=st.vdw_modifier
     shift=SC._lj_shifted(st)   # potential-shift modifier (LJ only)
+    switched=!wca && mod in (:force_switch,:potential_switch)
+    rsw=T(st.vdw_switch_distance)
     if st.sigma_pair!==nothing
+        if switched
+            mode=mod===:force_switch ? 1 : 2
+            return PairMatrixSwitchedLJ{T,mode}(rsw,rsw*rsw),(st.typeid,st.sigma_pair,st.epsilon_pair,st.rcut_pair),
+                Float64(maximum(st.rcut_pair))
+        end
         return (wca ? PairMatrixWCA() : PairMatrixLJ{shift}()),(st.typeid,st.sigma_pair,st.epsilon_pair,st.rcut_pair),
             Float64(maximum(st.rcut_pair))
     elseif st.sigma_particle!==nothing
+        switched && throw(ArgumentError("vdw_modifier=:$(mod) does not support per-particle mixed sigma LJ on the :ell backend."))
         return (wca ? MixedSigmaWCA{T}(lj.ϵ,st.rcut_factor) :
                 MixedSigmaLJ{T}(lj.ϵ,st.rcut_factor,shift ? lj_cutoff_energy(one(T),lj.ϵ,st.rcut_factor) : zero(T))),
             (st.sigma_particle,),Float64(st.rcut_factor)*Float64(maximum(st.sigma_particle))
     elseif wca
         m=UniformWCA(lj.ϵ,lj.σ)
         return m,(),max(Float64(lj.rcut),sqrt(Float64(m.rc2)))
+    elseif switched
+        return UniformSwitchedLJ(T,lj.ϵ,lj.σ,rsw,lj.rcut,mod),(),Float64(lj.rcut)
     end
     return UniformLJ{T}(lj.ϵ,lj.σ,lj.rcut^2,shift ? lj_cutoff_energy(lj.σ,lj.ϵ,lj.rcut) : zero(T)),(),Float64(lj.rcut)
 end
@@ -375,16 +386,17 @@ _spec_signature(spec)=(:unsupported,objectid(spec))
 _fingerprint(st,dt,spec)=(_spec_signature(spec),feature_signatures(st,spec),_fingerprint(st,dt)...)
 _fingerprint(st,dt)=(map(a->a===nothing ? nothing : pointer(a),_particle_arrays(st)),
     map(a->a===nothing ? nothing : pointer(a),(st.sigma_particle,st.sigma_pair,st.epsilon_pair,st.rcut_pair)),
-    length(st.rx),_box(st),st.pair_lj,st.nb_kind,st.softrep,st.rcut_factor,st.vdw_modifier,st.mass,dt,st.reorder_interval,
-    _feature_signature(st))
+    length(st.rx),_box(st),st.pair_lj,st.nb_kind,st.softrep,st.rcut_factor,st.vdw_modifier,st.vdw_switch_distance,
+    st.force_accumulation,st.mass,dt,st.reorder_interval,_feature_signature(st))
 
 # Everything `engine_supported` inspects besides coefficients: attaching any of
 # these changes the fingerprint and forces a fresh support check.
 _feature_signature(st)=(st.rz===nothing,st.nonbonded_backend,typeof(st.nbh),st.mass_particle===nothing,
     st.bonds===nothing,st.bonding===nothing,st.bonded===nothing,st.charge===nothing,st.electrostatics===nothing,
-    st.external_potential===nothing,st.freeze_mask===nothing,st.coll_enabled,st.rigid_water===nothing,
+    st.dispersion===nothing,st.external_potential===nothing,st.freeze_mask===nothing,st.coll_enabled,st.rigid_water===nothing,
     st.rx_unwrap===nothing,st.cluster===nothing,
     st.cluster===nothing ? nothing : objectid(st.cluster),st.electrostatics===nothing ? nothing : objectid(st.electrostatics),
+    st.dispersion===nothing ? nothing : objectid(st.dispersion),
     st.pressure_control===nothing ? nothing : objectid(st.pressure_control))
 
 _thermostat(st,spec::SC.NVESpec)=nothing

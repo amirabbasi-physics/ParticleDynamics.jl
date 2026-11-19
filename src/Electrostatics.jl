@@ -25,16 +25,21 @@ using ..NeighborLists
 export ElectrostaticsSpec, GaussianSplit, ProlateSplit, C2ProlateSplit,
        BSplineWindow, ProlateWindow, C2ProlateWindow,
        ElectrostaticsSolver, ProlateFunction, GeneralizedProlateFunction,
-       prolate_shape_for_tolerance, generalized_prolate_shape_for_tolerance
+       prolate_shape_for_tolerance, generalized_prolate_shape_for_tolerance,
+       DispersionSpec, GaussianDispersionSplit, C2ProlateDispersionSplit,
+       DispersionSolver, dispersion_beta_from_tolerance
 
 include("electrostatics/Quadrature.jl")
 include("electrostatics/Prolates.jl")
 include("electrostatics/Splits.jl")
+include("electrostatics/DispersionSplits.jl")
 include("electrostatics/Windows.jl")
 include("electrostatics/Spec.jl")
 include("electrostatics/Influence.jl")
 include("electrostatics/RealSpace.jl")
 include("electrostatics/MeshKernels.jl")
 include("electrostatics/Solver.jl")
+include("electrostatics/DispersionSolver.jl")
+include("electrostatics/DualMeshKernels.jl")
 
 end # module Electrostatics

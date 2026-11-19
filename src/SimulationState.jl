@@ -200,6 +200,13 @@ mutable struct SimulationState{T<:AbstractFloat}
     # Device-resident pressure control (`attach_pressure_control!`): a barostat the device
     # engine applies inside its step graphs every `interval` steps, or `nothing`.
     pressure_control::Any
+    # Switch-on distance `r_switch` for `:force_switch` / `:potential_switch` vdW modifiers (`0.0` otherwise).
+    vdw_switch_distance::Float64
+    # Optional long-range `1/r⁶` lattice dispersion solver (`DispersionSolver`) and per-particle `√c6` weights.
+    dispersion::Any
+    dispersion_s6::Union{Nothing,CuArray{T,1}}
+    # Nonbonded slot force accumulation mode on `:cluster` (`:float32` default, `:fixed64` deterministic Int64).
+    force_accumulation::Symbol
 end
 
 """
@@ -219,36 +226,51 @@ function invalidate_forces!(st::SimulationState)
     return st
 end
 
-const VDW_MODIFIERS = (:none, :potential_shift)
+const VDW_MODIFIERS = (:none, :potential_shift, :force_switch, :potential_switch)
 
 """
-    set_vdw_modifier!(st, modifier) -> st
+    set_vdw_modifier!(st, modifier; switch_distance=nothing) -> st
 
-Lennard-Jones energy convention at the cutoff (GROMACS `vdw-modifier`):
-`:none` truncates the pair energy at `r_c`; `:potential_shift` uses
-`u(r) − u(r_c)` for every pair inside its cutoff (per pair cutoff with pair
-matrices). Forces and virials are identical for both; energies differ by
-`u(r_c)` per pair inside the cutoff. Energy-driven samplers (Monte Carlo volume
-moves) and energy comparisons depend on the choice. Only Lennard-Jones states
-take `:potential_shift` (cell-list and cluster backends). Energies are invalidated.
+Lennard-Jones convention at the cutoff (GROMACS `vdw-modifier`):
+- `:none`: truncates pair energy and force at `r_c`;
+- `:potential_shift`: uses `u(r) − u(r_c)` for every pair inside `r_c` (forces unchanged);
+- `:force_switch`: Steinbach–Brooks / GROMACS C² force switch between `switch_distance` and `r_c`;
+- `:potential_switch`: quintic Hermite C² potential taper between `switch_distance` and `r_c`.
+
+Only Lennard-Jones states (`nonbonded=:lj`) take non-`:none` modifiers.
 """
-function set_vdw_modifier!(st::SimulationState, modifier::Symbol)
+function set_vdw_modifier!(st::SimulationState, modifier::Symbol; switch_distance::Union{Nothing,Real}=nothing)
     modifier in VDW_MODIFIERS || throw(ArgumentError("vdw_modifier must be one of $(VDW_MODIFIERS)"))
     modifier === :none || st.nb_kind == NB_KIND_LJ ||
         throw(ArgumentError("vdw_modifier=:$(modifier) applies to Lennard-Jones (nonbonded=:lj) only"))
-    st.vdw_modifier === modifier && return st
+    rsw = if modifier in (:force_switch, :potential_switch)
+        rc_min = st.sigma_pair !== nothing ?
+            minimum(Float64(st.rcut_pair[i]) for i in eachindex(st.rcut_pair) if Array(st.epsilon_pair)[i] > 0; init=Float64(st.pair_lj.rcut)) :
+            Float64(st.pair_lj.rcut)
+        val = switch_distance === nothing ? 0.85 * rc_min : Float64(switch_distance)
+        (isfinite(val) && 0.0 < val < rc_min) ||
+            throw(ArgumentError("switch_distance=$(val) must satisfy 0 < switch_distance < cutoff ($(rc_min))."))
+        val
+    else
+        switch_distance === nothing ||
+            throw(ArgumentError("switch_distance only applies to :force_switch or :potential_switch."))
+        0.0
+    end
+    (st.vdw_modifier === modifier && st.vdw_switch_distance == rsw) && return st
     _drop_engine!(st.engine, st)
     st.vdw_modifier = modifier
+    st.vdw_switch_distance = rsw
+    st.cluster = nothing
     invalidate_forces!(st)
     return st
 end
 """
     vdw_modifier(st) -> Symbol
 
-Current Lennard-Jones energy convention at the cutoff, `:none` or
-`:potential_shift` (see [`set_vdw_modifier!`](@ref)).
+Current Lennard-Jones cutoff modifier (`:none`, `:potential_shift`, `:force_switch`, or `:potential_switch`).
 """
 vdw_modifier(st::SimulationState) = st.vdw_modifier
+vdw_switch_distance(st::SimulationState) = st.vdw_switch_distance
 
 function _slot_of_kernel!(slot_of, tag)
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x

@@ -191,7 +191,9 @@ function build_simulation(;N::Int,
                            charges::Union{Nothing,AbstractVector{<:Real}} = nothing,
                            nonbonded_backend::Symbol = :ell,
                            prune_buffer::Union{Nothing,Real} = nothing,
-                           vdw_modifier::Symbol = :none)
+                           vdw_modifier::Symbol = :none,
+                           vdw_switch_distance::Union{Nothing,Real} = nothing,
+                           force_accumulation::Symbol = :float32)
 
     0 < N < typemax(Int32) || throw(ArgumentError("Simulation particle count must satisfy 0 < N < typemax(Int32)."))
     backend_impl = Backends.normalize_backend(backend)
@@ -379,7 +381,8 @@ function build_simulation(;N::Int,
                          nothing, exclude_bonded_pairs, false, false, nothing, nothing, nothing,
                          charge, nothing, virial_global, virial_global_accum, false,
                          :ell, nothing, nothing,
-                         nothing, nothing, nothing, :none, nothing, nothing)
+                         nothing, nothing, nothing, :none, nothing, nothing,
+                         0.0, nothing, nothing, :float32)
 
     if D == 2
         st.box2 = (T(box[1]), T(box[2]))
@@ -388,8 +391,11 @@ function build_simulation(;N::Int,
         st.box2 = nothing
         st.box3 = (T(box[1]), T(box[2]), T(box[3]))
     end
+    force_accumulation in (:float32, :fixed64, :auto) ||
+        throw(ArgumentError("force_accumulation must be :float32, :fixed64 or :auto."))
+    st.force_accumulation = force_accumulation
     nonbonded_backend === :ell || set_nonbonded_backend!(st, nonbonded_backend; prune_buffer=prune_buffer)
-    vdw_modifier === :none || set_vdw_modifier!(st, vdw_modifier)
+    vdw_modifier === :none || set_vdw_modifier!(st, vdw_modifier; switch_distance=vdw_switch_distance)
 
     return st
 end
