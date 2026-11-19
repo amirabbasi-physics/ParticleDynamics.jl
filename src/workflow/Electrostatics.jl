@@ -139,6 +139,7 @@ window. `influence=:deconvolution` uses the plain window deconvolution
     split_shape = nothing
     window_shape = nothing
     order = nothing
+    continuity::Symbol = :c0
     influence::Symbol = :optimal
     alias_order::Int = 2
     mesh = nothing
@@ -250,26 +251,70 @@ end
 
 electrostatics_spec(f::ElectrostaticsForce, ::Type{<:AbstractFloat}) = electrostatics_spec(f)
 
+function c2_esp_order_for_tolerance(eps::Real)
+    d = -log10(Float64(eps))
+    d <= 3.35 && return 6
+    d <= 4.35 && return 7
+    d <= 5.05 && return 8
+    c1 = Electrostatics.generalized_prolate_shape_for_tolerance(Float64(eps) / 2, 3)
+    return clamp(Electrostatics.max_c2_prolate_order(c1) - 1, 8, 16)
+end
+
+function c2_esp_window_shape(eps::Real, P::Integer, ::Type{T}) where {T<:AbstractFloat}
+    c1 = Electrostatics.generalized_prolate_shape_for_tolerance(Float64(eps) / 2, 3)
+    Electrostatics.c2_window_resolved(P, c1, T) && P <= Electrostatics.max_c2_prolate_order(c1) && return c1
+    lo = c1
+    hi = c1 + 0.5
+    ok(c) = Electrostatics.c2_window_resolved(P, c, T) && P <= Electrostatics.max_c2_prolate_order(c)
+    while !ok(hi)
+        lo = hi
+        hi += 0.5
+        hi < 85 || throw(ArgumentError("No C2 prolate window of width $(P) is resolved in $(T)."))
+    end
+    while hi - lo > 1e-3
+        mid = 0.5 * (lo + hi)
+        ok(mid) ? (hi = mid) : (lo = mid)
+    end
+    return hi
+end
+
 function electrostatics_spec(f::ESP, ::Type{T}=Float64) where {T<:AbstractFloat}
     pref, rc = _require_common(f)
+    f.continuity in (:c0, :c2) ||
+        throw(ArgumentError("ESP continuity must be :c0 or :c2; got :$(f.continuity)."))
     if f.split_shape === nothing || f.window_shape === nothing || f.order === nothing
         f.tolerance === nothing &&
             throw(ArgumentError("ESP needs `tolerance`, or explicit `split_shape`, `window_shape` and `order`."))
     end
     eps = f.tolerance === nothing ? nothing : Float64(f.tolerance)
-    c = f.split_shape === nothing ? Electrostatics.prolate_shape_for_tolerance(eps) : Float64(f.split_shape)
-    P = f.order === nothing ? esp_order_for_tolerance(eps) : Int(f.order)
-    c1 = f.window_shape === nothing ? esp_window_shape(eps, P, T) : Float64(f.window_shape)
-    spacing = (f.mesh === nothing && f.mesh_spacing === nothing) ? pi * rc / c : f.mesh_spacing
     f.influence in (:optimal, :deconvolution) ||
         throw(ArgumentError("ESP influence must be :optimal or :deconvolution; got $(f.influence)."))
-    return Electrostatics.ElectrostaticsSpec(; coulomb_prefactor=pref,
-        relative_permittivity=f.relative_permittivity, real_cutoff=rc,
-        split=Electrostatics.ProlateSplit(rc, c),
-        window=Electrostatics.ProlateWindow(P, c1),
-        mesh=f.mesh, mesh_spacing=spacing,
-        influence=f.influence === :optimal ? :esp : :esp_deconvolution, alias_order=f.alias_order,
-        net_charge=f.net_charge, boundary=f.boundary, real_space_modifier=f.real_space_modifier)
+    if f.continuity === :c0
+        c = f.split_shape === nothing ? Electrostatics.prolate_shape_for_tolerance(eps) : Float64(f.split_shape)
+        P = f.order === nothing ? esp_order_for_tolerance(eps) : Int(f.order)
+        c1 = f.window_shape === nothing ? esp_window_shape(eps, P, T) : Float64(f.window_shape)
+        spacing = (f.mesh === nothing && f.mesh_spacing === nothing) ? pi * rc / c : f.mesh_spacing
+        return Electrostatics.ElectrostaticsSpec(; coulomb_prefactor=pref,
+            relative_permittivity=f.relative_permittivity, real_cutoff=rc,
+            split=Electrostatics.ProlateSplit(rc, c),
+            window=Electrostatics.ProlateWindow(P, c1),
+            mesh=f.mesh, mesh_spacing=spacing,
+            influence=f.influence === :optimal ? :esp : :esp_deconvolution, alias_order=f.alias_order,
+            net_charge=f.net_charge, boundary=f.boundary, real_space_modifier=f.real_space_modifier)
+    else
+        c = f.split_shape === nothing ? Electrostatics.generalized_prolate_shape_for_tolerance(eps, 2) : Float64(f.split_shape)
+        P = f.order === nothing ? c2_esp_order_for_tolerance(eps) : Int(f.order)
+        c1 = f.window_shape === nothing ? c2_esp_window_shape(eps, P, T) : Float64(f.window_shape)
+        u0 = Electrostatics.generalized_prolate_bandlimit(Electrostatics.GeneralizedProlateFunction(c, 2))
+        spacing = (f.mesh === nothing && f.mesh_spacing === nothing) ? pi * rc / u0 : f.mesh_spacing
+        return Electrostatics.ElectrostaticsSpec(; coulomb_prefactor=pref,
+            relative_permittivity=f.relative_permittivity, real_cutoff=rc,
+            split=Electrostatics.C2ProlateSplit(rc, c),
+            window=Electrostatics.C2ProlateWindow(P, c1),
+            mesh=f.mesh, mesh_spacing=spacing,
+            influence=f.influence === :optimal ? :c2_esp : :c2_esp_deconvolution, alias_order=f.alias_order,
+            net_charge=f.net_charge, boundary=f.boundary, real_space_modifier=f.real_space_modifier)
+    end
 end
 
 """

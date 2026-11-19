@@ -2,7 +2,7 @@
 #   Low-level electrostatics specification
 # =========================
 
-const INFLUENCE_KINDS = (:spme, :p3m_ad, :p3m_ik, :esp, :esp_deconvolution)
+const INFLUENCE_KINDS = (:spme, :p3m_ad, :p3m_ik, :esp, :esp_deconvolution, :c2_esp, :c2_esp_deconvolution)
 
 """
     ElectrostaticsSpec
@@ -73,6 +73,13 @@ function ElectrostaticsSpec(; coulomb_prefactor::Real,
         # near-zero values.
         window.order <= max_prolate_order(window.shape) ||
             throw(ArgumentError("A prolate window of shape $(round(window.shape; digits=3)) supports at most $(max_prolate_order(window.shape)) grid points (P ≤ 2c/π − ½); got $(window.order). Use a larger window shape (tighter tolerance) or a narrower window."))
+    elseif influence === :c2_esp || influence === :c2_esp_deconvolution
+        split isa C2ProlateSplit && window isa C2ProlateWindow ||
+            throw(ArgumentError("C2 ESP requires a C2ProlateSplit and a C2ProlateWindow."))
+        isapprox(split.cutoff, real_cutoff; rtol=1e-12) ||
+            throw(ArgumentError("The C2 prolate split is defined for cutoff $(split.cutoff), not $(real_cutoff)."))
+        window.order <= max_c2_prolate_order(window.shape) ||
+            throw(ArgumentError("A C2 prolate window of shape $(round(window.shape; digits=3)) supports at most $(max_c2_prolate_order(window.shape)) grid points; got $(window.order). Use a larger window shape or a narrower window."))
     else
         split isa GaussianSplit && window isa BSplineWindow ||
             throw(ArgumentError("PME/PPPM require a Gaussian split and a B-spline window."))
@@ -113,6 +120,17 @@ measured to lose accuracy by orders of magnitude (the deconvolution divides by
 values near the band edge).
 """
 max_prolate_order(shape::Real) = floor(Int, 2 * shape / pi - 0.5 + 1e-9)
+
+"""
+    max_c2_prolate_order(shape) -> Int
+
+Widest C² prolate assignment window (grid points) for window shape `c`:
+uses the mainlobe bandlimit `u₀` of `Φ₃ᶜ` (`P ≤ 2u₀/π − ½`).
+"""
+function max_c2_prolate_order(shape::Real)
+    u0 = generalized_prolate_bandlimit(GeneralizedProlateFunction(shape, 3))
+    return floor(Int, 2 * u0 / pi - 0.5 + 1e-9)
+end
 
 """
     fft_friendly(n) -> Int

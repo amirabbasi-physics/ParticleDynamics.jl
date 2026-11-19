@@ -66,14 +66,15 @@ function coulomb_polynomial(split::ES.AbstractSplit, C::Real; T::Type=Float32, c
                             eshift::Real=0.0, tol=nothing, energy_tol=nothing)
     # Float64: 1e-13 for the Gaussian split; the prolate correction is
     # evaluated by quadrature to ~1e-12, so its fit stops at 1e-11
-    f64tol = split isa ES.ProlateSplit ? 1e-11 : 1e-13
+    is_prolate = split isa ES.AnyProlateSplit
+    f64tol = is_prolate ? 1e-11 : 1e-13
     ftol = tol === nothing ? (T === Float64 ? f64tol : 1e-7) : Float64(tol)
     etol = energy_tol === nothing ? (T === Float64 ? f64tol : 1e-8) : Float64(energy_tol)
-    rc = cutoff === nothing ? (split isa ES.ProlateSplit ? split.cutoff : throw(ArgumentError("cutoff required"))) :
+    rc = cutoff === nothing ? (is_prolate ? split.cutoff : throw(ArgumentError("cutoff required"))) :
          Float64(cutoff)
     rc2 = rc^2
     s_of(x) = (x + 1.0) * rc2 / 2
-    src = split isa ES.ProlateSplit ? ES.ProlateCorrection(split) : split
+    src = is_prolate ? ES.ProlateCorrection(split) : split
     ce = ES.chebyshev_fit_adaptive(x -> -ES.long_range_correction(src, s_of(x))[1]; tol=etol)
     cf = ES.chebyshev_fit_adaptive(x -> ES.long_range_correction(src, s_of(x))[2]; tol=ftol)
     mono = T === Float32 && max(length(ce), length(cf)) <= 20

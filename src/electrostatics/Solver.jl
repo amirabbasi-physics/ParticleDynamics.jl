@@ -428,7 +428,8 @@ self_energy(s::ElectrostaticsSolver) = -0.5 * Float64(s.C) * Float64(s.selfc) * 
 background_energy(s::ElectrostaticsSolver) =
     s.spec.net_charge === :background ? -Float64(s.C) * s.bgcoef * s.qtotal^2 / prod(s.box) : 0.0
 
-const _METHOD_CODE = Dict(:spme => 1.0, :p3m_ad => 2.0, :p3m_ik => 3.0, :esp => 4.0, :esp_deconvolution => 5.0)
+const _METHOD_CODE = Dict(:spme => 1.0, :p3m_ad => 2.0, :p3m_ik => 3.0, :esp => 4.0, :esp_deconvolution => 5.0,
+                          :c2_esp => 6.0, :c2_esp_deconvolution => 7.0)
 
 """
     settings_record(solver) -> Vector{Float64}
@@ -436,7 +437,7 @@ const _METHOD_CODE = Dict(:spme => 1.0, :p3m_ad => 2.0, :p3m_ik => 3.0, :esp => 
 Numeric record of every setting needed to rebuild the solver exactly (stored
 in GSD frames as `log/electrostatics/settings`):
 `[version, method (1 SPME, 2 P3M-AD, 3 P3M-ik, 4 ESP, 5 ESP with plain
-  deconvolution), coulomb_prefactor,
+  deconvolution, 6 C2-ESP, 7 C2-ESP with plain deconvolution), coulomb_prefactor,
   relative_permittivity, real_cutoff, alpha_or_split_shape, order,
   window_shape, K₁, K₂, K₃, alias_order, net_charge (0 error, 1 background),
   precision bits, real_space_modifier (0 none, 1 potential shift)]`.
@@ -444,7 +445,7 @@ in GSD frames as `log/electrostatics/settings`):
 function settings_record(s::ElectrostaticsSolver{T}) where {T}
     spec = s.spec
     shape = spec.split isa GaussianSplit ? spec.split.alpha : spec.split.shape
-    wshape = spec.window isa ProlateWindow ? spec.window.shape : 0.0
+    wshape = spec.window isa AnyProlateWindow ? spec.window.shape : 0.0
     mesh = s.ws.mesh
     return Float64[1.0, _METHOD_CODE[spec.influence], spec.coulomb_prefactor, spec.relative_permittivity,
                    spec.real_cutoff, shape, spec.window.order, wshape, mesh[1], mesh[2], mesh[3],

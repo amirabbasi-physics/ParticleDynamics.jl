@@ -45,6 +45,31 @@ function _legendre_derivs(P::Vector{Float64}, nmax::Int)
     return dP
 end
 
+# Symmetric Jacobi polynomials P_0^{(a,a)}..P_{nmax}^{(a,a)} at x (DLMF 18.9.2).
+function _jacobi_sym_all(x::Float64, nmax::Int, a::Int)
+    P = Vector{Float64}(undef, nmax + 1)
+    P[1] = 1.0
+    nmax >= 1 && (P[2] = (a + 1.0) * x)
+    for n in 1:(nmax - 1)
+        c1 = (2 * n + 2 * a + 1.0) * (n + a + 1.0)
+        c2 = (n + a) * (n + a + 1.0)
+        den = (n + 1.0) * (n + 2 * a + 1.0)
+        P[n + 2] = (c1 * x * P[n + 1] - c2 * P[n]) / den
+    end
+    return P   # P[n+1] = P_n^{(a,a)}(x)
+end
+
+# Exact derivatives d/dx P_n^{(a,a)}(x) = ½ (n + 2a + 1) P_{n-1}^{(a+1,a+1)}(x) (DLMF 18.9.15).
+function _jacobi_sym_derivs(x::Float64, nmax::Int, a::Int)
+    dP = zeros(Float64, nmax + 1)
+    nmax >= 1 || return dP
+    P1 = _jacobi_sym_all(x, nmax - 1, a + 1)
+    for n in 1:nmax
+        dP[n + 1] = 0.5 * (n + 2 * a + 1.0) * P1[n]
+    end
+    return dP
+end
+
 # -------------------------
 # Chebyshev series on [-1, 1]
 # -------------------------

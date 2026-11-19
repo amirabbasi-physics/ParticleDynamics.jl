@@ -53,6 +53,34 @@ function ProlateWindow(order::Integer, shape::Real)
     return ProlateWindow(Int(order), Float64(shape), c, chebyshev_derivative(c), pf, edge)
 end
 
+"""
+    C2ProlateWindow(order, shape)
+
+C²-continuous assignment window built from Slepian's generalized prolate
+`Φ₃ᶜ(y) = (1 − y³)… = (1 − y²)³ φ(y)` (`W(x) = Φ₃ᶜ(2x/P)` on `|x| ≤ P/2`).
+Because `Φ₃ᶜ(±1) = (Φ₃ᶜ)'(±1) = (Φ₃ᶜ)''(±1) = 0` identically (`edge = 0`),
+mesh energies, analytic-differentiation mesh forces (`dW/du`), and force
+derivatives (`d²W/du²`) are all continuous across every grid plane.
+"""
+struct C2ProlateWindow <: AbstractWindow
+    order::Int
+    shape::Float64
+    coeffs::Vector{Float64}
+    dcoeffs::Vector{Float64}
+    pf::GeneralizedProlateFunction
+    edge::Float64
+end
+
+function C2ProlateWindow(order::Integer, shape::Real)
+    2 <= order <= 16 || throw(ArgumentError("C2 prolate window width must be between 2 and 16 grid points; got $(order)."))
+    isfinite(shape) && shape > 0 || throw(ArgumentError("C2 prolate window shape must be finite and positive."))
+    pf = GeneralizedProlateFunction(shape, 3)
+    c = chebyshev_fit_adaptive(y -> pf(y))
+    return C2ProlateWindow(Int(order), Float64(shape), c, chebyshev_derivative(c), pf, 0.0)
+end
+
+const AnyProlateWindow = Union{ProlateWindow,C2ProlateWindow}
+
 window_order(w::AbstractWindow) = w.order
 
 # -------------------------
@@ -105,7 +133,7 @@ Coefficients `C[h, k]` of `τ^(k−1)` of the node polynomials of `w` (nodes `0 
 weights within `eps(T)/64` of `ψ` (not below `4e-15`) and derivatives within `eps(T)/4` of the
 largest derivative (not below `1e-12`). `nothing` if no degree up to 24 reaches that.
 """
-function prolate_node_polynomials(w::ProlateWindow, ::Type{T}) where {T<:AbstractFloat}
+function prolate_node_polynomials(w::AnyProlateWindow, ::Type{T}) where {T<:AbstractFloat}
     P = w.order
     H = (P + 1) ÷ 2
     y(h, tau) = (h - (P - 1) / 2 - tau) * 2 / P
@@ -141,7 +169,7 @@ end
 device_stencil(w::BSplineWindow, ::Type{T}) where {T} = BSplineStencil{w.order}()
 # Prolate window: per-node polynomials (`:polynomial`, the solver's evaluation) or one series of
 # `ψ` on `[-1, 1]` (`:chebyshev`, the reference, also used where no polynomial meets the bounds).
-function device_stencil(w::ProlateWindow, ::Type{T}; evaluator::Symbol=:polynomial) where {T}
+function device_stencil(w::AnyProlateWindow, ::Type{T}; evaluator::Symbol=:polynomial) where {T}
     evaluator in (:polynomial, :chebyshev) ||
         throw(ArgumentError("Prolate window evaluator must be :polynomial or :chebyshev; got $(evaluator)."))
     if evaluator === :polynomial
@@ -313,7 +341,7 @@ end
 Continuum Fourier transform of the prolate window in grid units,
 `φ̂(θ) = (P/2) ∫_{-1}^{1} (ψ(t) − ψ(1)) cos(θ P t / 2) dt`.
 """
-function prolate_window_transform(w::ProlateWindow, theta::Real; nquad::Integer=192)
+function prolate_window_transform(w::AnyProlateWindow, theta::Real; nquad::Integer=192)
     x, wq = gauss_legendre(nquad)
     vals = w.pf.(x) .- w.edge
     half = 0.5 * w.order
@@ -322,7 +350,7 @@ end
 
 """
     window_nyquist_attenuation(order, shape) -> Float64
-    window_nyquist_attenuation(window::ProlateWindow) -> Float64
+    window_nyquist_attenuation(window::Union{ProlateWindow,C2ProlateWindow}) -> Float64
 
 `(φ̂(π)/φ̂(0))²` of a prolate window (shifted to zero at its edge, as
 `ProlateWindow` is): its squared transform at the mesh Nyquist
@@ -330,14 +358,14 @@ frequency relative to zero frequency. The influence function divides by the
 squared window transform of each mesh direction, so the modes at the corners
 of the mesh band are scaled by the inverse cube of this number.
 """
-function window_nyquist_attenuation(order::Integer, pf::ProlateFunction, edge::Real=pf(1.0))
+function window_nyquist_attenuation(order::Integer, pf::Union{ProlateFunction,GeneralizedProlateFunction}, edge::Real=pf(1.0))
     x, wq = gauss_legendre(192)
     vals = pf.(x) .- edge
     half = 0.5 * order
     return (sum(wq .* vals .* cos.(pi * half .* x)) / sum(wq .* vals))^2
 end
 window_nyquist_attenuation(order::Integer, shape::Real) = window_nyquist_attenuation(order, ProlateFunction(shape))
-window_nyquist_attenuation(w::ProlateWindow) = window_nyquist_attenuation(w.order, w.pf, w.edge)
+window_nyquist_attenuation(w::AnyProlateWindow) = window_nyquist_attenuation(w.order, w.pf, w.edge)
 
 """
     min_nyquist_attenuation(T) -> Float64
@@ -358,13 +386,15 @@ min_nyquist_attenuation(::Type{T}) where {T<:AbstractFloat} = 0.02 * Float64(eps
 Whether a mesh solve in precision `T` resolves the window (always true for
 B-splines, whose transform decays only algebraically).
 """
-window_resolved(w::ProlateWindow, ::Type{T}) where {T<:AbstractFloat} =
+window_resolved(w::AnyProlateWindow, ::Type{T}) where {T<:AbstractFloat} =
     window_nyquist_attenuation(w) >= min_nyquist_attenuation(T)
 window_resolved(::AbstractWindow, ::Type{T}) where {T<:AbstractFloat} = true
 window_resolved(order::Integer, shape::Real, ::Type{T}) where {T<:AbstractFloat} =
     window_nyquist_attenuation(order, shape) >= min_nyquist_attenuation(T)
+c2_window_resolved(order::Integer, shape::Real, ::Type{T}) where {T<:AbstractFloat} =
+    window_nyquist_attenuation(order, GeneralizedProlateFunction(shape, 3), 0.0) >= min_nyquist_attenuation(T)
 
-function window_deconvolution(w::ProlateWindow, K::Integer)
+function window_deconvolution(w::AnyProlateWindow, K::Integer)
     w.order <= K || throw(ArgumentError("Mesh dimension $(K) is smaller than the window width $(w.order)."))
     x, wq = gauss_legendre(192)
     vals = w.pf.(x) .- w.edge
@@ -398,7 +428,7 @@ function window_alias_table(w::BSplineWindow, K::Integer, nmax::Integer)
     return U
 end
 
-function window_alias_table(w::ProlateWindow, K::Integer, nmax::Integer)
+function window_alias_table(w::AnyProlateWindow, K::Integer, nmax::Integer)
     x, wq = gauss_legendre(256)
     vals = w.pf.(x) .- w.edge
     half = 0.5 * w.order

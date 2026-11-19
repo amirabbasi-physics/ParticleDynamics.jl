@@ -200,12 +200,12 @@ function compute_influence!(G::CuArray{Float64}, Vc::CuArray{Float64,2},
     spectral = if spec.split isa GaussianSplit
         GaussianSpectral(spec.split.alpha)
     else
-        sp = spec.split::ProlateSplit
+        sp = spec.split::AnyProlateSplit
         xq = CuArray(sp.xq); wchi = CuArray(sp.wchi)
         push!(keep, xq, wchi)
         ProlateSpectral(sp.cutoff, cudaconvert(xq), cudaconvert(wchi))
     end
-    if spec.influence === :spme || spec.influence === :esp_deconvolution
+    if spec.influence in (:spme, :esp_deconvolution, :c2_esp_deconvolution)
         D1 = CuArray(window_deconvolution(spec.window, K1))
         D2 = CuArray(window_deconvolution(spec.window, K2))
         D3 = CuArray(window_deconvolution(spec.window, K3))
@@ -241,12 +241,12 @@ function _influence_tables(s)
         spectral = if spec.split isa GaussianSplit
             GaussianSpectral(spec.split.alpha)
         else
-            sp = spec.split::ProlateSplit
+            sp = spec.split::AnyProlateSplit
             xq = CuArray(sp.xq); wchi = CuArray(sp.wchi); push!(keep, xq, wchi)
             exact = ProlateSpectral(sp.cutoff, cudaconvert(xq), cudaconvert(wchi))
             # tabulate ĉ up to the largest wavevector (alias images included) of a box 10%
             # smaller than the current one; the exact quadrature covers anything beyond
-            nal = spec.influence === :spme || spec.influence === :esp_deconvolution ? 0 : spec.alias_order
+            nal = spec.influence in (:spme, :esp_deconvolution, :c2_esp_deconvolution) ? 0 : spec.alias_order
             kmax = 2pi * sqrt(sum(((s.ws.mesh[d] ÷ 2 + nal * s.ws.mesh[d]) / (0.9 * s.box[d]))^2 for d in 1:3))
             du = 0.05; n = ceil(Int, sp.cutoff * kmax / du) + 3
             ct = CUDA.zeros(Float64, n); dct = CUDA.zeros(Float64, n); push!(keep, ct, dct)
@@ -254,7 +254,7 @@ function _influence_tables(s)
             CUDA.synchronize()
             TabulatedSpectral(sp.cutoff, du, cudaconvert(ct), cudaconvert(dct), exact)
         end
-        tables = if spec.influence === :spme || spec.influence === :esp_deconvolution
+        tables = if spec.influence in (:spme, :esp_deconvolution, :c2_esp_deconvolution)
             (CuArray(window_deconvolution(spec.window, K1)), CuArray(window_deconvolution(spec.window, K2)),
              CuArray(window_deconvolution(spec.window, K3)))
         else
@@ -277,14 +277,14 @@ function device_influence!(s, geom; launch::Bool=true)
     c = _influence_tables(s); spec = s.spec; K1, K2, K3 = s.ws.mesh
     nmodes = (K1 ÷ 2 + 1) * K2 * K3; threads = 128; blocks = cld(nmodes, threads)
     D1, D2, D3 = c.tables
-    if spec.influence === :spme || spec.influence === :esp_deconvolution
+    if spec.influence in (:spme, :esp_deconvolution, :c2_esp_deconvolution)
         k = @cuda launch=false _influence_ewald_kernel!(s.ws.G, s.ws.Vc, D1, D2, D3, K1, K2, K3, geom, Float64(s.C), c.spectral)
     else
         k = @cuda launch=false _influence_alias_kernel!(s.ws.G, s.ws.Vc, D1, D2, D3, K1, K2, K3, geom, Float64(s.C),
                                                          c.spectral, spec.alias_order, spec.influence === :p3m_ik, eltype(s.ws.G))
     end
     launch || return nothing
-    if spec.influence === :spme || spec.influence === :esp_deconvolution
+    if spec.influence in (:spme, :esp_deconvolution, :c2_esp_deconvolution)
         k(s.ws.G, s.ws.Vc, D1, D2, D3, K1, K2, K3, geom, Float64(s.C), c.spectral; threads, blocks)
     else
         k(s.ws.G, s.ws.Vc, D1, D2, D3, K1, K2, K3, geom, Float64(s.C), c.spectral, spec.alias_order,

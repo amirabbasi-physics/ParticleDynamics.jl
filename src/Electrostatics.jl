@@ -22,8 +22,10 @@ using LinearAlgebra
 using ..Definitions
 using ..NeighborLists
 
-export ElectrostaticsSpec, GaussianSplit, ProlateSplit, BSplineWindow, ProlateWindow,
-       ElectrostaticsSolver, ProlateFunction, prolate_shape_for_tolerance
+export ElectrostaticsSpec, GaussianSplit, ProlateSplit, C2ProlateSplit,
+       BSplineWindow, ProlateWindow, C2ProlateWindow,
+       ElectrostaticsSolver, ProlateFunction, GeneralizedProlateFunction,
+       prolate_shape_for_tolerance, generalized_prolate_shape_for_tolerance
 
 include("electrostatics/Quadrature.jl")
 include("electrostatics/Prolates.jl")

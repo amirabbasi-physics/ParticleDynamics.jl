@@ -60,22 +60,57 @@ function ProlateSplit(cutoff::Real, shape::Real; nquad::Integer=128)
 end
 
 """
+    C2ProlateSplit(cutoff, shape)
+
+C²-continuous prolate Ewald split built from Slepian's generalized prolate
+`Φ₂ᶜ(x) = (1 − x²)² φ(x)` on `[0, 1]` (`χ(1) = χ'(1) = 0`), so the short-range
+potential, force, and second derivative all vanish identically at `r = cutoff`:
+`V_s(r_c) = V_s'(r_c) = V_s''(r_c) = 0`.
+"""
+struct C2ProlateSplit <: AbstractSplit
+    cutoff::Float64
+    shape::Float64
+    es::Vector{Float64}
+    des::Vector{Float64}
+    chi0::Float64
+    m2::Float64
+    xq::Vector{Float64}
+    wchi::Vector{Float64}
+end
+
+function C2ProlateSplit(cutoff::Real, shape::Real; nquad::Integer=128)
+    isfinite(cutoff) && cutoff > 0 || throw(ArgumentError("C2ESP cutoff must be finite and positive."))
+    isfinite(shape) && shape > 0 || throw(ArgumentError("C2ESP split shape must be finite and positive."))
+    pf = GeneralizedProlateFunction(shape, 2)
+    norm = prolate_integral(pf, 1.0)
+    a(t) = prolate_integral(pf, t) / norm
+    es = chebyshev_fit_adaptive(s -> 1.0 - a(0.5 * (s + 1.0)))
+    des = 2.0 .* chebyshev_derivative(es)
+    xq, wq = gauss_legendre(nquad; a=0.0, b=1.0)
+    chi = pf.(xq) ./ norm
+    m2 = sum(wq .* xq .^ 2 .* chi)
+    return C2ProlateSplit(Float64(cutoff), Float64(shape), es, des, 1.0 / norm, m2, xq, wq .* chi)
+end
+
+const AnyProlateSplit = Union{ProlateSplit,C2ProlateSplit}
+
+"""
     self_coefficient(split) -> χ(0)/r_c
 
 The self energy of particle `i` is `−(C/2) self_coefficient · qᵢ²`.
 """
 self_coefficient(sp::GaussianSplit) = 2.0 * sp.alpha / sqrt(pi)
-self_coefficient(sp::ProlateSplit) = sp.chi0 / sp.cutoff
+self_coefficient(sp::AnyProlateSplit) = sp.chi0 / sp.cutoff
 
 """
     cutoff_energy(split, rc) -> E_s(r_c)/r_c
 
 Short-range pair energy per unit `C qᵢqⱼ` at the cutoff, the constant removed
 by the potential-shift modifier (`erfc(α r_c)/r_c` for the Gaussian split,
-exactly zero for the prolate split).
+exactly zero for the prolate splits).
 """
 cutoff_energy(sp::GaussianSplit, rc::Real) = _host_erfc(sp.alpha * rc) / rc
-cutoff_energy(sp::ProlateSplit, rc::Real) = 0.0
+cutoff_energy(sp::AnyProlateSplit, rc::Real) = 0.0
 
 """
     background_coefficient(split) -> π r_c² m₂
@@ -83,7 +118,7 @@ cutoff_energy(sp::ProlateSplit, rc::Real) = 0.0
 The uniform neutralising background energy is `−C background_coefficient Q²/V`.
 """
 background_coefficient(sp::GaussianSplit) = pi / (2.0 * sp.alpha^2)
-background_coefficient(sp::ProlateSplit) = pi * sp.cutoff^2 * sp.m2
+background_coefficient(sp::AnyProlateSplit) = pi * sp.cutoff^2 * sp.m2
 
 # -------------------------
 # Device representations
@@ -101,7 +136,7 @@ end
 
 device_pair_kernel(sp::GaussianSplit, ::Type{T}) where {T} =
     GaussianPairKernel{T}(T(sp.alpha), T(2.0 * sp.alpha / sqrt(pi)))
-device_pair_kernel(sp::ProlateSplit, ::Type{T}) where {T} =
+device_pair_kernel(sp::AnyProlateSplit, ::Type{T}) where {T} =
     ProlatePairKernel{T,length(sp.es),length(sp.des)}(T(1.0 / sp.cutoff), Tuple(T.(sp.es)), Tuple(T.(sp.des)))
 
 @inline _erfc(x::Float64) = ccall("extern __nv_erfc", llvmcall, Float64, (Float64,), x)
@@ -163,9 +198,9 @@ end
 # Prolate split: with a(t) = ∫₀ᵗ χ, corr = a/r = (1/r_c) ∫₀¹ χ(t u) du and
 # fcorr = (1/(r_c r²)) ∫₀¹ (χ(t u) − χ(t)) du, evaluated by Gauss–Legendre
 # quadrature without the cancellation of 1 − E_s near r = 0.
-struct ProlateCorrection
+struct ProlateCorrection{PF}
     rc::Float64
-    pf::ProlateFunction
+    pf::PF
     inv_norm::Float64
     u::Vector{Float64}
     w::Vector{Float64}
@@ -173,6 +208,12 @@ end
 
 function ProlateCorrection(sp::ProlateSplit; nquad::Integer=96)
     pf = ProlateFunction(sp.shape)
+    u, w = gauss_legendre(nquad; a=0.0, b=1.0)
+    return ProlateCorrection(sp.cutoff, pf, 1.0 / prolate_integral(pf, 1.0), u, w)
+end
+
+function ProlateCorrection(sp::C2ProlateSplit; nquad::Integer=96)
+    pf = GeneralizedProlateFunction(sp.shape, 2)
     u, w = gauss_legendre(nquad; a=0.0, b=1.0)
     return ProlateCorrection(sp.cutoff, pf, 1.0 / prolate_integral(pf, 1.0), u, w)
 end
@@ -199,7 +240,7 @@ function long_range_correction(pc::ProlateCorrection, s::Float64)
     return corr, id / (rc * r^2)
 end
 
-long_range_correction(sp::ProlateSplit, s::Float64) = long_range_correction(ProlateCorrection(sp), s)
+long_range_correction(sp::AnyProlateSplit, s::Float64) = long_range_correction(ProlateCorrection(sp), s)
 
 # Spectral transforms used by the setup kernels (always Float64).
 struct GaussianSpectral
